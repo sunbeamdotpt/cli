@@ -31,6 +31,8 @@ class TestArgParsing(unittest.TestCase):
         p_build.add_argument("what", choices=["proxy"])
         sub.add_parser("mirror")
         sub.add_parser("bootstrap")
+        p_check = sub.add_parser("check")
+        p_check.add_argument("target", nargs="?", default=None)
         return parser.parse_args(argv)
 
     def test_up(self):
@@ -82,6 +84,21 @@ class TestArgParsing(unittest.TestCase):
     def test_get_invalid_output_format(self):
         with self.assertRaises(SystemExit):
             self._parse(["get", "ory/kratos-abc", "-o", "toml"])
+
+    def test_check_no_target(self):
+        args = self._parse(["check"])
+        self.assertEqual(args.verb, "check")
+        self.assertIsNone(args.target)
+
+    def test_check_with_namespace(self):
+        args = self._parse(["check", "devtools"])
+        self.assertEqual(args.verb, "check")
+        self.assertEqual(args.target, "devtools")
+
+    def test_check_with_service(self):
+        args = self._parse(["check", "lasuite/people"])
+        self.assertEqual(args.verb, "check")
+        self.assertEqual(args.target, "lasuite/people")
 
     def test_no_args_verb_is_none(self):
         args = self._parse([])
@@ -189,3 +206,27 @@ class TestCliDispatch(unittest.TestCase):
                 except SystemExit:
                     pass
         mock_build.assert_called_once_with("proxy")
+
+    def test_check_no_target(self):
+        mock_check = MagicMock()
+        with patch.object(sys, "argv", ["sunbeam", "check"]):
+            with patch.dict("sys.modules", {"sunbeam.checks": MagicMock(cmd_check=mock_check)}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_check.assert_called_once_with(None)
+
+    def test_check_with_target(self):
+        mock_check = MagicMock()
+        with patch.object(sys, "argv", ["sunbeam", "check", "lasuite/people"]):
+            with patch.dict("sys.modules", {"sunbeam.checks": MagicMock(cmd_check=mock_check)}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_check.assert_called_once_with("lasuite/people")

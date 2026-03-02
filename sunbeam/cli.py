@@ -53,6 +53,11 @@ def main() -> None:
     p_build.add_argument("what", choices=["proxy"],
                          help="What to build (proxy)")
 
+    # sunbeam check [ns[/name]]
+    p_check = sub.add_parser("check", help="Functional service health checks")
+    p_check.add_argument("target", nargs="?", default=None,
+                         help="namespace or namespace/name")
+
     # sunbeam mirror
     sub.add_parser("mirror", help="Mirror amd64-only La Suite images")
 
@@ -105,6 +110,10 @@ def main() -> None:
     elif args.verb == "build":
         from sunbeam.images import cmd_build
         cmd_build(args.what)
+
+    elif args.verb == "check":
+        from sunbeam.checks import cmd_check
+        cmd_check(args.target)
 
     elif args.verb == "mirror":
         from sunbeam.images import cmd_mirror
