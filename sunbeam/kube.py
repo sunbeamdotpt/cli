@@ -93,6 +93,28 @@ def create_secret(ns: str, name: str, **literals) -> None:
              "--field-manager=sunbeam", "-f", "-", input=manifest)
 
 
+def kube_exec(ns: str, pod: str, *cmd: str) -> tuple[int, str]:
+    """Run a command inside a pod. Returns (returncode, stdout)."""
+    r = run_tool("kubectl", "--context=sunbeam", "exec", "-n", ns, pod,
+                 "--", *cmd,
+                 capture_output=True, text=True, check=False)
+    return r.returncode, r.stdout.strip()
+
+
+def get_domain() -> str:
+    """Discover the active domain from cluster state.
+
+    Reads a known substituted configmap value; falls back to the Lima VM IP.
+    """
+    raw = kube_out("get", "configmap", "lasuite-oidc-provider", "-n", "lasuite",
+                   "-o=jsonpath={.data.OIDC_OP_JWKS_ENDPOINT}")
+    if raw and "https://auth." in raw:
+        # e.g. "https://auth.192.168.105.2.sslip.io/.well-known/jwks.json"
+        return raw.split("https://auth.")[1].split("/")[0]
+    ip = get_lima_ip()
+    return f"{ip}.sslip.io"
+
+
 def kustomize_build(overlay: Path, domain: str) -> str:
     """Run kustomize build --enable-helm and apply domain substitution."""
     r = run_tool(
