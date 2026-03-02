@@ -5,6 +5,7 @@ import ssl
 import subprocess
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,7 +62,7 @@ def _opener(ssl_ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
 
 
 def _http_get(url: str, opener: urllib.request.OpenerDirector, *,
-              headers: dict | None = None, timeout: int = 10) -> tuple[int, bytes]:
+              headers: dict | None = None, timeout: int = 5) -> tuple[int, bytes]:
     """Return (status_code, body). Redirects are not followed.
 
     Any network/SSL error (including TimeoutError) is re-raised as URLError
@@ -155,16 +156,14 @@ def check_openbao(domain: str, opener) -> CheckResult:
 
 
 def check_seaweedfs(domain: str, opener) -> CheckResult:
-    """kubectl exec seaweedfs-filer pod -- wget /dir/status -> filer responding."""
-    pod = kube_out("get", "pods", "-n", "storage", "-l", "app=seaweedfs-filer",
-                   "--no-headers", "-o=custom-columns=NAME:.metadata.name")
-    pod = pod.splitlines()[0].strip() if pod else ""
-    if not pod:
-        return CheckResult("seaweedfs", "storage", "seaweedfs", False, "no seaweedfs-filer pod")
-    rc, out = kube_exec("storage", pod, "wget", "-qO-", "http://localhost:8888/dir/status")
-    if rc == 0 and out:
-        return CheckResult("seaweedfs", "storage", "seaweedfs", True, "filer responding")
-    return CheckResult("seaweedfs", "storage", "seaweedfs", False, "filer not responding")
+    """GET https://s3.{domain}/ -> any response from the S3 API (< 500)."""
+    url = f"https://s3.{domain}/"
+    try:
+        status, _ = _http_get(url, opener)
+        # Unauthenticated S3 returns 403 (expected); 200 also ok; 5xx = problem.
+        return CheckResult("seaweedfs", "storage", "seaweedfs", status < 500, f"HTTP {status}")
+    except urllib.error.URLError as e:
+        return CheckResult("seaweedfs", "storage", "seaweedfs", False, str(e.reason))
 
 
 def check_kratos(domain: str, opener) -> CheckResult:
@@ -244,6 +243,13 @@ CHECKS: list[tuple[Any, str, str]] = [
 ]
 
 
+def _run_one(fn, domain: str, op, ns: str, svc: str) -> CheckResult:
+    try:
+        return fn(domain, op)
+    except Exception as e:
+        return CheckResult(fn.__name__.replace("check_", ""), ns, svc, False, str(e)[:80])
+
+
 def cmd_check(target: str | None) -> None:
     """Run service-level health checks, optionally scoped to a namespace or service."""
     step("Service health checks...")
@@ -263,14 +269,11 @@ def cmd_check(target: str | None) -> None:
         warn(f"No checks match target: {target}")
         return
 
-    # Run all checks; catch any unexpected exception so we never crash.
-    results = []
-    for fn, ns, svc in selected:
-        try:
-            r = fn(domain, op)
-        except Exception as e:
-            r = CheckResult(fn.__name__.replace("check_", ""), ns, svc, False, str(e)[:80])
-        results.append(r)
+    # Run all checks concurrently — total time ≈ slowest single check.
+    with ThreadPoolExecutor(max_workers=len(selected)) as pool:
+        futures = [pool.submit(_run_one, fn, domain, op, ns, svc)
+                   for fn, ns, svc in selected]
+        results = [f.result() for f in futures]
 
     # Print grouped by namespace (mirrors sunbeam status layout).
     name_w = max(len(r.name) for r in results)
