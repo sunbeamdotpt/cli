@@ -62,13 +62,23 @@ def _opener(ssl_ctx: ssl.SSLContext) -> urllib.request.OpenerDirector:
 
 def _http_get(url: str, opener: urllib.request.OpenerDirector, *,
               headers: dict | None = None, timeout: int = 10) -> tuple[int, bytes]:
-    """Return (status_code, body). Redirects are not followed."""
+    """Return (status_code, body). Redirects are not followed.
+
+    Any network/SSL error (including TimeoutError) is re-raised as URLError
+    so callers only need to catch urllib.error.URLError.
+    """
     req = urllib.request.Request(url, headers=headers or {})
     try:
         with opener.open(req, timeout=timeout) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, b""
+    except urllib.error.URLError:
+        raise
+    except OSError as e:
+        # TimeoutError and other socket/SSL errors don't always get wrapped
+        # in URLError by Python's urllib — normalize them here.
+        raise urllib.error.URLError(e) from e
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
@@ -243,23 +253,35 @@ def cmd_check(target: str | None) -> None:
     op = _opener(ssl_ctx)
 
     ns_filter, svc_filter = parse_target(target) if target else (None, None)
-    fns = [
-        fn for fn, ns, svc in CHECKS
+    selected = [
+        (fn, ns, svc) for fn, ns, svc in CHECKS
         if (ns_filter is None or ns == ns_filter)
         and (svc_filter is None or svc == svc_filter)
     ]
 
-    if not fns:
+    if not selected:
         warn(f"No checks match target: {target}")
         return
 
+    # Run all checks; catch any unexpected exception so we never crash.
     results = []
-    for fn in fns:
-        r = fn(domain, op)
+    for fn, ns, svc in selected:
+        try:
+            r = fn(domain, op)
+        except Exception as e:
+            r = CheckResult(fn.__name__.replace("check_", ""), ns, svc, False, str(e)[:80])
         results.append(r)
+
+    # Print grouped by namespace (mirrors sunbeam status layout).
+    name_w = max(len(r.name) for r in results)
+    cur_ns = None
+    for r in results:
+        if r.ns != cur_ns:
+            print(f"  {r.ns}:")
+            cur_ns = r.ns
         icon = "\u2713" if r.passed else "\u2717"
-        detail = f"  ({r.detail})" if r.detail else ""
-        print(f"  {icon} {r.ns}/{r.svc} [{r.name}]{detail}")
+        detail = f"  {r.detail}" if r.detail else ""
+        print(f"    {icon} {r.name:<{name_w}}{detail}")
 
     print()
     failed = [r for r in results if not r.passed]
