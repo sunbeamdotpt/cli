@@ -126,24 +126,31 @@ class TestCheckOpenbao(unittest.TestCase):
 
 
 class TestCheckSeaweedfs(unittest.TestCase):
-    def test_responding_passes(self):
-        with patch("sunbeam.checks.kube_out", return_value="seaweedfs-filer-abc"):
-            with patch("sunbeam.checks.kube_exec", return_value=(0, "filer status data")):
-                from sunbeam import checks
-                r = checks.check_seaweedfs("testdomain", None)
+    def test_200_passes(self):
+        with patch("sunbeam.checks._http_get", return_value=(200, b"")):
+            from sunbeam import checks
+            r = checks.check_seaweedfs("testdomain", None)
         self.assertTrue(r.passed)
 
-    def test_no_pod_fails(self):
-        with patch("sunbeam.checks.kube_out", return_value=""):
+    def test_403_unauthenticated_passes(self):
+        # S3 returns 403 for unauthenticated requests — that means it's up.
+        with patch("sunbeam.checks._http_get", return_value=(403, b"")):
+            from sunbeam import checks
+            r = checks.check_seaweedfs("testdomain", None)
+        self.assertTrue(r.passed)
+
+    def test_502_fails(self):
+        with patch("sunbeam.checks._http_get", return_value=(502, b"")):
             from sunbeam import checks
             r = checks.check_seaweedfs("testdomain", None)
         self.assertFalse(r.passed)
 
-    def test_exec_fails(self):
-        with patch("sunbeam.checks.kube_out", return_value="seaweedfs-filer-abc"):
-            with patch("sunbeam.checks.kube_exec", return_value=(1, "")):
-                from sunbeam import checks
-                r = checks.check_seaweedfs("testdomain", None)
+    def test_connection_error_fails(self):
+        import urllib.error
+        with patch("sunbeam.checks._http_get",
+                   side_effect=urllib.error.URLError("refused")):
+            from sunbeam import checks
+            r = checks.check_seaweedfs("testdomain", None)
         self.assertFalse(r.passed)
 
 
