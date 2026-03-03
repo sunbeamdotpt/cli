@@ -50,8 +50,8 @@ def main() -> None:
 
     # sunbeam build <what>
     p_build = sub.add_parser("build", help="Build and push an artifact")
-    p_build.add_argument("what", choices=["proxy"],
-                         help="What to build (proxy)")
+    p_build.add_argument("what", choices=["proxy", "kratos-admin"],
+                         help="What to build (proxy, kratos-admin)")
 
     # sunbeam check [ns[/name]]
     p_check = sub.add_parser("check", help="Functional service health checks")
@@ -68,6 +68,32 @@ def main() -> None:
     p_k8s = sub.add_parser("k8s", help="kubectl --context=sunbeam passthrough")
     p_k8s.add_argument("kubectl_args", nargs=argparse.REMAINDER,
                        help="arguments forwarded verbatim to kubectl")
+
+    # sunbeam bao [bao args...] — bao CLI inside OpenBao pod with root token injected
+    p_bao = sub.add_parser("bao", help="bao CLI passthrough (runs inside OpenBao pod with root token)")
+    p_bao.add_argument("bao_args", nargs=argparse.REMAINDER,
+                       help="arguments forwarded verbatim to bao")
+
+    # sunbeam user <action> [args]
+    p_user = sub.add_parser("user", help="User/identity management")
+    user_sub = p_user.add_subparsers(dest="user_action", metavar="action")
+
+    p_user_list = user_sub.add_parser("list", help="List identities")
+    p_user_list.add_argument("--search", default="", help="Filter by email")
+
+    p_user_get = user_sub.add_parser("get", help="Get identity by email or ID")
+    p_user_get.add_argument("target", help="Email or identity ID")
+
+    p_user_create = user_sub.add_parser("create", help="Create identity")
+    p_user_create.add_argument("email", help="Email address")
+    p_user_create.add_argument("--name", default="", help="Display name")
+    p_user_create.add_argument("--schema", default="default", help="Schema ID")
+
+    p_user_delete = user_sub.add_parser("delete", help="Delete identity")
+    p_user_delete.add_argument("target", help="Email or identity ID")
+
+    p_user_recover = user_sub.add_parser("recover", help="Generate recovery link")
+    p_user_recover.add_argument("target", help="Email or identity ID")
 
     args = parser.parse_args()
 
@@ -131,6 +157,28 @@ def main() -> None:
     elif args.verb == "k8s":
         from sunbeam.kube import cmd_k8s
         sys.exit(cmd_k8s(args.kubectl_args))
+
+    elif args.verb == "bao":
+        from sunbeam.kube import cmd_bao
+        sys.exit(cmd_bao(args.bao_args))
+
+    elif args.verb == "user":
+        from sunbeam.users import (cmd_user_list, cmd_user_get, cmd_user_create,
+                                   cmd_user_delete, cmd_user_recover)
+        action = getattr(args, "user_action", None)
+        if action is None:
+            p_user.print_help()
+            sys.exit(0)
+        elif action == "list":
+            cmd_user_list(search=args.search)
+        elif action == "get":
+            cmd_user_get(args.target)
+        elif action == "create":
+            cmd_user_create(args.email, name=args.name, schema_id=args.schema)
+        elif action == "delete":
+            cmd_user_delete(args.target)
+        elif action == "recover":
+            cmd_user_recover(args.target)
 
     else:
         parser.print_help()
