@@ -95,6 +95,12 @@ def main() -> None:
     p_user_recover = user_sub.add_parser("recover", help="Generate recovery link")
     p_user_recover.add_argument("target", help="Email or identity ID")
 
+    p_user_disable = user_sub.add_parser("disable", help="Disable identity + revoke sessions (lockout)")
+    p_user_disable.add_argument("target", help="Email or identity ID")
+
+    p_user_enable = user_sub.add_parser("enable", help="Re-enable a disabled identity")
+    p_user_enable.add_argument("target", help="Email or identity ID")
+
     args = parser.parse_args()
 
     if args.verb is None:
@@ -164,7 +170,8 @@ def main() -> None:
 
     elif args.verb == "user":
         from sunbeam.users import (cmd_user_list, cmd_user_get, cmd_user_create,
-                                   cmd_user_delete, cmd_user_recover)
+                                   cmd_user_delete, cmd_user_recover,
+                                   cmd_user_disable, cmd_user_enable)
         action = getattr(args, "user_action", None)
         if action is None:
             p_user.print_help()
@@ -179,6 +186,10 @@ def main() -> None:
             cmd_user_delete(args.target)
         elif action == "recover":
             cmd_user_recover(args.target)
+        elif action == "disable":
+            cmd_user_disable(args.target)
+        elif action == "enable":
+            cmd_user_enable(args.target)
 
     else:
         parser.print_help()

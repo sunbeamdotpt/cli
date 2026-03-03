@@ -75,7 +75,7 @@ def cmd_user_list(search=""):
             display_name = str(name) if name else ""
         rows.append([i["id"][:8] + "...", email, display_name, i.get("state", "active")])
 
-    table(["ID", "Email", "Name", "State"], rows)
+    print(table(rows, ["ID", "Email", "Name", "State"]))
 
 
 def cmd_user_get(target):
@@ -140,3 +140,43 @@ def cmd_user_recover(target):
     print(recovery.get("recovery_link", ""))
     ok("Recovery code (enter on the page above):")
     print(recovery.get("recovery_code", ""))
+
+
+def cmd_user_disable(target):
+    """Disable identity + revoke all Kratos sessions (emergency lockout).
+
+    After this:
+    - No new logins possible.
+    - Existing Hydra OAuth2 tokens are revoked.
+    - Django app sessions expire within SESSION_COOKIE_AGE (1h).
+    """
+    step(f"Disabling identity: {target}")
+    with _port_forward() as base:
+        identity = _find_identity(base, target)
+        iid = identity["id"]
+        _api(base, f"/identities/{iid}", method="PUT", body={
+            "schema_id": identity["schema_id"],
+            "traits": identity["traits"],
+            "state": "inactive",
+            "metadata_public": identity.get("metadata_public"),
+            "metadata_admin": identity.get("metadata_admin"),
+        })
+        _api(base, f"/identities/{iid}/sessions", method="DELETE")
+    ok(f"Identity {iid[:8]}... disabled and all Kratos sessions revoked.")
+    warn("App sessions (docs/people) expire within SESSION_COOKIE_AGE — currently 1h.")
+
+
+def cmd_user_enable(target):
+    """Re-enable a previously disabled identity."""
+    step(f"Enabling identity: {target}")
+    with _port_forward() as base:
+        identity = _find_identity(base, target)
+        iid = identity["id"]
+        _api(base, f"/identities/{iid}", method="PUT", body={
+            "schema_id": identity["schema_id"],
+            "traits": identity["traits"],
+            "state": "active",
+            "metadata_public": identity.get("metadata_public"),
+            "metadata_admin": identity.get("metadata_admin"),
+        })
+    ok(f"Identity {iid[:8]}... re-enabled.")
