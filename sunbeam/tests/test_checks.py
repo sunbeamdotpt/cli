@@ -126,28 +126,54 @@ class TestCheckOpenbao(unittest.TestCase):
 
 
 class TestCheckSeaweedfs(unittest.TestCase):
-    def test_200_passes(self):
-        with patch("sunbeam.checks._http_get", return_value=(200, b"")):
-            from sunbeam import checks
-            r = checks.check_seaweedfs("testdomain", None)
-        self.assertTrue(r.passed)
+    def _with_creds(self, http_result=None, http_error=None):
+        """Helper: patch both _kube_secret (returns creds) and _http_get."""
+        def secret_side_effect(ns, name, key):
+            return "testkey" if key == "S3_ACCESS_KEY" else "testsecret"
 
-    def test_403_unauthenticated_passes(self):
-        # S3 returns 403 for unauthenticated requests — that means it's up.
-        with patch("sunbeam.checks._http_get", return_value=(403, b"")):
+        patches = [
+            patch("sunbeam.checks._kube_secret", side_effect=secret_side_effect),
+        ]
+        if http_error:
+            patches.append(patch("sunbeam.checks._http_get", side_effect=http_error))
+        else:
+            patches.append(patch("sunbeam.checks._http_get", return_value=http_result))
+        return patches
+
+    def test_200_authenticated_passes(self):
+        with patch("sunbeam.checks._kube_secret", return_value="val"), \
+             patch("sunbeam.checks._http_get", return_value=(200, b"")):
             from sunbeam import checks
             r = checks.check_seaweedfs("testdomain", None)
         self.assertTrue(r.passed)
+        self.assertIn("authenticated", r.detail)
+
+    def test_missing_credentials_fails(self):
+        with patch("sunbeam.checks._kube_secret", return_value=""):
+            from sunbeam import checks
+            r = checks.check_seaweedfs("testdomain", None)
+        self.assertFalse(r.passed)
+        self.assertIn("secret", r.detail)
+
+    def test_403_bad_credentials_fails(self):
+        with patch("sunbeam.checks._kube_secret", return_value="val"), \
+             patch("sunbeam.checks._http_get", return_value=(403, b"")):
+            from sunbeam import checks
+            r = checks.check_seaweedfs("testdomain", None)
+        self.assertFalse(r.passed)
+        self.assertIn("403", r.detail)
 
     def test_502_fails(self):
-        with patch("sunbeam.checks._http_get", return_value=(502, b"")):
+        with patch("sunbeam.checks._kube_secret", return_value="val"), \
+             patch("sunbeam.checks._http_get", return_value=(502, b"")):
             from sunbeam import checks
             r = checks.check_seaweedfs("testdomain", None)
         self.assertFalse(r.passed)
 
     def test_connection_error_fails(self):
         import urllib.error
-        with patch("sunbeam.checks._http_get",
+        with patch("sunbeam.checks._kube_secret", return_value="val"), \
+             patch("sunbeam.checks._http_get",
                    side_effect=urllib.error.URLError("refused")):
             from sunbeam import checks
             r = checks.check_seaweedfs("testdomain", None)
