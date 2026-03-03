@@ -4,10 +4,15 @@ import json
 import secrets as _secrets
 import subprocess
 import time
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
-from sunbeam.kube import kube, kube_out, kube_ok, kube_apply, ensure_ns, create_secret
+from sunbeam.kube import kube, kube_out, kube_ok, kube_apply, ensure_ns, create_secret, get_domain
 from sunbeam.output import step, ok, warn, die
+
+ADMIN_USERNAME = "estudio-admin"
 
 LIMA_VM = "sunbeam"
 GITEA_ADMIN_USER = "gitea_admin"
@@ -160,6 +165,11 @@ def _seed_openbao() -> dict:
         **{"cookie-secret":      rand,
            "csrf-cookie-secret": rand})
 
+    kratos_admin = get_or_create("kratos-admin",
+        **{"cookie-secret":      rand,
+           "csrf-cookie-secret": rand,
+           "admin-identity-ids": lambda: ""})
+
     # Write all secrets to KV (idempotent -- puts same values back)
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
         f"bao kv put secret/hydra           system-secret=\"{hydra['system-secret']}\" cookie-secret=\"{hydra['cookie-secret']}\" pairwise-salt=\"{hydra['pairwise-salt']}\" && "
@@ -169,7 +179,8 @@ def _seed_openbao() -> dict:
         f"bao kv put secret/hive            oidc-client-id=\"{hive['oidc-client-id']}\" oidc-client-secret=\"{hive['oidc-client-secret']}\" && "
         f"bao kv put secret/livekit         api-key=\"{livekit['api-key']}\" api-secret=\"{livekit['api-secret']}\" && "
         f"bao kv put secret/people          django-secret-key=\"{people['django-secret-key']}\" && "
-        f"bao kv put secret/login-ui        cookie-secret=\"{login_ui['cookie-secret']}\" csrf-cookie-secret=\"{login_ui['csrf-cookie-secret']}\""
+        f"bao kv put secret/login-ui        cookie-secret=\"{login_ui['cookie-secret']}\" csrf-cookie-secret=\"{login_ui['csrf-cookie-secret']}\" && "
+        f"bao kv put secret/kratos-admin   cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\""
         f"'")
 
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
@@ -210,6 +221,7 @@ def _seed_openbao() -> dict:
         "people-django-secret":    people["django-secret-key"],
         "livekit-api-key":         livekit["api-key"],
         "livekit-api-secret":      livekit["api-secret"],
+        "kratos-admin-cookie-secret": kratos_admin["cookie-secret"],
         "_ob_pod":                 ob_pod,
         "_root_token":             root_token,
     }
@@ -329,6 +341,93 @@ def _configure_db_engine(ob_pod, root_token, pg_user, pg_pass):
 # ---------------------------------------------------------------------------
 # cmd_seed — main entry point
 # ---------------------------------------------------------------------------
+
+@contextmanager
+def _kratos_admin_pf(local_port=14434):
+    """Port-forward directly to the Kratos admin API."""
+    proc = subprocess.Popen(
+        ["kubectl", *K8S_CTX, "-n", "ory", "port-forward",
+         "svc/kratos-admin", f"{local_port}:80"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(1.5)
+    try:
+        yield f"http://localhost:{local_port}"
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def _kratos_api(base, path, method="GET", body=None):
+    url = f"{base}/admin{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Kratos API {method} {url} → {e.code}: {e.read().decode()}")
+
+
+def _seed_kratos_admin_identity(ob_pod: str, root_token: str) -> tuple[str, str]:
+    """Ensure estudio-admin@<domain> exists in Kratos and is the only admin identity.
+
+    Returns (recovery_link, recovery_code), or ("", "") if Kratos is unreachable.
+    Idempotent: if the identity already exists, skips creation and just returns
+    a fresh recovery link+code.
+    """
+    domain = get_domain()
+    admin_email = f"{ADMIN_USERNAME}@{domain}"
+
+    ok(f"Ensuring Kratos admin identity ({admin_email})...")
+    try:
+        with _kratos_admin_pf() as base:
+            # Check if the identity already exists by searching by email
+            result = _kratos_api(base, f"/identities?credentials_identifier={admin_email}&page_size=1")
+            existing = result[0] if isinstance(result, list) and result else None
+
+            if existing:
+                identity_id = existing["id"]
+                ok(f"  admin identity exists ({identity_id[:8]}...)")
+            else:
+                identity = _kratos_api(base, "/identities", method="POST", body={
+                    "schema_id": "default",
+                    "traits": {"email": admin_email},
+                    "state": "active",
+                })
+                identity_id = identity["id"]
+                ok(f"  created admin identity ({identity_id[:8]}...)")
+
+            # Generate fresh recovery code + link
+            recovery = _kratos_api(base, "/recovery/code", method="POST", body={
+                "identity_id": identity_id,
+                "expires_in": "24h",
+            })
+            recovery_link = recovery.get("recovery_link", "") if recovery else ""
+            recovery_code = recovery.get("recovery_code", "") if recovery else ""
+    except Exception as exc:
+        warn(f"Could not seed Kratos admin identity (Kratos may not be ready): {exc}")
+        return ("", "")
+
+    # Update admin-identity-ids in OpenBao KV so kratos-admin-ui enforces access
+    bao_env = f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}'"
+
+    def _bao(cmd):
+        return subprocess.run(
+            ["kubectl", *K8S_CTX, "-n", "data", "exec", ob_pod, "-c", "openbao",
+             "--", "sh", "-c", cmd],
+            capture_output=True, text=True,
+        )
+
+    _bao(f"{bao_env} bao kv patch secret/kratos-admin admin-identity-ids=\"{admin_email}\"")
+    ok(f"  ADMIN_IDENTITY_IDS set to {admin_email}")
+    return (recovery_link, recovery_code)
+
 
 def cmd_seed() -> dict:
     """Seed OpenBao KV with crypto-random credentials, then mirror to K8s Secrets.
@@ -451,6 +550,16 @@ def cmd_seed() -> dict:
                   DJANGO_SECRET_KEY=django_secret)
 
     ensure_ns("media")
+
+    # Ensure the Kratos admin identity exists and ADMIN_IDENTITY_IDS is set.
+    # This runs after all other secrets are in place (Kratos must be up).
+    recovery_link, recovery_code = _seed_kratos_admin_identity(ob_pod, root_token)
+    if recovery_link:
+        ok("Admin recovery link (valid 24h):")
+        print(f"  {recovery_link}")
+    if recovery_code:
+        ok("Admin recovery code (enter on the page above):")
+        print(f"  {recovery_code}")
 
     ok("All secrets seeded.")
     return creds

@@ -20,15 +20,15 @@ TOOLS: dict[str, dict] = {
         "sha256": "",  # set to actual hash; empty = skip verify
     },
     "kustomize": {
-        "version": "v5.6.0",
-        "url": "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_darwin_arm64.tar.gz",
+        "version": "v5.8.1",
+        "url": "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_darwin_arm64.tar.gz",
         "sha256": "",
         "extract": "kustomize",
     },
     "helm": {
-        "version": "v3.17.1",
-        "url": "https://get.helm.sh/helm-v3.17.1-darwin-arm64.tar.gz",
-        "sha256": "",
+        "version": "v4.1.0",
+        "url": "https://get.helm.sh/helm-v4.1.0-darwin-arm64.tar.gz",
+        "sha256": "82f7065bf4e08d4c8d7881b85c0a080581ef4968a4ae6df4e7b432f8f7a88d0c",
         "extract": "darwin-arm64/helm",
     },
 }
@@ -43,21 +43,35 @@ def _sha256(path: Path) -> str:
 
 
 def ensure_tool(name: str) -> Path:
-    """Return path to cached binary, downloading + verifying if needed."""
+    """Return path to cached binary, downloading + verifying if needed.
+
+    Re-downloads automatically when the pinned version in TOOLS changes.
+    A <name>.version sidecar file records the version of the cached binary.
+    """
     if name not in TOOLS:
         raise ValueError(f"Unknown tool: {name}")
     spec = TOOLS[name]
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dest = CACHE_DIR / name
+    version_file = CACHE_DIR / f"{name}.version"
 
     expected_sha = spec.get("sha256", "")
+    expected_version = spec.get("version", "")
 
-    # Use cached binary if it exists and passes SHA check
+    # Use cached binary if version matches (or no version pinned) and SHA passes
     if dest.exists():
-        if not expected_sha or _sha256(dest) == expected_sha:
+        version_ok = (
+            not expected_version
+            or (version_file.exists() and version_file.read_text().strip() == expected_version)
+        )
+        sha_ok = not expected_sha or _sha256(dest) == expected_sha
+        if version_ok and sha_ok:
             return dest
-        # SHA mismatch — re-download
+    # Version mismatch or SHA mismatch — re-download
+    if dest.exists():
         dest.unlink()
+    if version_file.exists():
+        version_file.unlink()
 
     # Download
     url = spec["url"]
@@ -88,6 +102,8 @@ def ensure_tool(name: str) -> Path:
 
     # Make executable
     dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # Record version so future calls skip re-download when version unchanged
+    version_file.write_text(expected_version)
     return dest
 
 
@@ -102,6 +118,7 @@ def run_tool(name: str, *args, **kwargs) -> subprocess.CompletedProcess:
         env = os.environ.copy()
     # kustomize needs helm on PATH for helm chart rendering
     if name == "kustomize":
-        ensure_tool("helm")  # ensure bundled helm is present before kustomize runs
+        if "helm" in TOOLS:
+            ensure_tool("helm")  # ensure bundled helm is present before kustomize runs
         env["PATH"] = str(CACHE_DIR) + os.pathsep + env.get("PATH", "")
     return subprocess.run([str(bin_path), *args], env=env, **kwargs)

@@ -266,10 +266,16 @@ def _trust_registry_in_docker_vm(registry: str):
 
 
 def cmd_build(what: str):
-    """Build and push an image. Currently only supports 'proxy'."""
-    if what != "proxy":
+    """Build and push an image. Supports 'proxy' and 'kratos-admin'."""
+    if what == "proxy":
+        _build_proxy()
+    elif what == "kratos-admin":
+        _build_kratos_admin()
+    else:
         die(f"Unknown build target: {what}")
 
+
+def _build_proxy():
     ip = get_lima_ip()
     domain = f"{ip}.sslip.io"
 
@@ -314,13 +320,113 @@ def cmd_build(what: str):
 
     ok(f"Pushed {image}")
 
+    # On single-node clusters, pre-seed the image directly into k3s containerd.
+    # This breaks the circular dependency: when the proxy restarts, Pingora goes
+    # down before the new pod starts, making the Gitea registry (behind Pingora)
+    # unreachable for the image pull.  By importing into containerd first,
+    # imagePullPolicy: IfNotPresent means k8s never needs to contact the registry.
+    nodes = kube_out("get", "nodes", "-o=jsonpath={.items[*].metadata.name}").split()
+    if len(nodes) == 1:
+        ok("Single-node cluster: pre-seeding image into k3s containerd...")
+        save = subprocess.Popen(
+            ["docker", "save", image],
+            stdout=subprocess.PIPE,
+        )
+        ctr = subprocess.run(
+            ["limactl", "shell", LIMA_VM, "--",
+             "sudo", "ctr", "-n", "k8s.io", "images", "import", "-"],
+            stdin=save.stdout,
+            capture_output=True,
+        )
+        save.stdout.close()
+        save.wait()
+        if ctr.returncode != 0:
+            warn(f"containerd import failed (will fall back to registry pull):\n"
+                 f"{ctr.stderr.decode().strip()}")
+        else:
+            ok("Image pre-seeded.")
+
     # Apply manifests so the Deployment spec reflects the Gitea image ref.
     from sunbeam.manifests import cmd_apply
     cmd_apply()
 
-    # Roll the pingora pod -- imagePullPolicy: Always ensures it pulls fresh.
+    # Roll the pingora pod.
     ok("Rolling pingora deployment...")
     kube("rollout", "restart", "deployment/pingora", "-n", "ingress")
     kube("rollout", "status", "deployment/pingora", "-n", "ingress",
          "--timeout=120s")
     ok("Pingora redeployed.")
+
+
+def _build_kratos_admin():
+    ip = get_lima_ip()
+    domain = f"{ip}.sslip.io"
+
+    b64 = kube_out("-n", "devtools", "get", "secret",
+                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
+    if not b64:
+        die("gitea-admin-credentials secret not found -- run seed first.")
+    admin_pass = base64.b64decode(b64).decode()
+
+    if not shutil.which("docker"):
+        die("docker not found -- is the Lima docker VM running?")
+
+    # kratos-admin source
+    kratos_admin_dir = Path(__file__).resolve().parents[2] / "kratos-admin"
+    if not kratos_admin_dir.is_dir():
+        die(f"kratos-admin source not found at {kratos_admin_dir}")
+
+    registry = f"src.{domain}"
+    image = f"{registry}/studio/kratos-admin-ui:latest"
+
+    step(f"Building kratos-admin-ui -> {image} ...")
+
+    _trust_registry_in_docker_vm(registry)
+
+    ok("Logging in to Gitea registry...")
+    r = subprocess.run(
+        ["docker", "login", registry,
+         "--username", GITEA_ADMIN_USER, "--password-stdin"],
+        input=admin_pass, text=True, capture_output=True,
+    )
+    if r.returncode != 0:
+        die(f"docker login failed:\n{r.stderr.strip()}")
+
+    ok("Building image (linux/arm64, push)...")
+    _run(["docker", "buildx", "build",
+          "--platform", "linux/arm64",
+          "--push",
+          "-t", image,
+          str(kratos_admin_dir)])
+
+    ok(f"Pushed {image}")
+
+    # Pre-seed into k3s containerd (same pattern as proxy)
+    nodes = kube_out("get", "nodes", "-o=jsonpath={.items[*].metadata.name}").split()
+    if len(nodes) == 1:
+        ok("Single-node cluster: pre-seeding image into k3s containerd...")
+        save = subprocess.Popen(
+            ["docker", "save", image],
+            stdout=subprocess.PIPE,
+        )
+        ctr = subprocess.run(
+            ["limactl", "shell", LIMA_VM, "--",
+             "sudo", "ctr", "-n", "k8s.io", "images", "import", "-"],
+            stdin=save.stdout,
+            capture_output=True,
+        )
+        save.stdout.close()
+        save.wait()
+        if ctr.returncode != 0:
+            warn(f"containerd import failed:\n{ctr.stderr.decode().strip()}")
+        else:
+            ok("Image pre-seeded.")
+
+    from sunbeam.manifests import cmd_apply
+    cmd_apply()
+
+    ok("Rolling kratos-admin-ui deployment...")
+    kube("rollout", "restart", "deployment/kratos-admin-ui", "-n", "ory")
+    kube("rollout", "status", "deployment/kratos-admin-ui", "-n", "ory",
+         "--timeout=120s")
+    ok("kratos-admin-ui redeployed.")
