@@ -15,8 +15,11 @@ MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "media", "ory", "storage
               "vault-secrets-operator"]
 
 AMD64_ONLY_IMAGES = [
-    ("docker.io/lasuite/people-backend:latest",  "studio", "people-backend",  "latest"),
-    ("docker.io/lasuite/people-frontend:latest", "studio", "people-frontend", "latest"),
+    ("docker.io/lasuite/people-backend:latest",    "studio", "people-backend",    "latest"),
+    ("docker.io/lasuite/people-frontend:latest",   "studio", "people-frontend",   "latest"),
+    ("docker.io/lasuite/impress-backend:latest",   "studio", "impress-backend",   "latest"),
+    ("docker.io/lasuite/impress-frontend:latest",  "studio", "impress-frontend",  "latest"),
+    ("docker.io/lasuite/impress-y-provider:latest","studio", "impress-y-provider","latest"),
 ]
 
 _MIRROR_SCRIPT_BODY = r'''
@@ -137,17 +140,20 @@ def process(src, tgt, user, pwd):
 
     amd64_hex = amd64["digest"].replace("sha256:", "")
 
+    # Always pull by digest with --platform linux/amd64 to ensure all layer
+    # blobs are downloaded to the content store (the index pull in step 1 only
+    # fetches the manifest blob, not the layers, on an arm64 host).
+    print("    pulling amd64 manifest + layers by digest...")
+    repo_base = src.rsplit(":", 1)[0]
+    subprocess.run(
+        ["ctr", "-n", "k8s.io", "images", "pull",
+         "--platform", "linux/amd64",
+         f"{repo_base}@sha256:{amd64_hex}"],
+        capture_output=True,
+    )
     if not blob_exists(amd64_hex):
-        print("    pulling amd64 manifest + layers by digest...")
-        repo_base = src.rsplit(":", 1)[0]
-        subprocess.run(
-            ["ctr", "-n", "k8s.io", "images", "pull",
-             f"{repo_base}@sha256:{amd64_hex}"],
-            capture_output=True,
-        )
-        if not blob_exists(amd64_hex):
-            print("    failed: amd64 manifest blob missing after pull")
-            return
+        print("    failed: amd64 manifest blob missing after pull")
+        return
 
     amd64_bytes = read_blob(amd64_hex)
 
