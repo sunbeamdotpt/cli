@@ -102,5 +102,6 @@ def run_tool(name: str, *args, **kwargs) -> subprocess.CompletedProcess:
         env = os.environ.copy()
     # kustomize needs helm on PATH for helm chart rendering
     if name == "kustomize":
+        ensure_tool("helm")  # ensure bundled helm is present before kustomize runs
         env["PATH"] = str(CACHE_DIR) + os.pathsep + env.get("PATH", "")
     return subprocess.run([str(bin_path), *args], env=env, **kwargs)
