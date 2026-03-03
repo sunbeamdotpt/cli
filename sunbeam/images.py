@@ -272,9 +272,11 @@ def _trust_registry_in_docker_vm(registry: str):
 
 
 def cmd_build(what: str):
-    """Build and push an image. Supports 'proxy' and 'kratos-admin'."""
+    """Build and push an image. Supports 'proxy', 'integration', and 'kratos-admin'."""
     if what == "proxy":
         _build_proxy()
+    elif what == "integration":
+        _build_integration()
     elif what == "kratos-admin":
         _build_kratos_admin()
     else:
@@ -362,6 +364,103 @@ def _build_proxy():
     kube("rollout", "status", "deployment/pingora", "-n", "ingress",
          "--timeout=120s")
     ok("Pingora redeployed.")
+
+
+def _build_integration():
+    ip = get_lima_ip()
+    domain = f"{ip}.sslip.io"
+
+    b64 = kube_out("-n", "devtools", "get", "secret",
+                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
+    if not b64:
+        die("gitea-admin-credentials secret not found -- run seed first.")
+    admin_pass = base64.b64decode(b64).decode()
+
+    if not shutil.which("docker"):
+        die("docker not found -- is the Lima docker VM running?")
+
+    # Build context is the sunbeam/ root so Dockerfile can reach both
+    # integration/packages/ (upstream widget + logos) and integration-service/.
+    sunbeam_dir = Path(__file__).resolve().parents[2]
+    integration_service_dir = sunbeam_dir / "integration-service"
+    dockerfile = integration_service_dir / "Dockerfile"
+    dockerignore = integration_service_dir / ".dockerignore"
+
+    if not dockerfile.exists():
+        die(f"integration-service Dockerfile not found at {dockerfile}")
+    if not (sunbeam_dir / "integration" / "packages" / "widgets").is_dir():
+        die(f"integration repo not found at {sunbeam_dir / 'integration'} -- "
+            "run: cd sunbeam && git clone https://github.com/suitenumerique/integration.git")
+
+    registry = f"src.{domain}"
+    image = f"{registry}/studio/integration:latest"
+
+    step(f"Building integration -> {image} ...")
+
+    _trust_registry_in_docker_vm(registry)
+
+    ok("Logging in to Gitea registry...")
+    r = subprocess.run(
+        ["docker", "login", registry,
+         "--username", GITEA_ADMIN_USER, "--password-stdin"],
+        input=admin_pass, text=True, capture_output=True,
+    )
+    if r.returncode != 0:
+        die(f"docker login failed:\n{r.stderr.strip()}")
+
+    ok("Building image (linux/arm64, push)...")
+    # --file points to integration-service/Dockerfile; context is sunbeam/ root.
+    # Docker resolves .dockerignore relative to the build context root, but since
+    # --file is outside the context root we provide it explicitly via env or flag.
+    # Workaround: copy .dockerignore to sunbeam/ root temporarily, then remove.
+    root_ignore = sunbeam_dir / ".dockerignore"
+    copied_ignore = False
+    if not root_ignore.exists():
+        shutil.copy(str(dockerignore), str(root_ignore))
+        copied_ignore = True
+    try:
+        _run(["docker", "buildx", "build",
+              "--platform", "linux/arm64",
+              "--push",
+              "-f", str(dockerfile),
+              "-t", image,
+              str(sunbeam_dir)])
+    finally:
+        if copied_ignore and root_ignore.exists():
+            root_ignore.unlink()
+
+    ok(f"Pushed {image}")
+
+    # Pre-seed into k3s containerd (same pattern as other custom images).
+    nodes = kube_out("get", "nodes", "-o=jsonpath={.items[*].metadata.name}").split()
+    if len(nodes) == 1:
+        ok("Single-node cluster: pre-seeding image into k3s containerd...")
+        save = subprocess.Popen(
+            ["docker", "save", image],
+            stdout=subprocess.PIPE,
+        )
+        ctr = subprocess.run(
+            ["limactl", "shell", LIMA_VM, "--",
+             "sudo", "ctr", "-n", "k8s.io", "images", "import", "-"],
+            stdin=save.stdout,
+            capture_output=True,
+        )
+        save.stdout.close()
+        save.wait()
+        if ctr.returncode != 0:
+            warn(f"containerd import failed (will fall back to registry pull):\n"
+                 f"{ctr.stderr.decode().strip()}")
+        else:
+            ok("Image pre-seeded.")
+
+    from sunbeam.manifests import cmd_apply
+    cmd_apply()
+
+    ok("Rolling integration deployment...")
+    kube("rollout", "restart", "deployment/integration", "-n", "lasuite")
+    kube("rollout", "status", "deployment/integration", "-n", "lasuite",
+         "--timeout=120s")
+    ok("Integration redeployed.")
 
 
 def _build_kratos_admin():

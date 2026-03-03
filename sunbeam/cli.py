@@ -50,8 +50,8 @@ def main() -> None:
 
     # sunbeam build <what>
     p_build = sub.add_parser("build", help="Build and push an artifact")
-    p_build.add_argument("what", choices=["proxy", "kratos-admin"],
-                         help="What to build (proxy, kratos-admin)")
+    p_build.add_argument("what", choices=["proxy", "integration", "kratos-admin"],
+                         help="What to build (proxy, integration, kratos-admin)")
 
     # sunbeam check [ns[/name]]
     p_check = sub.add_parser("check", help="Functional service health checks")
