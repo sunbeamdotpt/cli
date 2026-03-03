@@ -120,9 +120,38 @@ def get_domain() -> str:
 def cmd_k8s(kubectl_args: list[str]) -> int:
     """Transparent kubectl --context=sunbeam passthrough. Returns kubectl's exit code."""
     from sunbeam.tools import ensure_tool
-    import os
     bin_path = ensure_tool("kubectl")
     r = subprocess.run([str(bin_path), "--context=sunbeam", *kubectl_args])
+    return r.returncode
+
+
+def cmd_bao(bao_args: list[str]) -> int:
+    """Run bao CLI inside the OpenBao pod with the root token. Returns exit code.
+
+    Automatically resolves the pod name and root token from the cluster, then
+    runs ``kubectl exec openbao-0 -- sh -c "VAULT_TOKEN=<tok> bao <args>"``
+    so callers never need to handle raw kubectl exec or token management.
+    """
+    ob_pod = kube_out("-n", "data", "get", "pod",
+                      "-l", "app.kubernetes.io/name=openbao",
+                      "-o", "jsonpath={.items[0].metadata.name}")
+    if not ob_pod:
+        from sunbeam.output import die
+        die("OpenBao pod not found — is the cluster running?")
+
+    token_b64 = kube_out("-n", "data", "get", "secret", "openbao-keys",
+                         "-o", "jsonpath={.data.root-token}")
+    import base64
+    root_token = base64.b64decode(token_b64).decode() if token_b64 else ""
+    if not root_token:
+        from sunbeam.output import die
+        die("root-token not found in openbao-keys secret")
+
+    cmd_str = "VAULT_TOKEN=" + root_token + " bao " + " ".join(bao_args)
+    r = subprocess.run(
+        ["kubectl", "--context=sunbeam", "-n", "data", "exec", ob_pod,
+         "-c", "openbao", "--", "sh", "-c", cmd_str]
+    )
     return r.returncode
 
 
