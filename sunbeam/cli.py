@@ -64,6 +64,11 @@ def main() -> None:
     # sunbeam bootstrap
     sub.add_parser("bootstrap", help="Create Gitea orgs/repos; set up Lima registry")
 
+    # sunbeam k8s [kubectl args...] — transparent kubectl --context=sunbeam wrapper
+    p_k8s = sub.add_parser("k8s", help="kubectl --context=sunbeam passthrough")
+    p_k8s.add_argument("kubectl_args", nargs=argparse.REMAINDER,
+                       help="arguments forwarded verbatim to kubectl")
+
     args = parser.parse_args()
 
     if args.verb is None:
@@ -122,6 +127,10 @@ def main() -> None:
     elif args.verb == "bootstrap":
         from sunbeam.gitea import cmd_bootstrap
         cmd_bootstrap()
+
+    elif args.verb == "k8s":
+        from sunbeam.kube import cmd_k8s
+        sys.exit(cmd_k8s(args.kubectl_args))
 
     else:
         parser.print_help()
