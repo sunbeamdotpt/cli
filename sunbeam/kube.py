@@ -93,11 +93,13 @@ def create_secret(ns: str, name: str, **literals) -> None:
              "--field-manager=sunbeam", "-f", "-", input=manifest)
 
 
-def kube_exec(ns: str, pod: str, *cmd: str) -> tuple[int, str]:
+def kube_exec(ns: str, pod: str, *cmd: str, container: str | None = None) -> tuple[int, str]:
     """Run a command inside a pod. Returns (returncode, stdout)."""
-    r = run_tool("kubectl", "--context=sunbeam", "exec", "-n", ns, pod,
-                 "--", *cmd,
-                 capture_output=True, text=True, check=False)
+    args = ["kubectl", "--context=sunbeam", "exec", "-n", ns, pod]
+    if container:
+        args += ["-c", container]
+    args += ["--", *cmd]
+    r = run_tool(*args, capture_output=True, text=True, check=False)
     return r.returncode, r.stdout.strip()
 
 
@@ -113,6 +115,15 @@ def get_domain() -> str:
         return raw.split("https://auth.")[1].split("/")[0]
     ip = get_lima_ip()
     return f"{ip}.sslip.io"
+
+
+def cmd_k8s(kubectl_args: list[str]) -> int:
+    """Transparent kubectl --context=sunbeam passthrough. Returns kubectl's exit code."""
+    from sunbeam.tools import ensure_tool
+    import os
+    bin_path = ensure_tool("kubectl")
+    r = subprocess.run([str(bin_path), "--context=sunbeam", *kubectl_args])
+    return r.returncode
 
 
 def kustomize_build(overlay: Path, domain: str) -> str:
