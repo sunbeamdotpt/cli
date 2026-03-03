@@ -47,12 +47,54 @@ def pre_apply_cleanup():
                  "--ignore-not-found", check=False)
 
 
+def _snapshot_configmaps() -> dict:
+    """Return {ns/name: resourceVersion} for all ConfigMaps in managed namespaces."""
+    result = {}
+    for ns in MANAGED_NS:
+        out = kube_out(
+            "get", "configmaps", "-n", ns, "--ignore-not-found",
+            "-o=jsonpath={range .items[*]}{.metadata.name}={.metadata.resourceVersion}\\n{end}",
+        )
+        for line in out.splitlines():
+            if "=" in line:
+                name, rv = line.split("=", 1)
+                result[f"{ns}/{name}"] = rv
+    return result
+
+
+def _restart_for_changed_configmaps(before: dict, after: dict):
+    """Restart deployments that mount any ConfigMap whose resourceVersion changed."""
+    changed_by_ns: dict = {}
+    for key, rv in after.items():
+        if before.get(key) != rv:
+            ns, name = key.split("/", 1)
+            changed_by_ns.setdefault(ns, set()).add(name)
+
+    for ns, cm_names in changed_by_ns.items():
+        out = kube_out(
+            "get", "deployments", "-n", ns, "--ignore-not-found",
+            "-o=jsonpath={range .items[*]}{.metadata.name}:"
+            "{range .spec.template.spec.volumes[*]}{.configMap.name},{end};{end}",
+        )
+        for entry in out.split(";"):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            dep, vols = entry.split(":", 1)
+            mounted = {v.strip() for v in vols.split(",") if v.strip()}
+            if mounted & cm_names:
+                ok(f"Restarting {ns}/{dep} (ConfigMap updated)...")
+                kube("rollout", "restart", f"deployment/{dep}", "-n", ns, check=False)
+
+
 def cmd_apply():
     """Get Lima IP, build domain, kustomize_build, kube_apply."""
     ip = get_lima_ip()
     domain = f"{ip}.sslip.io"
     step(f"Applying manifests (domain: {domain})...")
     pre_apply_cleanup()
+    before = _snapshot_configmaps()
     manifests = kustomize_build(REPO_ROOT / "overlays" / "local", domain)
     kube("apply", "--server-side", "--force-conflicts", "-f", "-", input=manifests)
+    _restart_for_changed_configmaps(before, _snapshot_configmaps())
     ok("Applied.")
