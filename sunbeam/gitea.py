@@ -146,29 +146,14 @@ def cmd_bootstrap(domain: str = "", gitea_admin_pass: str = ""):
             capture_output=True, text=True,
         )
 
-    # Ensure admin has the generated password
+    # Ensure admin has the generated password and no forced-change flag.
     r = gitea_exec("gitea", "admin", "user", "change-password",
                    "--username", GITEA_ADMIN_USER, "--password",
-                   gitea_admin_pass)
+                   gitea_admin_pass, "--must-change-password=false")
     if r.returncode == 0 or "password" in (r.stdout + r.stderr).lower():
         ok(f"Admin '{GITEA_ADMIN_USER}' password set.")
     else:
         warn(f"change-password: {r.stderr.strip()}")
-
-    # Clear must_change_password via Postgres
-    pg_pod = kube_out("-n", "data", "get", "pods",
-                      "-l=cnpg.io/cluster=postgres,role=primary",
-                      "-o=jsonpath={.items[0].metadata.name}")
-    if pg_pod:
-        kube("exec", "-n", "data", pg_pod, "-c", "postgres", "--",
-             "psql", "-U", "postgres", "-d", "gitea_db", "-c",
-             f'UPDATE "user" SET must_change_password = false'
-             f" WHERE lower_name = '{GITEA_ADMIN_USER.lower()}';",
-             check=False)
-        ok("Cleared must-change-password flag.")
-    else:
-        warn("Postgres pod not found -- must-change-password may block API "
-             "calls.")
 
     def api(method, path, data=None):
         args = [

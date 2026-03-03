@@ -4,7 +4,7 @@ from pathlib import Path
 from sunbeam.kube import kube, kube_out, kube_ok, kube_apply, kustomize_build, get_lima_ip
 from sunbeam.output import step, ok, warn
 
-REPO_ROOT = Path(__file__).parents[3] / "infrastructure"
+REPO_ROOT = Path(__file__).parents[2] / "infrastructure"
 MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "media", "ory", "storage",
               "vault-secrets-operator"]
 
