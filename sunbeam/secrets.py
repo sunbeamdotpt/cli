@@ -170,6 +170,10 @@ def _seed_openbao() -> dict:
            "csrf-cookie-secret": rand,
            "admin-identity-ids": lambda: ""})
 
+    docs = get_or_create("docs",
+        **{"django-secret-key":      rand,
+           "collaboration-secret":   rand})
+
     # Write all secrets to KV (idempotent -- puts same values back)
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
         f"bao kv put secret/hydra           system-secret=\"{hydra['system-secret']}\" cookie-secret=\"{hydra['cookie-secret']}\" pairwise-salt=\"{hydra['pairwise-salt']}\" && "
@@ -180,7 +184,8 @@ def _seed_openbao() -> dict:
         f"bao kv put secret/livekit         api-key=\"{livekit['api-key']}\" api-secret=\"{livekit['api-secret']}\" && "
         f"bao kv put secret/people          django-secret-key=\"{people['django-secret-key']}\" && "
         f"bao kv put secret/login-ui        cookie-secret=\"{login_ui['cookie-secret']}\" csrf-cookie-secret=\"{login_ui['csrf-cookie-secret']}\" && "
-        f"bao kv put secret/kratos-admin   cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\""
+        f"bao kv put secret/kratos-admin    cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\" && "
+        f"bao kv put secret/docs            django-secret-key=\"{docs['django-secret-key']}\" collaboration-secret=\"{docs['collaboration-secret']}\""
         f"'")
 
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
