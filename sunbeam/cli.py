@@ -3,10 +3,32 @@ import argparse
 import sys
 
 
+ENV_CONTEXTS = {
+    "local":      "sunbeam",
+    "production": "production",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="sunbeam",
         description="Sunbeam local dev stack manager",
+    )
+    parser.add_argument(
+        "--env", choices=["local", "production"], default="local",
+        help="Target environment (default: local)",
+    )
+    parser.add_argument(
+        "--context", default=None,
+        help="kubectl context override (default: sunbeam for local, default for production)",
+    )
+    parser.add_argument(
+        "--domain", default="",
+        help="Domain suffix for production deploys (e.g. sunbeam.pt)",
+    )
+    parser.add_argument(
+        "--email", default="",
+        help="ACME email for cert-manager (e.g. ops@sunbeam.pt)",
     )
     sub = parser.add_subparsers(dest="verb", metavar="verb")
 
@@ -21,8 +43,12 @@ def main() -> None:
     p_status.add_argument("target", nargs="?", default=None,
                           help="namespace or namespace/name")
 
-    # sunbeam apply
-    sub.add_parser("apply", help="kustomize build + domain subst + kubectl apply")
+    # sunbeam apply [namespace]
+    p_apply = sub.add_parser("apply", help="kustomize build + domain subst + kubectl apply")
+    p_apply.add_argument("namespace", nargs="?", default="",
+                         help="Limit apply to one namespace (e.g. lasuite, ingress, ory)")
+    p_apply.add_argument("--domain", default="", help="Domain suffix (e.g. sunbeam.pt)")
+    p_apply.add_argument("--email", default="", help="ACME email for cert-manager")
 
     # sunbeam seed
     sub.add_parser("seed", help="Generate/store all credentials in OpenBao")
@@ -48,10 +74,16 @@ def main() -> None:
     p_restart.add_argument("target", nargs="?", default=None,
                            help="namespace or namespace/name")
 
-    # sunbeam build <what>
-    p_build = sub.add_parser("build", help="Build and push an artifact")
-    p_build.add_argument("what", choices=["proxy", "integration", "kratos-admin"],
-                         help="What to build (proxy, integration, kratos-admin)")
+    # sunbeam build <what> [--push] [--deploy]
+    p_build = sub.add_parser("build", help="Build an artifact (add --push to push, --deploy to apply+rollout)")
+    p_build.add_argument("what",
+                         choices=["proxy", "integration", "kratos-admin", "meet",
+                                  "docs-frontend", "people-frontend"],
+                         help="What to build")
+    p_build.add_argument("--push", action="store_true",
+                         help="Push image to registry after building")
+    p_build.add_argument("--deploy", action="store_true",
+                         help="Apply manifests and rollout restart after pushing (implies --push)")
 
     # sunbeam check [ns[/name]]
     p_check = sub.add_parser("check", help="Functional service health checks")
@@ -101,7 +133,25 @@ def main() -> None:
     p_user_enable = user_sub.add_parser("enable", help="Re-enable a disabled identity")
     p_user_enable.add_argument("target", help="Email or identity ID")
 
+    p_user_set_pw = user_sub.add_parser("set-password", help="Set password for an identity")
+    p_user_set_pw.add_argument("target", help="Email or identity ID")
+    p_user_set_pw.add_argument("password", help="New password")
+
     args = parser.parse_args()
+
+    # Set kubectl context before any kube calls.
+    # For production, also register the SSH host so the tunnel is opened on demand.
+    # SUNBEAM_SSH_HOST env var: e.g. "user@server.example.com" or just "server.example.com"
+    import os
+    from sunbeam.kube import set_context
+    ctx = args.context or ENV_CONTEXTS.get(args.env, "sunbeam")
+    ssh_host = ""
+    if args.env == "production":
+        ssh_host = os.environ.get("SUNBEAM_SSH_HOST", "")
+        if not ssh_host:
+            from sunbeam.output import die
+            die("SUNBEAM_SSH_HOST must be set for --env production (e.g. user@your-server.example.com)")
+    set_context(ctx, ssh_host=ssh_host)
 
     if args.verb is None:
         parser.print_help()
@@ -122,7 +172,11 @@ def main() -> None:
 
     elif args.verb == "apply":
         from sunbeam.manifests import cmd_apply
-        cmd_apply()
+        # --domain/--email can appear before OR after the verb; subparser wins if both set.
+        domain    = getattr(args, "domain",    "") or ""
+        email     = getattr(args, "email",     "") or ""
+        namespace = getattr(args, "namespace", "") or ""
+        cmd_apply(env=args.env, domain=domain, email=email, namespace=namespace)
 
     elif args.verb == "seed":
         from sunbeam.secrets import cmd_seed
@@ -146,7 +200,8 @@ def main() -> None:
 
     elif args.verb == "build":
         from sunbeam.images import cmd_build
-        cmd_build(args.what)
+        push = args.push or args.deploy
+        cmd_build(args.what, push=push, deploy=args.deploy)
 
     elif args.verb == "check":
         from sunbeam.checks import cmd_check
@@ -171,7 +226,8 @@ def main() -> None:
     elif args.verb == "user":
         from sunbeam.users import (cmd_user_list, cmd_user_get, cmd_user_create,
                                    cmd_user_delete, cmd_user_recover,
-                                   cmd_user_disable, cmd_user_enable)
+                                   cmd_user_disable, cmd_user_enable,
+                                   cmd_user_set_password)
         action = getattr(args, "user_action", None)
         if action is None:
             p_user.print_help()
@@ -190,6 +246,8 @@ def main() -> None:
             cmd_user_disable(args.target)
         elif action == "enable":
             cmd_user_enable(args.target)
+        elif action == "set-password":
+            cmd_user_set_password(args.target, args.password)
 
     else:
         parser.print_help()
