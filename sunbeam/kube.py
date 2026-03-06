@@ -1,9 +1,56 @@
 """Kubernetes interface — kubectl/kustomize wrappers, domain substitution, target parsing."""
 import subprocess
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from sunbeam.tools import run_tool, CACHE_DIR
-from sunbeam.output import die
+from sunbeam.output import die, ok
+
+# Active kubectl context. Set once at startup via set_context().
+# Defaults to "sunbeam" (Lima VM) for local dev.
+_context: str = "sunbeam"
+
+# SSH host for production tunnel. Set alongside context for production env.
+_ssh_host: str = ""
+_tunnel_proc: subprocess.Popen | None = None
+
+
+def set_context(ctx: str, ssh_host: str = "") -> None:
+    global _context, _ssh_host
+    _context = ctx
+    _ssh_host = ssh_host
+
+
+def context_arg() -> str:
+    """Return '--context=<active>' for use in subprocess command lists."""
+    return f"--context={_context}"
+
+
+def ensure_tunnel() -> None:
+    """Open SSH tunnel to localhost:16443 → remote:6443 for production if needed."""
+    global _tunnel_proc
+    if not _ssh_host:
+        return
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", 16443), timeout=0.5):
+            return  # already open
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        pass
+    ok(f"Opening SSH tunnel to {_ssh_host}...")
+    _tunnel_proc = subprocess.Popen(
+        ["ssh", "-p", "2222", "-L", "16443:127.0.0.1:6443", "-N", "-o", "ExitOnForwardFailure=yes",
+         "-o", "StrictHostKeyChecking=no", _ssh_host],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    for _ in range(10):
+        try:
+            with socket.create_connection(("127.0.0.1", 16443), timeout=0.5):
+                return
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            time.sleep(0.5)
+    die(f"SSH tunnel to {_ssh_host} did not open in time")
 
 
 def parse_target(s: str | None) -> tuple[str | None, str | None]:
@@ -42,23 +89,26 @@ def get_lima_ip() -> str:
 
 
 def kube(*args, input=None, check=True) -> subprocess.CompletedProcess:
-    """Run kubectl with --context=sunbeam."""
+    """Run kubectl against the active context, opening SSH tunnel if needed."""
+    ensure_tunnel()
     text = not isinstance(input, bytes)
-    return run_tool("kubectl", "--context=sunbeam", *args,
+    return run_tool("kubectl", context_arg(), *args,
                     input=input, text=text, check=check,
                     capture_output=False)
 
 
 def kube_out(*args) -> str:
     """Run kubectl and return stdout (empty string on failure)."""
-    r = run_tool("kubectl", "--context=sunbeam", *args,
+    ensure_tunnel()
+    r = run_tool("kubectl", context_arg(), *args,
                  capture_output=True, text=True, check=False)
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def kube_ok(*args) -> bool:
     """Return True if kubectl command exits 0."""
-    r = run_tool("kubectl", "--context=sunbeam", *args,
+    ensure_tunnel()
+    r = run_tool("kubectl", context_arg(), *args,
                  capture_output=True, check=False)
     return r.returncode == 0
 
@@ -95,7 +145,7 @@ def create_secret(ns: str, name: str, **literals) -> None:
 
 def kube_exec(ns: str, pod: str, *cmd: str, container: str | None = None) -> tuple[int, str]:
     """Run a command inside a pod. Returns (returncode, stdout)."""
-    args = ["kubectl", "--context=sunbeam", "exec", "-n", ns, pod]
+    args = ["kubectl", context_arg(), "exec", "-n", ns, pod]
     if container:
         args += ["-c", container]
     args += ["--", *cmd]
@@ -106,22 +156,42 @@ def kube_exec(ns: str, pod: str, *cmd: str, container: str | None = None) -> tup
 def get_domain() -> str:
     """Discover the active domain from cluster state.
 
-    Reads a known substituted configmap value; falls back to the Lima VM IP.
+    Tries multiple reliable anchors; falls back to the Lima VM IP for local dev.
     """
-    raw = kube_out("get", "configmap", "lasuite-oidc-provider", "-n", "lasuite",
-                   "-o=jsonpath={.data.OIDC_OP_JWKS_ENDPOINT}")
-    if raw and "https://auth." in raw:
-        # e.g. "https://auth.192.168.105.2.sslip.io/.well-known/jwks.json"
-        return raw.split("https://auth.")[1].split("/")[0]
+    import base64
+
+    # 1. Gitea inline-config secret: server section contains DOMAIN=src.<domain>
+    #    Works in both local and production because DOMAIN_SUFFIX is substituted
+    #    into gitea-values.yaml at apply time.
+    raw = kube_out("get", "secret", "gitea-inline-config", "-n", "devtools",
+                   "-o=jsonpath={.data.server}", "--ignore-not-found")
+    if raw:
+        try:
+            server_ini = base64.b64decode(raw).decode()
+            for line in server_ini.splitlines():
+                if line.startswith("DOMAIN=src."):
+                    # e.g. "DOMAIN=src.sunbeam.pt"
+                    return line.split("DOMAIN=src.", 1)[1].strip()
+        except Exception:
+            pass
+
+    # 2. Fallback: lasuite-oidc-provider configmap (works if La Suite is deployed)
+    raw2 = kube_out("get", "configmap", "lasuite-oidc-provider", "-n", "lasuite",
+                    "-o=jsonpath={.data.OIDC_OP_JWKS_ENDPOINT}", "--ignore-not-found")
+    if raw2 and "https://auth." in raw2:
+        return raw2.split("https://auth.")[1].split("/")[0]
+
+    # 3. Local dev fallback
     ip = get_lima_ip()
     return f"{ip}.sslip.io"
 
 
 def cmd_k8s(kubectl_args: list[str]) -> int:
-    """Transparent kubectl --context=sunbeam passthrough. Returns kubectl's exit code."""
+    """Transparent kubectl passthrough for the active context."""
+    ensure_tunnel()
     from sunbeam.tools import ensure_tool
     bin_path = ensure_tool("kubectl")
-    r = subprocess.run([str(bin_path), "--context=sunbeam", *kubectl_args])
+    r = subprocess.run([str(bin_path), context_arg(), *kubectl_args])
     return r.returncode
 
 
@@ -149,19 +219,21 @@ def cmd_bao(bao_args: list[str]) -> int:
 
     cmd_str = "VAULT_TOKEN=" + root_token + " bao " + " ".join(bao_args)
     r = subprocess.run(
-        ["kubectl", "--context=sunbeam", "-n", "data", "exec", ob_pod,
+        ["kubectl", context_arg(), "-n", "data", "exec", ob_pod,
          "-c", "openbao", "--", "sh", "-c", cmd_str]
     )
     return r.returncode
 
 
-def kustomize_build(overlay: Path, domain: str) -> str:
-    """Run kustomize build --enable-helm and apply domain substitution."""
+def kustomize_build(overlay: Path, domain: str, email: str = "") -> str:
+    """Run kustomize build --enable-helm and apply domain/email substitution."""
     r = run_tool(
         "kustomize", "build", "--enable-helm", str(overlay),
         capture_output=True, text=True, check=True,
     )
     text = r.stdout
     text = domain_replace(text, domain)
+    if email:
+        text = text.replace("ACME_EMAIL", email)
     text = text.replace("\n      annotations: null", "")
     return text

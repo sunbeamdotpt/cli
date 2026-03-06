@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import sunbeam.kube as _kube_mod
 from sunbeam.kube import kube, kube_out, parse_target
 from sunbeam.tools import ensure_tool
 from sunbeam.output import step, ok, warn, die
@@ -24,7 +25,10 @@ SERVICES_TO_RESTART = [
     ("media",    "livekit-server"),
 ]
 
-K8S_CTX = ["--context=sunbeam"]
+
+def _k8s_ctx():
+    """Return the kubectl --context flag matching the active environment."""
+    return [_kube_mod.context_arg()]
 
 
 def _capture_out(cmd, *, default=""):
@@ -43,7 +47,7 @@ def _vso_sync_status():
 
     # VaultStaticSecrets: synced when secretMAC is populated
     vss_raw = _capture_out([
-        "kubectl", *K8S_CTX, "get", "vaultstaticsecret", "-A", "--no-headers",
+        "kubectl", *_k8s_ctx(), "get", "vaultstaticsecret", "-A", "--no-headers",
         "-o=custom-columns="
         "NS:.metadata.namespace,NAME:.metadata.name,MAC:.status.secretMAC",
     ])
@@ -65,7 +69,7 @@ def _vso_sync_status():
 
     # VaultDynamicSecrets: synced when lastRenewalTime is non-zero
     vds_raw = _capture_out([
-        "kubectl", *K8S_CTX, "get", "vaultdynamicsecret", "-A", "--no-headers",
+        "kubectl", *_k8s_ctx(), "get", "vaultdynamicsecret", "-A", "--no-headers",
         "-o=custom-columns="
         "NS:.metadata.namespace,NAME:.metadata.name,RENEWED:.status.lastRenewalTime",
     ])
@@ -101,7 +105,7 @@ def cmd_status(target: str | None):
     if target is None:
         # All pods across managed namespaces
         raw = _capture_out([
-            "kubectl", *K8S_CTX,
+            "kubectl", *_k8s_ctx(),
             "get", "pods",
             "--field-selector=metadata.namespace!= kube-system",
             "-A", "--no-headers",
@@ -120,7 +124,7 @@ def cmd_status(target: str | None):
         if name:
             # Specific service: namespace/service
             raw = _capture_out([
-                "kubectl", *K8S_CTX,
+                "kubectl", *_k8s_ctx(),
                 "get", "pods", "-n", ns, "-l", f"app={name}", "--no-headers",
             ])
             pods = []
@@ -133,7 +137,7 @@ def cmd_status(target: str | None):
         else:
             # Namespace only
             raw = _capture_out([
-                "kubectl", *K8S_CTX,
+                "kubectl", *_k8s_ctx(),
                 "get", "pods", "-n", ns, "--no-headers",
             ])
             pods = []
