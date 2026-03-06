@@ -7,16 +7,15 @@ import urllib.request
 import urllib.error
 from contextlib import contextmanager
 
+import sunbeam.kube as _kube_mod
 from sunbeam.output import step, ok, warn, die, table
-
-K8S_CTX = ["--context=sunbeam"]
 
 
 @contextmanager
 def _port_forward(ns="ory", svc="kratos-admin", local_port=4434, remote_port=80):
     """Port-forward directly to the Kratos admin HTTP API and yield the local URL."""
     proc = subprocess.Popen(
-        ["kubectl", *K8S_CTX, "-n", ns, "port-forward",
+        ["kubectl", _kube_mod.context_arg(), "-n", ns, "port-forward",
          f"svc/{svc}", f"{local_port}:{remote_port}"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
@@ -164,6 +163,27 @@ def cmd_user_disable(target):
         _api(base, f"/identities/{iid}/sessions", method="DELETE")
     ok(f"Identity {iid[:8]}... disabled and all Kratos sessions revoked.")
     warn("App sessions (docs/people) expire within SESSION_COOKIE_AGE — currently 1h.")
+
+
+def cmd_user_set_password(target, password):
+    """Set (or reset) the password credential for an identity."""
+    step(f"Setting password for: {target}")
+    with _port_forward() as base:
+        identity = _find_identity(base, target)
+        iid = identity["id"]
+        _api(base, f"/identities/{iid}", method="PUT", body={
+            "schema_id": identity["schema_id"],
+            "traits": identity["traits"],
+            "state": identity.get("state", "active"),
+            "metadata_public": identity.get("metadata_public"),
+            "metadata_admin": identity.get("metadata_admin"),
+            "credentials": {
+                "password": {
+                    "config": {"password": password},
+                },
+            },
+        })
+    ok(f"Password set for {iid[:8]}...")
 
 
 def cmd_user_enable(target):

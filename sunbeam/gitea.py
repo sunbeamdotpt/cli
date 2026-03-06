@@ -4,13 +4,12 @@ import json
 import subprocess
 import time
 
-from sunbeam.kube import kube, kube_out
+from sunbeam.kube import kube, kube_out, context_arg
 from sunbeam.output import step, ok, warn
 
 LIMA_VM = "sunbeam"
 GITEA_ADMIN_USER = "gitea_admin"
 GITEA_ADMIN_EMAIL = "gitea@local.domain"
-K8S_CTX = ["--context=sunbeam"]
 
 
 def _capture_out(cmd, *, default=""):
@@ -26,7 +25,7 @@ def _run(cmd, *, check=True, input=None, capture=False, cwd=None):
 
 def _kube_ok(*args):
     return subprocess.run(
-        ["kubectl", *K8S_CTX, *args], capture_output=True
+        ["kubectl", context_arg(), *args], capture_output=True
     ).returncode == 0
 
 
@@ -141,7 +140,7 @@ def cmd_bootstrap(domain: str = "", gitea_admin_pass: str = ""):
 
     def gitea_exec(*args):
         return subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "devtools", "exec", pod, "-c",
+            ["kubectl", context_arg(), "-n", "devtools", "exec", pod, "-c",
              "gitea", "--"] + list(args),
             capture_output=True, text=True,
         )
@@ -170,6 +169,18 @@ def cmd_bootstrap(domain: str = "", gitea_admin_pass: str = ""):
         except json.JSONDecodeError:
             return {}
 
+    # Mark admin account as private so it doesn't appear in public listings.
+    r = api("PATCH", f"/admin/users/{GITEA_ADMIN_USER}", {
+        "source_id":   0,
+        "login_name":  GITEA_ADMIN_USER,
+        "email":       GITEA_ADMIN_EMAIL,
+        "visibility":  "private",
+    })
+    if r.get("login") == GITEA_ADMIN_USER:
+        ok(f"Admin '{GITEA_ADMIN_USER}' marked as private.")
+    else:
+        warn(f"Could not set admin visibility: {r}")
+
     for org_name, visibility, desc in [
         ("studio",   "public",  "Public source code"),
         ("internal", "private", "Internal tools and services"),
@@ -185,6 +196,64 @@ def cmd_bootstrap(domain: str = "", gitea_admin_pass: str = ""):
             ok(f"Org '{org_name}' already exists.")
         else:
             warn(f"Org '{org_name}': {result.get('message', result)}")
+
+    # Configure Hydra as the OIDC authentication source.
+    # Source name "Sunbeam" determines the callback URL:
+    #   /user/oauth2/Sunbeam/callback (must match oidc-clients.yaml redirectUri)
+    auth_list = gitea_exec("gitea", "admin", "auth", "list")
+    # Parse tab-separated rows: ID\tName\tType\tEnabled
+    existing_id = None
+    exact_ok = False
+    for line in auth_list.stdout.splitlines()[1:]:  # skip header
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        src_id, src_name = parts[0].strip(), parts[1].strip()
+        if src_name == "Sunbeam":
+            exact_ok = True
+            break
+        if src_name in ("Sunbeam Auth",) or (src_name.startswith("Sunbeam") and parts[2].strip() == "OAuth2"):
+            existing_id = src_id
+
+    if exact_ok:
+        ok("OIDC auth source 'Sunbeam' already present.")
+    elif existing_id:
+        # Wrong name (e.g. "Sunbeam Auth") — rename in-place to fix callback URL
+        r = gitea_exec("gitea", "admin", "auth", "update-oauth",
+                       "--id", existing_id, "--name", "Sunbeam")
+        if r.returncode == 0:
+            ok(f"Renamed OIDC auth source (id={existing_id}) to 'Sunbeam'.")
+        else:
+            warn(f"Rename failed: {r.stderr.strip()}")
+    else:
+        oidc_id_b64 = kube_out("-n", "lasuite", "get", "secret", "oidc-gitea",
+                               "-o=jsonpath={.data.CLIENT_ID}")
+        oidc_secret_b64 = kube_out("-n", "lasuite", "get", "secret", "oidc-gitea",
+                                   "-o=jsonpath={.data.CLIENT_SECRET}")
+        if oidc_id_b64 and oidc_secret_b64:
+            oidc_id = base64.b64decode(oidc_id_b64).decode()
+            oidc_sec = base64.b64decode(oidc_secret_b64).decode()
+            discover_url = (
+                "http://hydra-public.ory.svc.cluster.local:4444"
+                "/.well-known/openid-configuration"
+            )
+            r = gitea_exec(
+                "gitea", "admin", "auth", "add-oauth",
+                "--name", "Sunbeam",
+                "--provider", "openidConnect",
+                "--key", oidc_id,
+                "--secret", oidc_sec,
+                "--auto-discover-url", discover_url,
+                "--scopes", "openid",
+                "--scopes", "email",
+                "--scopes", "profile",
+            )
+            if r.returncode == 0:
+                ok("OIDC auth source 'Sunbeam' configured.")
+            else:
+                warn(f"OIDC auth source config failed: {r.stderr.strip()}")
+        else:
+            warn("oidc-gitea secret not found -- OIDC auth source not configured.")
 
     ok(f"Gitea ready -- https://src.{domain} ({GITEA_ADMIN_USER} / <from "
        f"openbao>)")

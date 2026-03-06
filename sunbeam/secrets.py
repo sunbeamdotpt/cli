@@ -9,7 +9,7 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
-from sunbeam.kube import kube, kube_out, kube_ok, kube_apply, ensure_ns, create_secret, get_domain
+from sunbeam.kube import kube, kube_out, kube_ok, kube_apply, ensure_ns, create_secret, get_domain, context_arg
 from sunbeam.output import step, ok, warn, die
 
 ADMIN_USERNAME = "estudio-admin"
@@ -21,7 +21,6 @@ PG_USERS = [
     "docs", "meet", "drive", "messages", "conversations",
     "people", "find",
 ]
-K8S_CTX = ["--context=sunbeam"]
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +48,7 @@ def _seed_openbao() -> dict:
 
     def bao(cmd):
         r = subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "data", "exec", ob_pod, "-c", "openbao",
+            ["kubectl", context_arg(), "-n", "data", "exec", ob_pod, "-c", "openbao",
              "--", "sh", "-c", cmd],
             capture_output=True, text=True,
         )
@@ -174,6 +173,27 @@ def _seed_openbao() -> dict:
         **{"django-secret-key":      rand,
            "collaboration-secret":   rand})
 
+    meet = get_or_create("meet",
+        **{"django-secret-key":            rand,
+           "application-jwt-secret-key":   rand})
+
+    # Scaleway S3 credentials for CNPG barman backups.
+    # Read from `scw config` at seed time; falls back to empty string (operator must fill in).
+    def _scw_config(key):
+        try:
+            r = subprocess.run(["scw", "config", "get", key],
+                               capture_output=True, text=True, timeout=5)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+
+    grafana = get_or_create("grafana",
+        **{"admin-password": rand})
+
+    scaleway_s3 = get_or_create("scaleway-s3",
+        **{"access-key-id":     lambda: _scw_config("access-key"),
+           "secret-access-key": lambda: _scw_config("secret-key")})
+
     # Write all secrets to KV (idempotent -- puts same values back)
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
         f"bao kv put secret/hydra           system-secret=\"{hydra['system-secret']}\" cookie-secret=\"{hydra['cookie-secret']}\" pairwise-salt=\"{hydra['pairwise-salt']}\" && "
@@ -185,7 +205,10 @@ def _seed_openbao() -> dict:
         f"bao kv put secret/people          django-secret-key=\"{people['django-secret-key']}\" && "
         f"bao kv put secret/login-ui        cookie-secret=\"{login_ui['cookie-secret']}\" csrf-cookie-secret=\"{login_ui['csrf-cookie-secret']}\" && "
         f"bao kv put secret/kratos-admin    cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\" && "
-        f"bao kv put secret/docs            django-secret-key=\"{docs['django-secret-key']}\" collaboration-secret=\"{docs['collaboration-secret']}\""
+        f"bao kv put secret/docs            django-secret-key=\"{docs['django-secret-key']}\" collaboration-secret=\"{docs['collaboration-secret']}\" && "
+        f"bao kv put secret/meet            django-secret-key=\"{meet['django-secret-key']}\" application-jwt-secret-key=\"{meet['application-jwt-secret-key']}\" && "
+        f"bao kv put secret/grafana          admin-password=\"{grafana['admin-password']}\" && "
+        f"bao kv put secret/scaleway-s3     access-key-id=\"{scaleway_s3['access-key-id']}\" secret-access-key=\"{scaleway_s3['secret-access-key']}\""
         f"'")
 
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
@@ -208,7 +231,7 @@ def _seed_openbao() -> dict:
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
         f"bao write auth/kubernetes/role/vso "
         f"bound_service_account_names=default "
-        f"bound_service_account_namespaces=ory,devtools,storage,lasuite,media "
+        f"bound_service_account_namespaces=ory,devtools,storage,lasuite,media,data,monitoring "
         f"policies=vso-reader "
         f"ttl=1h")
 
@@ -253,7 +276,7 @@ def _configure_db_engine(ob_pod, root_token, pg_user, pg_pass):
 
     def bao(cmd, check=True):
         r = subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "data", "exec", ob_pod, "-c", "openbao",
+            ["kubectl", context_arg(), "-n", "data", "exec", ob_pod, "-c", "openbao",
              "--", "sh", "-c", cmd],
             capture_output=True, text=True,
         )
@@ -276,7 +299,7 @@ def _configure_db_engine(ob_pod, root_token, pg_user, pg_pass):
 
     def psql(sql):
         r = subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "data", "exec", cnpg_pod, "-c", "postgres",
+            ["kubectl", context_arg(), "-n", "data", "exec", cnpg_pod, "-c", "postgres",
              "--", "psql", "-U", "postgres", "-c", sql],
             capture_output=True, text=True,
         )
@@ -351,7 +374,7 @@ def _configure_db_engine(ob_pod, root_token, pg_user, pg_pass):
 def _kratos_admin_pf(local_port=14434):
     """Port-forward directly to the Kratos admin API."""
     proc = subprocess.Popen(
-        ["kubectl", *K8S_CTX, "-n", "ory", "port-forward",
+        ["kubectl", context_arg(), "-n", "ory", "port-forward",
          "svc/kratos-admin", f"{local_port}:80"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
@@ -424,7 +447,7 @@ def _seed_kratos_admin_identity(ob_pod: str, root_token: str) -> tuple[str, str]
 
     def _bao(cmd):
         return subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "data", "exec", ob_pod, "-c", "openbao",
+            ["kubectl", context_arg(), "-n", "data", "exec", ob_pod, "-c", "openbao",
              "--", "sh", "-c", cmd],
             capture_output=True, text=True,
         )
@@ -498,9 +521,11 @@ def cmd_seed() -> dict:
                  f"CREATE DATABASE {db} OWNER {user};", check=False)
 
         # Read CNPG superuser credentials and configure database secrets engine.
-        pg_user_b64 = kube_out("-n", "data", "get", "secret", "postgres-superuser",
+        # CNPG creates secret named "{cluster}-app" (not "{cluster}-superuser")
+        # when owner is specified without an explicit secret field.
+        pg_user_b64 = kube_out("-n", "data", "get", "secret", "postgres-app",
                                "-o=jsonpath={.data.username}")
-        pg_pass_b64 = kube_out("-n", "data", "get", "secret", "postgres-superuser",
+        pg_pass_b64 = kube_out("-n", "data", "get", "secret", "postgres-app",
                                "-o=jsonpath={.data.password}")
         pg_user = base64.b64decode(pg_user_b64).decode() if pg_user_b64 else "postgres"
         pg_pass = base64.b64decode(pg_pass_b64).decode() if pg_pass_b64 else ""
@@ -555,6 +580,7 @@ def cmd_seed() -> dict:
                   DJANGO_SECRET_KEY=django_secret)
 
     ensure_ns("media")
+    ensure_ns("monitoring")
 
     # Ensure the Kratos admin identity exists and ADMIN_IDENTITY_IDS is set.
     # This runs after all other secrets are in place (Kratos must be up).
@@ -606,7 +632,7 @@ def cmd_verify():
 
     def bao(cmd, *, check=True):
         r = subprocess.run(
-            ["kubectl", *K8S_CTX, "-n", "data", "exec", ob_pod, "-c", "openbao",
+            ["kubectl", context_arg(), "-n", "data", "exec", ob_pod, "-c", "openbao",
              "--", "sh", "-c", cmd],
             capture_output=True, text=True,
         )
