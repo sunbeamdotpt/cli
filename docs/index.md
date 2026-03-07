@@ -28,8 +28,8 @@ Sunbeam is a command-line tool designed to simplify the management of local deve
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/sunbeam.git
-cd sunbeam/cli
+git clone https://src.sunbeam.pt/studio/cli.git
+cd cli
 
 # Install dependencies
 pip install .
@@ -64,4 +64,4 @@ sunbeam logs ory/kratos
 
 ## Support
 
-For issues, questions, or contributions, please refer to the [GitHub repository](https://github.com/your-org/sunbeam).
+For issues, questions, or contributions, please refer to the [Git repository](https://src.sunbeam.pt/studio/cli).
