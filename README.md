@@ -45,8 +45,8 @@ sunbeam status
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/sunbeam.git
-cd sunbeam/cli
+git clone https://src.sunbeam.pt/studio/cli.git
+cd cli
 
 # Install dependencies
 pip install .
@@ -209,8 +209,8 @@ Contributions are welcome! Please follow these guidelines:
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/sunbeam.git
-cd sunbeam/cli
+git clone https://src.sunbeam.pt/studio/cli.git
+cd cli
 
 # Install development dependencies
 pip install -e .[dev]
@@ -288,5 +288,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For questions, issues, or contributions:
 
-- **GitHub Issues**: [https://github.com/your-org/sunbeam/issues](https://github.com/your-org/sunbeam/issues)
-- **Documentation**: [https://your-org.github.io/sunbeam-cli](https://your-org.github.io/sunbeam-cli)
+- **Git Issues**: [https://src.sunbeam.pt/studio/cli/issues](https://src.sunbeam.pt/studio/cli/issues)
+- **Documentation**: [https://src.sunbeam.pt/studio/cli](https://src.sunbeam.pt/studio/cli)
