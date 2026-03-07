@@ -30,6 +30,7 @@ def main() -> None:
         "--email", default="",
         help="ACME email for cert-manager (e.g. ops@sunbeam.pt)",
     )
+
     sub = parser.add_subparsers(dest="verb", metavar="verb")
 
     # sunbeam up
@@ -78,7 +79,10 @@ def main() -> None:
     p_build = sub.add_parser("build", help="Build an artifact (add --push to push, --deploy to apply+rollout)")
     p_build.add_argument("what",
                          choices=["proxy", "integration", "kratos-admin", "meet",
-                                  "docs-frontend", "people-frontend"],
+                                  "docs-frontend", "people-frontend", "people",
+                                  "messages", "messages-backend", "messages-frontend",
+                                  "messages-mta-in", "messages-mta-out",
+                                  "messages-mpa", "messages-socks-proxy"],
                          help="What to build")
     p_build.add_argument("--push", action="store_true",
                          help="Push image to registry after building")
@@ -95,6 +99,23 @@ def main() -> None:
 
     # sunbeam bootstrap
     sub.add_parser("bootstrap", help="Create Gitea orgs/repos; set up Lima registry")
+
+    # sunbeam config <action> [args]
+    p_config = sub.add_parser("config", help="Manage sunbeam configuration")
+    config_sub = p_config.add_subparsers(dest="config_action", metavar="action")
+
+    # sunbeam config set --host HOST --infra-dir DIR
+    p_config_set = config_sub.add_parser("set", help="Set configuration values")
+    p_config_set.add_argument("--host", default="",
+                           help="Production SSH host (e.g. user@server.example.com)")
+    p_config_set.add_argument("--infra-dir", default="",
+                           help="Infrastructure directory root")
+
+    # sunbeam config get
+    config_sub.add_parser("get", help="Get current configuration")
+
+    # sunbeam config clear
+    config_sub.add_parser("clear", help="Clear configuration")
 
     # sunbeam k8s [kubectl args...] — transparent kubectl --context=sunbeam wrapper
     p_k8s = sub.add_parser("k8s", help="kubectl --context=sunbeam passthrough")
@@ -139,18 +160,22 @@ def main() -> None:
 
     args = parser.parse_args()
 
+
+
     # Set kubectl context before any kube calls.
     # For production, also register the SSH host so the tunnel is opened on demand.
     # SUNBEAM_SSH_HOST env var: e.g. "user@server.example.com" or just "server.example.com"
     import os
     from sunbeam.kube import set_context
+    from sunbeam.config import get_production_host
+    
     ctx = args.context or ENV_CONTEXTS.get(args.env, "sunbeam")
     ssh_host = ""
     if args.env == "production":
-        ssh_host = os.environ.get("SUNBEAM_SSH_HOST", "")
+        ssh_host = get_production_host()
         if not ssh_host:
             from sunbeam.output import die
-            die("SUNBEAM_SSH_HOST must be set for --env production (e.g. user@your-server.example.com)")
+            die("Production host not configured. Use --host to set it or set SUNBEAM_SSH_HOST environment variable.")
     set_context(ctx, ssh_host=ssh_host)
 
     if args.verb is None:
@@ -214,6 +239,41 @@ def main() -> None:
     elif args.verb == "bootstrap":
         from sunbeam.gitea import cmd_bootstrap
         cmd_bootstrap()
+
+    elif args.verb == "config":
+        from sunbeam.config import (
+            SunbeamConfig, load_config, save_config, get_production_host, get_infra_directory
+        )
+        action = getattr(args, "config_action", None)
+        if action is None:
+            p_config.print_help()
+            sys.exit(0)
+        elif action == "set":
+            config = SunbeamConfig(
+                production_host=args.host if args.host else "",
+                infra_directory=args.infra_dir if args.infra_dir else ""
+            )
+            save_config(config)
+        elif action == "get":
+            from sunbeam.output import ok
+            config = load_config()
+            ok(f"Production host: {config.production_host or '(not set)'}")
+            ok(f"Infrastructure directory: {config.infra_directory or '(not set)'}")
+            
+            # Also show effective production host (from config or env)
+            effective_host = get_production_host()
+            if effective_host:
+                ok(f"Effective production host: {effective_host}")
+        elif action == "clear":
+            import os
+            config_path = os.path.expanduser("~/.sunbeam.json")
+            if os.path.exists(config_path):
+                os.remove(config_path)
+                from sunbeam.output import ok
+                ok(f"Configuration cleared from {config_path}")
+            else:
+                from sunbeam.output import warn
+                warn("No configuration file found to clear")
 
     elif args.verb == "k8s":
         from sunbeam.kube import cmd_k8s
