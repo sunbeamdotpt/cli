@@ -32,7 +32,10 @@ class TestArgParsing(unittest.TestCase):
         p_restart.add_argument("target", nargs="?", default=None)
         p_build = sub.add_parser("build")
         p_build.add_argument("what", choices=["proxy", "integration", "kratos-admin", "meet",
-                                               "docs-frontend", "people-frontend"])
+                                               "docs-frontend", "people-frontend", "people",
+                                               "messages", "messages-backend", "messages-frontend",
+                                               "messages-mta-in", "messages-mta-out",
+                                               "messages-mpa", "messages-socks-proxy"])
         p_build.add_argument("--push", action="store_true")
         p_build.add_argument("--deploy", action="store_true")
         sub.add_parser("mirror")
@@ -60,6 +63,16 @@ class TestArgParsing(unittest.TestCase):
         p_user_set_pw = user_sub.add_parser("set-password")
         p_user_set_pw.add_argument("target")
         p_user_set_pw.add_argument("password")
+        
+        # Add config subcommand for testing
+        p_config = sub.add_parser("config")
+        config_sub = p_config.add_subparsers(dest="config_action")
+        p_config_set = config_sub.add_parser("set")
+        p_config_set.add_argument("--host", default="")
+        p_config_set.add_argument("--infra-dir", default="")
+        config_sub.add_parser("get")
+        config_sub.add_parser("clear")
+        
         return parser.parse_args(argv)
 
     def test_up(self):
@@ -188,6 +201,55 @@ class TestArgParsing(unittest.TestCase):
     def test_build_meet(self):
         args = self._parse(["build", "meet"])
         self.assertEqual(args.what, "meet")
+
+    def test_config_set_with_host_and_infra_dir(self):
+        args = self._parse(["config", "set", "--host", "user@example.com", "--infra-dir", "/path/to/infra"])
+        self.assertEqual(args.verb, "config")
+        self.assertEqual(args.config_action, "set")
+        self.assertEqual(args.host, "user@example.com")
+        self.assertEqual(args.infra_dir, "/path/to/infra")
+
+    def test_config_set_with_only_host(self):
+        args = self._parse(["config", "set", "--host", "user@example.com"])
+        self.assertEqual(args.verb, "config")
+        self.assertEqual(args.config_action, "set")
+        self.assertEqual(args.host, "user@example.com")
+        self.assertEqual(args.infra_dir, "")
+
+    def test_config_set_with_only_infra_dir(self):
+        args = self._parse(["config", "set", "--infra-dir", "/path/to/infra"])
+        self.assertEqual(args.verb, "config")
+        self.assertEqual(args.config_action, "set")
+        self.assertEqual(args.host, "")
+        self.assertEqual(args.infra_dir, "/path/to/infra")
+
+    def test_config_get(self):
+        args = self._parse(["config", "get"])
+        self.assertEqual(args.verb, "config")
+        self.assertEqual(args.config_action, "get")
+
+    def test_config_clear(self):
+        args = self._parse(["config", "clear"])
+        self.assertEqual(args.verb, "config")
+        self.assertEqual(args.config_action, "clear")
+
+    def test_build_people(self):
+        args = self._parse(["build", "people"])
+        self.assertEqual(args.what, "people")
+        self.assertFalse(args.push)
+        self.assertFalse(args.deploy)
+
+    def test_build_people_push(self):
+        args = self._parse(["build", "people", "--push"])
+        self.assertEqual(args.what, "people")
+        self.assertTrue(args.push)
+        self.assertFalse(args.deploy)
+
+    def test_build_people_push_deploy(self):
+        args = self._parse(["build", "people", "--push", "--deploy"])
+        self.assertEqual(args.what, "people")
+        self.assertTrue(args.push)
+        self.assertTrue(args.deploy)
 
     def test_no_args_verb_is_none(self):
         args = self._parse([])
@@ -399,6 +461,42 @@ class TestCliDispatch(unittest.TestCase):
                     pass
         mock_apply.assert_called_once_with(env="local", domain="", email="", namespace="lasuite")
 
+    def test_build_people_dispatches(self):
+        mock_build = MagicMock()
+        with patch.object(sys, "argv", ["sunbeam", "build", "people"]):
+            with patch.dict("sys.modules", {"sunbeam.images": MagicMock(cmd_build=mock_build)}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_build.assert_called_once_with("people", push=False, deploy=False)
+
+    def test_build_people_push_dispatches(self):
+        mock_build = MagicMock()
+        with patch.object(sys, "argv", ["sunbeam", "build", "people", "--push"]):
+            with patch.dict("sys.modules", {"sunbeam.images": MagicMock(cmd_build=mock_build)}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_build.assert_called_once_with("people", push=True, deploy=False)
+
+    def test_build_people_deploy_implies_push(self):
+        mock_build = MagicMock()
+        with patch.object(sys, "argv", ["sunbeam", "build", "people", "--push", "--deploy"]):
+            with patch.dict("sys.modules", {"sunbeam.images": MagicMock(cmd_build=mock_build)}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_build.assert_called_once_with("people", push=True, deploy=True)
+
     def test_build_meet_dispatches(self):
         mock_build = MagicMock()
         with patch.object(sys, "argv", ["sunbeam", "build", "meet"]):
@@ -434,3 +532,223 @@ class TestCliDispatch(unittest.TestCase):
                 except SystemExit:
                     pass
         mock_check.assert_called_once_with("lasuite/people")
+
+
+class TestConfigCli(unittest.TestCase):
+    """Test config subcommand functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        import tempfile
+        import os
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_home = os.environ.get('HOME')
+        os.environ['HOME'] = self.temp_dir
+        
+        # Import and mock config path
+        from pathlib import Path
+        import sunbeam.config
+        self.original_config_path = sunbeam.config.CONFIG_PATH
+        sunbeam.config.CONFIG_PATH = Path(self.temp_dir) / ".sunbeam.json"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        import os
+        import sunbeam.config
+        
+        # Restore original config path
+        sunbeam.config.CONFIG_PATH = self.original_config_path
+        
+        # Clean up temp directory
+        shutil.rmtree(self.temp_dir)
+        
+        # Restore original HOME
+        if self.original_home:
+            os.environ['HOME'] = self.original_home
+        else:
+            del os.environ['HOME']
+
+    def test_config_set_and_get(self):
+        """Test config set and get functionality."""
+        from sunbeam.config import SunbeamConfig, load_config, save_config
+        
+        # Test initial state
+        config = load_config()
+        self.assertEqual(config.production_host, "")
+        self.assertEqual(config.infra_directory, "")
+        
+        # Test setting config
+        test_config = SunbeamConfig(
+            production_host="user@example.com",
+            infra_directory="/path/to/infra"
+        )
+        save_config(test_config)
+        
+        # Test loading config
+        loaded_config = load_config()
+        self.assertEqual(loaded_config.production_host, "user@example.com")
+        self.assertEqual(loaded_config.infra_directory, "/path/to/infra")
+
+    def test_config_clear(self):
+        """Test config clear functionality."""
+        from sunbeam.config import SunbeamConfig, load_config, save_config
+        from pathlib import Path
+        import os
+        
+        # Set a config first
+        test_config = SunbeamConfig(
+            production_host="user@example.com",
+            infra_directory="/path/to/infra"
+        )
+        save_config(test_config)
+        
+        # Verify it exists
+        config_path = Path(self.temp_dir) / ".sunbeam.json"
+        self.assertTrue(config_path.exists())
+        
+        # Clear config
+        os.remove(config_path)
+        
+        # Verify cleared state
+        cleared_config = load_config()
+        self.assertEqual(cleared_config.production_host, "")
+        self.assertEqual(cleared_config.infra_directory, "")
+
+    def test_config_get_production_host_priority(self):
+        """Test that config file takes priority over environment variable."""
+        from sunbeam.config import SunbeamConfig, save_config, get_production_host
+        import os
+        
+        # Set environment variable
+        os.environ['SUNBEAM_SSH_HOST'] = "env@example.com"
+        
+        # Get production host without config - should use env var
+        host_no_config = get_production_host()
+        self.assertEqual(host_no_config, "env@example.com")
+        
+        # Set config
+        test_config = SunbeamConfig(
+            production_host="config@example.com",
+            infra_directory=""
+        )
+        save_config(test_config)
+        
+        # Get production host with config - should use config
+        host_with_config = get_production_host()
+        self.assertEqual(host_with_config, "config@example.com")
+        
+        # Clean up env var
+        del os.environ['SUNBEAM_SSH_HOST']
+
+    def test_config_cli_set_dispatch(self):
+        """Test that config set CLI dispatches correctly."""
+        mock_save = MagicMock()
+        mock_config = MagicMock(
+            SunbeamConfig=MagicMock(return_value="mock_config"),
+            save_config=mock_save
+        )
+        
+        with patch.object(sys, "argv", ["sunbeam", "config", "set", 
+                                        "--host", "cli@example.com", 
+                                        "--infra-dir", "/cli/infra"]):
+            with patch.dict("sys.modules", {"sunbeam.config": mock_config}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        
+        # Verify SunbeamConfig was called with correct args
+        mock_config.SunbeamConfig.assert_called_once_with(
+            production_host="cli@example.com",
+            infra_directory="/cli/infra"
+        )
+        # Verify save_config was called
+        mock_save.assert_called_once_with("mock_config")
+
+    def test_config_cli_get_dispatch(self):
+        """Test that config get CLI dispatches correctly."""
+        mock_load = MagicMock()
+        mock_ok = MagicMock()
+        mock_config = MagicMock(
+            load_config=mock_load,
+            get_production_host=MagicMock(return_value="effective@example.com")
+        )
+        mock_output = MagicMock(ok=mock_ok)
+        
+        # Mock config with some values
+        mock_config_instance = MagicMock()
+        mock_config_instance.production_host = "loaded@example.com"
+        mock_config_instance.infra_directory = "/loaded/infra"
+        mock_load.return_value = mock_config_instance
+        
+        with patch.object(sys, "argv", ["sunbeam", "config", "get"]):
+            with patch.dict("sys.modules", {
+                "sunbeam.config": mock_config,
+                "sunbeam.output": mock_output
+            }):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        
+        # Verify load_config was called
+        mock_load.assert_called_once()
+        # Verify ok was called with expected messages
+        mock_ok.assert_any_call("Production host: loaded@example.com")
+        mock_ok.assert_any_call("Infrastructure directory: /loaded/infra")
+        mock_ok.assert_any_call("Effective production host: effective@example.com")
+
+    def test_config_cli_clear_dispatch(self):
+        """Test that config clear CLI dispatches correctly."""
+        mock_ok = MagicMock()
+        mock_warn = MagicMock()
+        mock_output = MagicMock(ok=mock_ok, warn=mock_warn)
+        mock_os = MagicMock()
+        mock_os.path.exists.return_value = True
+        
+        with patch.object(sys, "argv", ["sunbeam", "config", "clear"]):
+            with patch.dict("sys.modules", {
+                "sunbeam.output": mock_output,
+                "os": mock_os
+            }):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        
+        # Verify os.remove was called
+        mock_os.remove.assert_called_once()
+        # Verify ok was called
+        mock_ok.assert_called_once()
+
+    def test_config_cli_clear_no_file(self):
+        """Test that config clear handles missing file gracefully."""
+        mock_ok = MagicMock()
+        mock_warn = MagicMock()
+        mock_output = MagicMock(ok=mock_ok, warn=mock_warn)
+        mock_os = MagicMock()
+        mock_os.path.exists.return_value = False
+        
+        with patch.object(sys, "argv", ["sunbeam", "config", "clear"]):
+            with patch.dict("sys.modules", {
+                "sunbeam.output": mock_output,
+                "os": mock_os
+            }):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        
+        # Verify os.remove was not called
+        mock_os.remove.assert_not_called()
+        # Verify warn was called
+        mock_warn.assert_called_once_with("No configuration file found to clear")
