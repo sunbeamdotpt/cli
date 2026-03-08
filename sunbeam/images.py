@@ -1,19 +1,23 @@
-"""Image mirroring — patch amd64-only images + push to Gitea registry."""
+"""Image building, mirroring, and pushing to Gitea registry."""
 import base64
+import json
 import os
 import shutil
+import socket
 import subprocess
-import sys
+import tempfile
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
+from sunbeam.config import get_repo_root as _get_repo_root
 from sunbeam.kube import kube, kube_out, get_lima_ip
 from sunbeam.output import step, ok, warn, die
 
 LIMA_VM = "sunbeam"
-LIMA_DOCKER_VM = "docker"
 GITEA_ADMIN_USER = "gitea_admin"
-MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "media", "ory", "storage",
-              "vault-secrets-operator"]
+MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "matrix", "media", "ory",
+              "storage", "vault-secrets-operator"]
 
 AMD64_ONLY_IMAGES = [
     ("docker.io/lasuite/people-backend:latest",    "studio", "people-backend",    "latest"),
@@ -190,6 +194,10 @@ for _src, _tgt in TARGETS:
 '''
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _capture_out(cmd, *, default=""):
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else default
@@ -201,42 +209,258 @@ def _run(cmd, *, check=True, input=None, capture=False, cwd=None):
                           capture_output=capture, cwd=cwd)
 
 
-def _seed_and_push(image: str, admin_pass: str):
-    """Pre-seed a locally-built Docker image into k3s containerd, then push
-    to the Gitea registry via 'ctr images push' inside the Lima VM.
+# ---------------------------------------------------------------------------
+# Build environment & generic builder
+# ---------------------------------------------------------------------------
 
-    This avoids 'docker push' entirely — the Lima k3s VM's containerd already
-    trusts the mkcert CA (used for image pulls from Gitea), so ctr push works
-    where docker push would hit a TLS cert verification error on the Mac.
+@dataclass
+class BuildEnv:
+    """Resolved build environment — production (remote k8s) or local (Lima)."""
+    is_prod: bool
+    domain: str
+    registry: str
+    admin_pass: str
+    platform: str
+    ssh_host: str | None = None
+
+
+def _get_build_env() -> BuildEnv:
+    """Detect prod vs local and resolve registry credentials."""
+    from sunbeam import kube as _kube
+    is_prod = bool(_kube._ssh_host)
+
+    if is_prod:
+        domain = os.environ.get("SUNBEAM_DOMAIN", "sunbeam.pt")
+    else:
+        ip = get_lima_ip()
+        domain = f"{ip}.sslip.io"
+
+    b64 = kube_out("-n", "devtools", "get", "secret",
+                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
+    if not b64:
+        die("gitea-admin-credentials secret not found -- run seed first.")
+    admin_pass = base64.b64decode(b64).decode()
+
+    return BuildEnv(
+        is_prod=is_prod,
+        domain=domain,
+        registry=f"src.{domain}",
+        admin_pass=admin_pass,
+        platform="linux/amd64" if is_prod else "linux/arm64",
+        ssh_host=_kube._ssh_host if is_prod else None,
+    )
+
+
+def _buildctl_build_and_push(
+    env: BuildEnv,
+    image: str,
+    dockerfile: Path,
+    context_dir: Path,
+    *,
+    target: str | None = None,
+    build_args: dict[str, str] | None = None,
+) -> None:
+    """Build and push an image via buildkitd running in k3s.
+
+    Port-forwards to the buildkitd service in the `build` namespace,
+    runs `buildctl build`, and pushes the image directly to the Gitea
+    registry from inside the cluster. No local Docker daemon needed.
+    Works for both production and local Lima k3s.
     """
-    ok("Pre-seeding image into k3s containerd...")
-    save = subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE)
-    ctr = subprocess.run(
-        ["limactl", "shell", LIMA_VM, "--",
-         "sudo", "ctr", "-n", "k8s.io", "images", "import", "-"],
-        stdin=save.stdout,
-        capture_output=True,
-    )
-    save.stdout.close()
-    save.wait()
-    if ctr.returncode != 0:
-        warn(f"containerd import failed:\n{ctr.stderr.decode().strip()}")
-    else:
-        ok("Image pre-seeded.")
+    from sunbeam import kube as _kube
+    from sunbeam.tools import ensure_tool
 
-    ok("Pushing to Gitea registry (via ctr in Lima VM)...")
-    push = subprocess.run(
-        ["limactl", "shell", LIMA_VM, "--",
-         "sudo", "ctr", "-n", "k8s.io", "images", "push",
-         "--user", f"{GITEA_ADMIN_USER}:{admin_pass}", image],
-        capture_output=True, text=True,
-    )
-    if push.returncode != 0:
-        warn(f"ctr push failed (image is pre-seeded; cluster will work without push):\n"
-             f"{push.stderr.strip()}")
-    else:
-        ok(f"Pushed {image}")
+    buildctl = ensure_tool("buildctl")
+    kubectl = ensure_tool("kubectl")
 
+    with socket.socket() as s:
+        s.bind(("", 0))
+        local_port = s.getsockname()[1]
+
+    ctx_args = [_kube.context_arg()]
+
+    auth_token = base64.b64encode(
+        f"{GITEA_ADMIN_USER}:{env.admin_pass}".encode()
+    ).decode()
+    docker_cfg = {"auths": {env.registry: {"auth": auth_token}}}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg_path = Path(tmpdir) / "config.json"
+        cfg_path.write_text(json.dumps(docker_cfg))
+
+        pf = subprocess.Popen(
+            [str(kubectl), *ctx_args,
+             "port-forward", "-n", "build", "svc/buildkitd",
+             f"{local_port}:1234"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.3)
+        else:
+            pf.terminate()
+            raise RuntimeError(
+                f"buildkitd port-forward on :{local_port} did not become ready within 15s"
+            )
+
+        try:
+            cmd = [
+                str(buildctl), "build",
+                "--frontend", "dockerfile.v0",
+                "--local", f"context={context_dir}",
+                "--local", f"dockerfile={dockerfile.parent}",
+                "--opt", f"filename={dockerfile.name}",
+                "--opt", f"platform={env.platform}",
+                "--output", f"type=image,name={image},push=true",
+            ]
+            if target:
+                cmd += ["--opt", f"target={target}"]
+            if build_args:
+                for k, v in build_args.items():
+                    cmd += ["--opt", f"build-arg:{k}={v}"]
+            run_env = {
+                **os.environ,
+                "BUILDKIT_HOST": f"tcp://127.0.0.1:{local_port}",
+                "DOCKER_CONFIG": tmpdir,
+            }
+            subprocess.run(cmd, env=run_env, check=True)
+        finally:
+            pf.terminate()
+            pf.wait()
+
+
+def _build_image(
+    env: BuildEnv,
+    image: str,
+    dockerfile: Path,
+    context_dir: Path,
+    *,
+    target: str | None = None,
+    build_args: dict[str, str] | None = None,
+    push: bool = False,
+    cleanup_paths: list[Path] | None = None,
+) -> None:
+    """Build a container image via buildkitd and push to the Gitea registry.
+
+    Both production and local builds use the in-cluster buildkitd. The image
+    is built for the environment's platform and pushed directly to the registry.
+    """
+    ok(f"Building image ({env.platform}{f', {target} target' if target else ''})...")
+
+    if not push:
+        warn("Builds require --push (buildkitd pushes directly to registry); skipping.")
+        return
+
+    try:
+        _buildctl_build_and_push(
+            env=env,
+            image=image,
+            dockerfile=dockerfile,
+            context_dir=context_dir,
+            target=target,
+            build_args=build_args,
+        )
+    finally:
+        for p in (cleanup_paths or []):
+            if p.exists():
+                if p.is_dir():
+                    shutil.rmtree(str(p), ignore_errors=True)
+                else:
+                    p.unlink(missing_ok=True)
+
+
+def _get_node_addresses() -> list[str]:
+    """Return one SSH-reachable IP per node in the cluster.
+
+    Each node may report both IPv4 and IPv6 InternalIPs.  We pick one per
+    node name, preferring IPv4 (more likely to have SSH reachable).
+    """
+    # Get "nodeName ip" pairs
+    raw = kube_out(
+        "get", "nodes",
+        "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}"
+              "{range .status.addresses[?(@.type==\"InternalIP\")]}{.address}{\" \"}{end}{\"\\n\"}{end}",
+    )
+    lines = [l.strip() for l in raw.strip().split("\n") if l.strip()]
+    seen_nodes: dict[str, str] = {}
+    # Lines alternate: node name, then space-separated IPs
+    i = 0
+    while i < len(lines) - 1:
+        node_name = lines[i]
+        addrs = lines[i + 1].split()
+        i += 2
+        if node_name in seen_nodes:
+            continue
+        # Prefer IPv4 (no colons)
+        ipv4 = [a for a in addrs if ":" not in a]
+        seen_nodes[node_name] = ipv4[0] if ipv4 else addrs[0]
+    return list(seen_nodes.values())
+
+
+def _ctr_pull_on_nodes(env: BuildEnv, images: list[str]):
+    """SSH to each k3s node and pull images into containerd.
+
+    For k3s with imagePullPolicy: IfNotPresent, the image must be present
+    in containerd *before* the rollout restart.  buildkitd pushes to the
+    Gitea registry; we SSH to each node and ctr-pull so containerd has the
+    fresh layers.
+    """
+    if not images:
+        return
+    nodes = _get_node_addresses()
+    if not nodes:
+        warn("Could not detect node addresses; skipping ctr pull.")
+        return
+
+    ssh_user = env.ssh_host.split("@")[0] if env.ssh_host and "@" in env.ssh_host else "root"
+
+    for node_ip in nodes:
+        for img in images:
+            ok(f"Pulling {img} into containerd on {node_ip}...")
+            r = subprocess.run(
+                ["ssh", "-p", "2222",
+                 "-o", "StrictHostKeyChecking=no", f"{ssh_user}@{node_ip}",
+                 f"sudo ctr -n k8s.io images pull {img}"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                die(f"ctr pull failed on {node_ip}: {r.stderr.strip()}")
+            ok(f"Pulled {img} on {node_ip}")
+
+
+def _deploy_rollout(env: BuildEnv, deployments: list[str], namespace: str,
+                    timeout: str = "180s", images: list[str] | None = None):
+    """Apply manifests for the target namespace and rolling-restart the given deployments.
+
+    For single-node k3s (env.ssh_host is set), pulls *images* into containerd
+    on the node via SSH before restarting, so imagePullPolicy: IfNotPresent
+    picks up the new layers.
+    """
+    from sunbeam.manifests import cmd_apply
+    cmd_apply(env="production" if env.is_prod else "local", domain=env.domain,
+              namespace=namespace)
+
+    # Pull fresh images into containerd on every node before rollout
+    if images:
+        _ctr_pull_on_nodes(env, images)
+
+    for dep in deployments:
+        ok(f"Rolling {dep}...")
+        kube("rollout", "restart", f"deployment/{dep}", "-n", namespace)
+    for dep in deployments:
+        kube("rollout", "status", f"deployment/{dep}", "-n", namespace,
+             f"--timeout={timeout}")
+    ok("Redeployed.")
+
+
+# ---------------------------------------------------------------------------
+# Mirroring
+# ---------------------------------------------------------------------------
 
 def cmd_mirror(domain: str = "", gitea_admin_pass: str = ""):
     """Patch amd64-only images with an arm64 alias and push to Gitea registry."""
@@ -286,31 +510,20 @@ def cmd_mirror(domain: str = "", gitea_admin_pass: str = ""):
     ok("Done.")
 
 
-def _trust_registry_in_docker_vm(registry: str):
-    """Install the mkcert CA into the Lima Docker VM's per-registry cert dir.
-
-    The Lima Docker VM runs rootless Docker, which reads custom CA certs from
-    ~/.config/docker/certs.d/<registry>/ca.crt (not /etc/docker/certs.d/).
-    No daemon restart required -- Docker reads the file per-connection.
-    """
-    caroot = _capture_out(["mkcert", "-CAROOT"])
-    if not caroot:
-        warn("mkcert -CAROOT returned nothing -- skipping Docker CA install.")
-        return
-    ca_pem = Path(caroot) / "rootCA.pem"
-    if not ca_pem.exists():
-        warn(f"mkcert CA not found at {ca_pem} -- skipping Docker CA install.")
-        return
-
-    _run(["limactl", "copy", str(ca_pem), f"{LIMA_DOCKER_VM}:/tmp/registry-ca.pem"])
-    _run(["limactl", "shell", LIMA_DOCKER_VM, "--", "sh", "-c",
-          f"mkdir -p ~/.config/docker/certs.d/{registry} && "
-          f"cp /tmp/registry-ca.pem ~/.config/docker/certs.d/{registry}/ca.crt"])
-    ok(f"mkcert CA installed in Docker VM for {registry}.")
-
+# ---------------------------------------------------------------------------
+# Build dispatch
+# ---------------------------------------------------------------------------
 
 def cmd_build(what: str, push: bool = False, deploy: bool = False):
     """Build an image. Pass push=True to push, deploy=True to also apply + rollout."""
+    try:
+        _cmd_build(what, push=push, deploy=deploy)
+    except subprocess.CalledProcessError as exc:
+        cmd_str = " ".join(str(a) for a in exc.cmd)
+        die(f"Build step failed (exit {exc.returncode}): {cmd_str}")
+
+
+def _cmd_build(what: str, push: bool = False, deploy: bool = False):
     if what == "proxy":
         _build_proxy(push=push, deploy=deploy)
     elif what == "integration":
@@ -322,7 +535,7 @@ def cmd_build(what: str, push: bool = False, deploy: bool = False):
     elif what == "docs-frontend":
         _build_la_suite_frontend(
             app="docs-frontend",
-            repo_dir=Path(__file__).resolve().parents[2] / "docs",
+            repo_dir=_get_repo_root() / "docs",
             workspace_rel="src/frontend",
             app_rel="src/frontend/apps/impress",
             dockerfile_rel="src/frontend/Dockerfile",
@@ -332,196 +545,66 @@ def cmd_build(what: str, push: bool = False, deploy: bool = False):
             push=push,
             deploy=deploy,
         )
-    elif what == "people-frontend":
-        _build_la_suite_frontend(
-            app="people-frontend",
-            repo_dir=Path(__file__).resolve().parents[2] / "people",
-            workspace_rel="src/frontend",
-            app_rel="src/frontend/apps/desk",
-            dockerfile_rel="src/frontend/Dockerfile",
-            image_name="people-frontend",
-            deployment="people-frontend",
-            namespace="lasuite",
-            push=push,
-            deploy=deploy,
-        )
+    elif what in ("people", "people-frontend"):
+        _build_people(push=push, deploy=deploy)
+    elif what in ("messages", "messages-backend", "messages-frontend",
+                  "messages-mta-in", "messages-mta-out", "messages-mpa",
+                  "messages-socks-proxy"):
+        _build_messages(what, push=push, deploy=deploy)
+    elif what == "tuwunel":
+        _build_tuwunel(push=push, deploy=deploy)
     else:
         die(f"Unknown build target: {what}")
 
 
-
-def _seed_image_production(image: str, ssh_host: str, admin_pass: str):
-    """Build linux/amd64 image, pipe into production containerd via SSH, then push to Gitea."""
-    ok("Importing image into production containerd via SSH pipe...")
-    save = subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE)
-    import_cmd = f"sudo ctr -n k8s.io images import -"
-    ctr = subprocess.run(
-        ["ssh", "-p", "2222", "-o", "StrictHostKeyChecking=no", ssh_host, import_cmd],
-        stdin=save.stdout,
-        capture_output=True,
-    )
-    save.stdout.close()
-    save.wait()
-    if ctr.returncode != 0:
-        warn(f"containerd import failed:\n{ctr.stderr.decode().strip()}")
-        return False
-    ok("Image imported into production containerd.")
-
-    ok("Pushing image to Gitea registry (via ctr on production server)...")
-    push = subprocess.run(
-        ["ssh", "-p", "2222", "-o", "StrictHostKeyChecking=no", ssh_host,
-         f"sudo ctr -n k8s.io images push --user {GITEA_ADMIN_USER}:{admin_pass} {image}"],
-        capture_output=True, text=True,
-    )
-    if push.returncode != 0:
-        warn(f"ctr push failed (image is pre-seeded; cluster will start):\n{push.stderr.strip()}")
-    else:
-        ok(f"Pushed {image} to Gitea registry.")
-    return True
-
+# ---------------------------------------------------------------------------
+# Per-service build functions
+# ---------------------------------------------------------------------------
 
 def _build_proxy(push: bool = False, deploy: bool = False):
-    from sunbeam import kube as _kube
-    is_prod = bool(_kube._ssh_host)
+    env = _get_build_env()
 
-    if is_prod:
-        domain = os.environ.get("SUNBEAM_DOMAIN", "sunbeam.pt")
-    else:
-        ip = get_lima_ip()
-        domain = f"{ip}.sslip.io"
-
-    b64 = kube_out("-n", "devtools", "get", "secret",
-                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
-    if not b64:
-        die("gitea-admin-credentials secret not found -- run seed first.")
-    admin_pass = base64.b64decode(b64).decode()
-
-    if not shutil.which("docker"):
-        die("docker not found -- is the Lima docker VM running?")
-
-    # Proxy source lives adjacent to the infrastructure repo
-    proxy_dir = Path(__file__).resolve().parents[2] / "proxy"
+    proxy_dir = _get_repo_root() / "proxy"
     if not proxy_dir.is_dir():
         die(f"Proxy source not found at {proxy_dir}")
 
-    registry = f"src.{domain}"
-    image = f"{registry}/studio/proxy:latest"
-
+    image = f"{env.registry}/studio/proxy:latest"
     step(f"Building sunbeam-proxy -> {image} ...")
 
-    if is_prod:
-        # Production (x86_64 server): cross-compile on the Mac arm64 host using
-        # x86_64-linux-musl-gcc (brew install filosottile/musl-cross/musl-cross),
-        # then package the pre-built static binary into a minimal Docker image.
-        # This avoids QEMU x86_64 emulation which crashes rustc (SIGSEGV).
-        musl_gcc = shutil.which("x86_64-linux-musl-gcc")
-        if not musl_gcc:
-            die(
-                "x86_64-linux-musl-gcc not found.\n"
-                "Install: brew install filosottile/musl-cross/musl-cross"
-            )
-        ok("Cross-compiling sunbeam-proxy for x86_64-musl (native, no QEMU)...")
-        import os as _os
-        env = dict(_os.environ)
-        env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"] = musl_gcc
-        env["CC_x86_64_unknown_linux_musl"] = musl_gcc
-        env["RUSTFLAGS"] = "-C target-feature=+crt-static"
-        r = subprocess.run(
-            ["cargo", "build", "--release", "--target", "x86_64-unknown-linux-musl"],
-            cwd=str(proxy_dir),
-            env=env,
-        )
-        if r.returncode != 0:
-            die("cargo build failed.")
-        binary = proxy_dir / "target" / "x86_64-unknown-linux-musl" / "release" / "sunbeam-proxy"
-
-        # Download tini static binary for amd64 if not cached
-        import tempfile, urllib.request
-        tmpdir = Path(tempfile.mkdtemp(prefix="proxy-pkg-"))
-        tini_path = tmpdir / "tini"
-        ok("Downloading tini-static-amd64...")
-        urllib.request.urlretrieve(
-            "https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-amd64",
-            str(tini_path),
-        )
-        tini_path.chmod(0o755)
-        shutil.copy(str(binary), str(tmpdir / "sunbeam-proxy"))
-        (tmpdir / "Dockerfile").write_text(
-            "FROM cgr.dev/chainguard/static:latest\n"
-            "COPY tini /tini\n"
-            "COPY sunbeam-proxy /usr/local/bin/sunbeam-proxy\n"
-            "EXPOSE 80 443\n"
-            'ENTRYPOINT ["/tini", "--", "/usr/local/bin/sunbeam-proxy"]\n'
-        )
-        ok("Packaging into Docker image (linux/amd64, pre-built binary)...")
-        _run(["docker", "buildx", "build",
-              "--platform", "linux/amd64",
-              "--provenance=false",
-              "--load",
-              "-t", image,
-              str(tmpdir)])
-        shutil.rmtree(str(tmpdir), ignore_errors=True)
-        if push:
-            _seed_image_production(image, _kube._ssh_host, admin_pass)
-    else:
-        # Local Lima dev: build linux/arm64 natively.
-        _trust_registry_in_docker_vm(registry)
-
-        ok("Logging in to Gitea registry...")
-        r = subprocess.run(
-            ["limactl", "shell", LIMA_DOCKER_VM, "--",
-             "docker", "login", registry,
-             "--username", GITEA_ADMIN_USER, "--password-stdin"],
-            input=admin_pass, text=True, capture_output=True,
-        )
-        if r.returncode != 0:
-            die(f"docker login failed:\n{r.stderr.strip()}")
-
-        ok("Building image (linux/arm64)...")
-        _run(["docker", "buildx", "build",
-              "--platform", "linux/arm64",
-              "--provenance=false",
-              "--load",
-              "-t", image,
-              str(proxy_dir)])
-
-        if push:
-            ok("Pushing image...")
-            _run(["docker", "push", image])
-            _seed_and_push(image, admin_pass)
+    # Both local and production use the same Dockerfile and build via
+    # the in-cluster buildkitd. The buildkitd on each environment
+    # compiles natively for its own architecture (arm64 on Lima,
+    # amd64 on Scaleway).
+    _build_image(env, image, proxy_dir / "Dockerfile", proxy_dir, push=push)
 
     if deploy:
-        from sunbeam.manifests import cmd_apply
-        cmd_apply(env="production" if is_prod else "local", domain=domain)
-        ok("Rolling pingora deployment...")
-        kube("rollout", "restart", "deployment/pingora", "-n", "ingress")
-        kube("rollout", "status", "deployment/pingora", "-n", "ingress",
-             "--timeout=120s")
-        ok("Pingora redeployed.")
+        _deploy_rollout(env, ["pingora"], "ingress", timeout="120s",
+                        images=[image])
+
+
+def _build_tuwunel(push: bool = False, deploy: bool = False):
+    """Build tuwunel Matrix homeserver image from source."""
+    env = _get_build_env()
+
+    tuwunel_dir = _get_repo_root() / "tuwunel"
+    if not tuwunel_dir.is_dir():
+        die(f"Tuwunel source not found at {tuwunel_dir}")
+
+    image = f"{env.registry}/studio/tuwunel:latest"
+    step(f"Building tuwunel -> {image} ...")
+
+    # buildkitd runs on the x86_64 server — builds natively, no cross-compilation.
+    _build_image(env, image, tuwunel_dir / "Dockerfile", tuwunel_dir, push=push)
+
+    if deploy:
+        _deploy_rollout(env, ["tuwunel"], "matrix", timeout="180s",
+                        images=[image])
 
 
 def _build_integration(push: bool = False, deploy: bool = False):
-    from sunbeam import kube as _kube
-    is_prod = bool(_kube._ssh_host)
+    env = _get_build_env()
 
-    if is_prod:
-        domain = os.environ.get("SUNBEAM_DOMAIN", "sunbeam.pt")
-    else:
-        ip = get_lima_ip()
-        domain = f"{ip}.sslip.io"
-
-    b64 = kube_out("-n", "devtools", "get", "secret",
-                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
-    if not b64:
-        die("gitea-admin-credentials secret not found -- run seed first.")
-    admin_pass = base64.b64decode(b64).decode()
-
-    if not shutil.which("docker"):
-        die("docker not found -- is the Lima docker VM running?")
-
-    # Build context is the sunbeam/ root so Dockerfile can reach both
-    # integration/packages/ (upstream widget + logos) and integration-service/.
-    sunbeam_dir = Path(__file__).resolve().parents[2]
+    sunbeam_dir = _get_repo_root()
     integration_service_dir = sunbeam_dir / "integration-service"
     dockerfile = integration_service_dir / "Dockerfile"
     dockerignore = integration_service_dir / ".dockerignore"
@@ -532,83 +615,38 @@ def _build_integration(push: bool = False, deploy: bool = False):
         die(f"integration repo not found at {sunbeam_dir / 'integration'} -- "
             "run: cd sunbeam && git clone https://github.com/suitenumerique/integration.git")
 
-    registry = f"src.{domain}"
-    image = f"{registry}/studio/integration:latest"
-
+    image = f"{env.registry}/studio/integration:latest"
     step(f"Building integration -> {image} ...")
 
-    platform = "linux/amd64" if is_prod else "linux/arm64"
-
-    # --file points to integration-service/Dockerfile; context is sunbeam/ root.
-    # Copy .dockerignore to context root temporarily if needed.
+    # .dockerignore needs to be at context root (sunbeam/)
     root_ignore = sunbeam_dir / ".dockerignore"
     copied_ignore = False
     if not root_ignore.exists() and dockerignore.exists():
         shutil.copy(str(dockerignore), str(root_ignore))
         copied_ignore = True
     try:
-        ok(f"Building image ({platform})...")
-        _run(["docker", "buildx", "build",
-              "--platform", platform,
-              "--provenance=false",
-              "--load",
-              "-f", str(dockerfile),
-              "-t", image,
-              str(sunbeam_dir)])
+        _build_image(env, image, dockerfile, sunbeam_dir, push=push)
     finally:
         if copied_ignore and root_ignore.exists():
             root_ignore.unlink()
 
-    if push:
-        if is_prod:
-            _seed_image_production(image, _kube._ssh_host, admin_pass)
-        else:
-            _trust_registry_in_docker_vm(registry)
-            ok("Logging in to Gitea registry...")
-            r = subprocess.run(
-                ["limactl", "shell", LIMA_DOCKER_VM, "--",
-                 "docker", "login", registry,
-                 "--username", GITEA_ADMIN_USER, "--password-stdin"],
-                input=admin_pass, text=True, capture_output=True,
-            )
-            if r.returncode != 0:
-                die(f"docker login failed:\n{r.stderr.strip()}")
-            _seed_and_push(image, admin_pass)
-
     if deploy:
-        from sunbeam.manifests import cmd_apply
-        cmd_apply(env="production" if is_prod else "local", domain=domain)
-        ok("Rolling integration deployment...")
-        kube("rollout", "restart", "deployment/integration", "-n", "lasuite")
-        kube("rollout", "status", "deployment/integration", "-n", "lasuite",
-             "--timeout=120s")
-        ok("Integration redeployed.")
+        _deploy_rollout(env, ["integration"], "lasuite", timeout="120s")
 
 
 def _build_kratos_admin(push: bool = False, deploy: bool = False):
-    from sunbeam import kube as _kube
+    env = _get_build_env()
 
-    is_prod = bool(_kube._ssh_host)
-
-    b64 = kube_out("-n", "devtools", "get", "secret",
-                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
-    if not b64:
-        die("gitea-admin-credentials secret not found -- run seed first.")
-    admin_pass = base64.b64decode(b64).decode()
-
-    # kratos-admin source
-    kratos_admin_dir = Path(__file__).resolve().parents[2] / "kratos-admin"
+    kratos_admin_dir = _get_repo_root() / "kratos-admin"
     if not kratos_admin_dir.is_dir():
         die(f"kratos-admin source not found at {kratos_admin_dir}")
 
-    if is_prod:
-        domain = os.environ.get("SUNBEAM_DOMAIN", "sunbeam.pt")
-        registry = f"src.{domain}"
-        image = f"{registry}/studio/kratos-admin-ui:latest"
-        ssh_host = _kube._ssh_host
+    image = f"{env.registry}/studio/kratos-admin-ui:latest"
 
-        step(f"Building kratos-admin-ui (linux/amd64, native cross-compile) -> {image} ...")
+    step(f"Building kratos-admin-ui -> {image} ...")
 
+    if env.is_prod:
+        # Cross-compile Deno for x86_64 and package into a minimal image.
         if not shutil.which("deno"):
             die("deno not found — install Deno: https://deno.land/")
         if not shutil.which("npm"):
@@ -631,13 +669,10 @@ def _build_kratos_admin(push: bool = False, deploy: bool = False):
         if not bin_path.exists():
             die("Deno cross-compilation produced no binary")
 
-        # Build minimal Docker image
-        pkg_dir = Path("/tmp/kratos-admin-pkg")
-        pkg_dir.mkdir(exist_ok=True)
-        import shutil as _sh
-        _sh.copy2(str(bin_path), str(pkg_dir / "kratos-admin"))
-        # Copy ui/dist for serveStatic (binary has it embedded but keep external copy for fallback)
-        (pkg_dir / "dockerfile").write_text(
+        pkg_dir = Path(tempfile.mkdtemp(prefix="kratos-admin-pkg-"))
+        shutil.copy2(str(bin_path), str(pkg_dir / "kratos-admin"))
+        dockerfile = pkg_dir / "Dockerfile"
+        dockerfile.write_text(
             "FROM gcr.io/distroless/cc-debian12:nonroot\n"
             "WORKDIR /app\n"
             "COPY kratos-admin ./\n"
@@ -645,159 +680,157 @@ def _build_kratos_admin(push: bool = False, deploy: bool = False):
             'ENTRYPOINT ["/app/kratos-admin"]\n'
         )
 
-        ok("Building Docker image...")
-        _run([
-            "docker", "buildx", "build",
-            "--platform", "linux/amd64",
-            "--provenance=false",
-            "--load",
-            "-f", str(pkg_dir / "dockerfile"),
-            "-t", image,
-            str(pkg_dir),
-        ])
-
-        if push:
-            _seed_image_production(image, ssh_host, admin_pass)
-
-        if deploy:
-            from sunbeam.manifests import cmd_apply
-            cmd_apply(env="production", domain=domain)
-
+        try:
+            _build_image(env, image, dockerfile, pkg_dir, push=push)
+        finally:
+            shutil.rmtree(str(pkg_dir), ignore_errors=True)
     else:
-        ip = get_lima_ip()
-        domain = f"{ip}.sslip.io"
-        registry = f"src.{domain}"
-        image = f"{registry}/studio/kratos-admin-ui:latest"
-
-        if not shutil.which("docker"):
-            die("docker not found -- is the Lima docker VM running?")
-
-        step(f"Building kratos-admin-ui -> {image} ...")
-
-        _trust_registry_in_docker_vm(registry)
-
-        ok("Logging in to Gitea registry...")
-        r = subprocess.run(
-            ["limactl", "shell", LIMA_DOCKER_VM, "--",
-             "docker", "login", registry,
-             "--username", GITEA_ADMIN_USER, "--password-stdin"],
-            input=admin_pass, text=True, capture_output=True,
+        # Local: buildkitd handles the full Dockerfile build
+        _build_image(
+            env, image,
+            kratos_admin_dir / "Dockerfile", kratos_admin_dir,
+            push=push,
         )
-        if r.returncode != 0:
-            die(f"docker login failed:\n{r.stderr.strip()}")
-
-        ok("Building image (linux/arm64)...")
-        _run(["docker", "buildx", "build",
-              "--platform", "linux/arm64",
-              "--provenance=false",
-              "--load",
-              "-t", image,
-              str(kratos_admin_dir)])
-
-        if push:
-            _seed_and_push(image, admin_pass)
-
-        if deploy:
-            from sunbeam.manifests import cmd_apply
-            cmd_apply()
 
     if deploy:
-        ok("Rolling kratos-admin-ui deployment...")
-        kube("rollout", "restart", "deployment/kratos-admin-ui", "-n", "ory")
-        kube("rollout", "status", "deployment/kratos-admin-ui", "-n", "ory",
-             "--timeout=120s")
-        ok("kratos-admin-ui redeployed.")
+        _deploy_rollout(env, ["kratos-admin-ui"], "ory", timeout="120s")
 
 
 def _build_meet(push: bool = False, deploy: bool = False):
     """Build meet-backend and meet-frontend images from source."""
-    from sunbeam import kube as _kube
-    is_prod = bool(_kube._ssh_host)
+    env = _get_build_env()
 
-    if is_prod:
-        domain = os.environ.get("SUNBEAM_DOMAIN", "sunbeam.pt")
-    else:
-        ip = get_lima_ip()
-        domain = f"{ip}.sslip.io"
-
-    b64 = kube_out("-n", "devtools", "get", "secret",
-                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
-    if not b64:
-        die("gitea-admin-credentials secret not found -- run seed first.")
-    admin_pass = base64.b64decode(b64).decode()
-
-    if not shutil.which("docker"):
-        die("docker not found -- is the Lima docker VM running?")
-
-    meet_dir = Path(__file__).resolve().parents[2] / "meet"
+    meet_dir = _get_repo_root() / "meet"
     if not meet_dir.is_dir():
         die(f"meet source not found at {meet_dir}")
 
-    registry = f"src.{domain}"
-    backend_image  = f"{registry}/studio/meet-backend:latest"
-    frontend_image = f"{registry}/studio/meet-frontend:latest"
-    platform = "linux/amd64" if is_prod else "linux/arm64"
-
-    if not is_prod:
-        _trust_registry_in_docker_vm(registry)
-        ok("Logging in to Gitea registry...")
-        r = subprocess.run(
-            ["limactl", "shell", LIMA_DOCKER_VM, "--",
-             "docker", "login", registry,
-             "--username", GITEA_ADMIN_USER, "--password-stdin"],
-            input=admin_pass, text=True, capture_output=True,
-        )
-        if r.returncode != 0:
-            die(f"docker login failed:\n{r.stderr.strip()}")
+    backend_image = f"{env.registry}/studio/meet-backend:latest"
+    frontend_image = f"{env.registry}/studio/meet-frontend:latest"
 
     step(f"Building meet-backend -> {backend_image} ...")
-    ok(f"Building image ({platform}, backend-production target)...")
-    _run(["docker", "buildx", "build",
-          "--platform", platform,
-          "--provenance=false",
-          "--target", "backend-production",
-          "--load",
-          "-t", backend_image,
-          str(meet_dir)])
-
-    if push:
-        if is_prod:
-            _seed_image_production(backend_image, _kube._ssh_host, admin_pass)
-        else:
-            _seed_and_push(backend_image, admin_pass)
+    _build_image(
+        env, backend_image,
+        meet_dir / "Dockerfile", meet_dir,
+        target="backend-production",
+        push=push,
+    )
 
     step(f"Building meet-frontend -> {frontend_image} ...")
     frontend_dockerfile = meet_dir / "src" / "frontend" / "Dockerfile"
     if not frontend_dockerfile.exists():
         die(f"meet frontend Dockerfile not found at {frontend_dockerfile}")
-
-    ok(f"Building image ({platform}, frontend-production target)...")
-    _run(["docker", "buildx", "build",
-          "--platform", platform,
-          "--provenance=false",
-          "--target", "frontend-production",
-          "--build-arg", "VITE_API_BASE_URL=",
-          "--load",
-          "-f", str(frontend_dockerfile),
-          "-t", frontend_image,
-          str(meet_dir)])
-
-    if push:
-        if is_prod:
-            _seed_image_production(frontend_image, _kube._ssh_host, admin_pass)
-        else:
-            _seed_and_push(frontend_image, admin_pass)
+    _build_image(
+        env, frontend_image,
+        frontend_dockerfile, meet_dir,
+        target="frontend-production",
+        build_args={"VITE_API_BASE_URL": ""},
+        push=push,
+    )
 
     if deploy:
-        from sunbeam.manifests import cmd_apply
-        cmd_apply(env="production" if is_prod else "local", domain=domain)
-        for deployment in ("meet-backend", "meet-celery-worker", "meet-frontend"):
-            ok(f"Rolling {deployment} deployment...")
-            kube("rollout", "restart", f"deployment/{deployment}", "-n", "lasuite")
-        for deployment in ("meet-backend", "meet-celery-worker", "meet-frontend"):
-            kube("rollout", "status", f"deployment/{deployment}", "-n", "lasuite",
-                 "--timeout=180s")
-        ok("Meet redeployed.")
+        _deploy_rollout(
+            env,
+            ["meet-backend", "meet-celery-worker", "meet-frontend"],
+            "lasuite",
+        )
+
+
+def _build_people(push: bool = False, deploy: bool = False):
+    """Build people-frontend from source."""
+    env = _get_build_env()
+
+    people_dir = _get_repo_root() / "people"
+    if not people_dir.is_dir():
+        die(f"people source not found at {people_dir}")
+
+    if not shutil.which("yarn"):
+        die("yarn not found on PATH -- install Node.js + yarn first (nvm use 22).")
+
+    workspace_dir = people_dir / "src" / "frontend"
+    app_dir = people_dir / "src" / "frontend" / "apps" / "desk"
+    dockerfile = people_dir / "src" / "frontend" / "Dockerfile"
+    if not dockerfile.exists():
+        die(f"Dockerfile not found at {dockerfile}")
+
+    image = f"{env.registry}/studio/people-frontend:latest"
+    step(f"Building people-frontend -> {image} ...")
+
+    ok("Updating yarn.lock (yarn install in workspace)...")
+    _run(["yarn", "install", "--ignore-engines"], cwd=str(workspace_dir))
+
+    ok("Regenerating cunningham design tokens (cunningham -g css,ts)...")
+    cunningham_bin = workspace_dir / "node_modules" / ".bin" / "cunningham"
+    _run([str(cunningham_bin), "-g", "css,ts", "-o", "src/cunningham", "--utility-classes"],
+         cwd=str(app_dir))
+
+    _build_image(
+        env, image,
+        dockerfile, people_dir,
+        target="frontend-production",
+        build_args={"DOCKER_USER": "101"},
+        push=push,
+    )
+
+    if deploy:
+        _deploy_rollout(env, ["people-frontend"], "lasuite")
+
+
+def _build_messages(what: str, push: bool = False, deploy: bool = False):
+    """Build one or all messages images from source."""
+    env = _get_build_env()
+
+    messages_dir = _get_repo_root() / "messages"
+    if not messages_dir.is_dir():
+        die(f"messages source not found at {messages_dir}")
+
+    all_components = [
+        ("messages-backend",     "messages-backend",     "src/backend/Dockerfile",       "runtime-distroless-prod"),
+        ("messages-frontend",    "messages-frontend",    "src/frontend/Dockerfile",       "runtime-prod"),
+        ("messages-mta-in",      "messages-mta-in",      "src/mta-in/Dockerfile",         None),
+        ("messages-mta-out",     "messages-mta-out",     "src/mta-out/Dockerfile",        None),
+        ("messages-mpa",         "messages-mpa",         "src/mpa/rspamd/Dockerfile",     None),
+        ("messages-socks-proxy", "messages-socks-proxy", "src/socks-proxy/Dockerfile",    None),
+    ]
+    components = all_components if what == "messages" else [
+        c for c in all_components if c[0] == what
+    ]
+
+    built_images = []
+    for component, image_name, dockerfile_rel, target in components:
+        dockerfile = messages_dir / dockerfile_rel
+        if not dockerfile.exists():
+            warn(f"Dockerfile not found at {dockerfile} -- skipping {component}")
+            continue
+
+        image = f"{env.registry}/studio/{image_name}:latest"
+        context_dir = dockerfile.parent
+        step(f"Building {component} -> {image} ...")
+
+        # Patch ghcr.io/astral-sh/uv COPY for messages-backend on local builds
+        cleanup_paths: list[Path] = []
+        actual_dockerfile = dockerfile
+        if not env.is_prod and image_name == "messages-backend":
+            actual_dockerfile, cleanup_paths = _patch_dockerfile_uv(
+                dockerfile, context_dir, env.platform
+            )
+
+        _build_image(
+            env, image,
+            actual_dockerfile, context_dir,
+            target=target,
+            push=push,
+            cleanup_paths=cleanup_paths,
+        )
+        built_images.append(image)
+
+    if deploy and built_images:
+        _deploy_rollout(
+            env,
+            ["messages-backend", "messages-worker", "messages-frontend",
+             "messages-mta-in", "messages-mta-out", "messages-mpa",
+             "messages-socks-proxy"],
+            "lasuite",
+        )
 
 
 def _build_la_suite_frontend(
@@ -812,28 +845,11 @@ def _build_la_suite_frontend(
     push: bool = False,
     deploy: bool = False,
 ):
-    """Build a La Suite frontend image from source and push to the Gitea registry.
+    """Build a La Suite frontend image from source and push to the Gitea registry."""
+    env = _get_build_env()
 
-    Steps:
-    1. yarn install in the workspace root — updates yarn.lock for new packages.
-    2. yarn build-theme in the app dir — regenerates cunningham token CSS/TS.
-    3. docker buildx build --target frontend-production → push.
-    4. Pre-seed into k3s containerd.
-    5. sunbeam apply + rollout restart.
-    """
     if not shutil.which("yarn"):
         die("yarn not found on PATH — install Node.js + yarn first (nvm use 22).")
-    if not shutil.which("docker"):
-        die("docker not found — is the Lima docker VM running?")
-
-    ip = get_lima_ip()
-    domain = f"{ip}.sslip.io"
-
-    b64 = kube_out("-n", "devtools", "get", "secret",
-                   "gitea-admin-credentials", "-o=jsonpath={.data.password}")
-    if not b64:
-        die("gitea-admin-credentials secret not found — run seed first.")
-    admin_pass = base64.b64decode(b64).decode()
 
     workspace_dir = repo_dir / workspace_rel
     app_dir = repo_dir / app_rel
@@ -844,47 +860,107 @@ def _build_la_suite_frontend(
     if not dockerfile.exists():
         die(f"Dockerfile not found at {dockerfile}")
 
-    registry = f"src.{domain}"
-    image = f"{registry}/studio/{image_name}:latest"
-
+    image = f"{env.registry}/studio/{image_name}:latest"
     step(f"Building {app} -> {image} ...")
 
     ok("Updating yarn.lock (yarn install in workspace)...")
-    _run(["yarn", "install"], cwd=str(workspace_dir))
+    _run(["yarn", "install", "--ignore-engines"], cwd=str(workspace_dir))
 
     ok("Regenerating cunningham design tokens (yarn build-theme)...")
     _run(["yarn", "build-theme"], cwd=str(app_dir))
 
-    if push:
-        _trust_registry_in_docker_vm(registry)
-        ok("Logging in to Gitea registry...")
-        r = subprocess.run(
-            ["limactl", "shell", LIMA_DOCKER_VM, "--",
-             "docker", "login", registry,
-             "--username", GITEA_ADMIN_USER, "--password-stdin"],
-            input=admin_pass, text=True, capture_output=True,
-        )
-        if r.returncode != 0:
-            die(f"docker login failed:\n{r.stderr.strip()}")
-
-    ok("Building image (linux/arm64, frontend-production target)...")
-    _run(["docker", "buildx", "build",
-          "--platform", "linux/arm64",
-          "--provenance=false",
-          "--target", "frontend-production",
-          "--load",
-          "-f", str(dockerfile),
-          "-t", image,
-          str(repo_dir)])
-
-    if push:
-        _seed_and_push(image, admin_pass)
+    _build_image(
+        env, image,
+        dockerfile, repo_dir,
+        target="frontend-production",
+        build_args={"DOCKER_USER": "101"},
+        push=push,
+    )
 
     if deploy:
-        from sunbeam.manifests import cmd_apply
-        cmd_apply()
-        ok(f"Rolling {deployment} deployment...")
-        kube("rollout", "restart", f"deployment/{deployment}", "-n", namespace)
-        kube("rollout", "status", f"deployment/{deployment}", "-n", namespace,
-             "--timeout=180s")
-        ok(f"{deployment} redeployed.")
+        _deploy_rollout(env, [deployment], namespace)
+
+
+def _patch_dockerfile_uv(
+    dockerfile_path: Path,
+    messages_dir: Path,
+    platform: str,
+) -> tuple[Path, list[Path]]:
+    """Download uv from GitHub releases and return a patched Dockerfile path.
+
+    The docker-container buildkit driver cannot access the host Docker daemon's
+    local image cache, so --build-context docker-image:// silently falls through
+    to docker.io. oci-layout:// is the only local-context type that works, but
+    it requires producing an OCI tar and extracting it.
+
+    The simplest reliable approach: stage the downloaded binaries inside the
+    build context directory and patch the Dockerfile to use a plain COPY instead
+    of COPY --from=ghcr.io/... The patched Dockerfile is written next to the
+    original; both it and the staging dir are cleaned up by the caller.
+
+    Returns (patched_dockerfile_path, [paths_to_cleanup]).
+    """
+    import re as _re
+    import tarfile as _tf
+    import urllib.request as _url
+
+    content = dockerfile_path.read_text()
+
+    copy_match = _re.search(
+        r'(COPY\s+--from=ghcr\.io/astral-sh/uv@sha256:[a-f0-9]+\s+/uv\s+/uvx\s+/bin/)',
+        content,
+    )
+    if not copy_match:
+        return (dockerfile_path, [])
+    original_copy = copy_match.group(1)
+
+    version_match = _re.search(r'oci://ghcr\.io/astral-sh/uv:(\S+)', content)
+    if not version_match:
+        warn("Could not find uv version comment in Dockerfile; ghcr.io pull may fail.")
+        return (dockerfile_path, [])
+    version = version_match.group(1)
+
+    arch = "x86_64" if "amd64" in platform else "aarch64"
+    url = (
+        f"https://github.com/astral-sh/uv/releases/download/{version}/"
+        f"uv-{arch}-unknown-linux-gnu.tar.gz"
+    )
+
+    stage_dir = messages_dir / "_sunbeam_uv_stage"
+    patched_df = dockerfile_path.parent / "Dockerfile._sunbeam_patched"
+    cleanup = [stage_dir, patched_df]
+
+    ok(f"Downloading uv {version} ({arch}) from GitHub releases to bypass ghcr.io...")
+    try:
+        stage_dir.mkdir(exist_ok=True)
+        tarball = stage_dir / "uv.tar.gz"
+        _url.urlretrieve(url, str(tarball))
+
+        with _tf.open(str(tarball), "r:gz") as tf:
+            for member in tf.getmembers():
+                name = os.path.basename(member.name)
+                if name in ("uv", "uvx") and member.isfile():
+                    member.name = name
+                    tf.extract(member, str(stage_dir))
+        tarball.unlink()
+
+        uv_path = stage_dir / "uv"
+        uvx_path = stage_dir / "uvx"
+        if not uv_path.exists():
+            warn("uv binary not found in release tarball; build may fail.")
+            return (dockerfile_path, cleanup)
+        uv_path.chmod(0o755)
+        if uvx_path.exists():
+            uvx_path.chmod(0o755)
+
+        patched = content.replace(
+            original_copy,
+            "COPY _sunbeam_uv_stage/uv _sunbeam_uv_stage/uvx /bin/",
+        )
+        patched_df.write_text(patched)
+        ok(f"  uv {version} staged; using patched Dockerfile.")
+        return (patched_df, cleanup)
+
+    except Exception as exc:
+        warn(f"Failed to stage uv binaries: {exc}")
+        return (dockerfile_path, cleanup)
