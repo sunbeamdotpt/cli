@@ -14,6 +14,32 @@ from sunbeam.output import step, ok, warn, die
 
 ADMIN_USERNAME = "estudio-admin"
 
+
+def _gen_dkim_key_pair() -> tuple[str, str]:
+    """Generate an RSA 2048-bit DKIM key pair using openssl.
+
+    Returns (private_pem_pkcs8, public_pem). Returns ("", "") on failure.
+    """
+    try:
+        r1 = subprocess.run(["openssl", "genrsa", "2048"], capture_output=True, text=True)
+        if r1.returncode != 0:
+            warn(f"openssl genrsa failed: {r1.stderr.strip()}")
+            return ("", "")
+        # Convert to PKCS8 (format expected by rspamd)
+        r2 = subprocess.run(["openssl", "pkcs8", "-topk8", "-nocrypt"],
+                            input=r1.stdout, capture_output=True, text=True)
+        private_pem = r2.stdout.strip() if r2.returncode == 0 else r1.stdout.strip()
+        # Extract public key from the original RSA key
+        r3 = subprocess.run(["openssl", "rsa", "-pubout"],
+                            input=r1.stdout, capture_output=True, text=True)
+        if r3.returncode != 0:
+            warn(f"openssl rsa -pubout failed: {r3.stderr.strip()}")
+            return (private_pem, "")
+        return (private_pem, r3.stdout.strip())
+    except FileNotFoundError:
+        warn("openssl not found -- skipping DKIM key generation.")
+        return ("", "")
+
 LIMA_VM = "sunbeam"
 GITEA_ADMIN_USER = "gitea_admin"
 PG_USERS = [
@@ -177,6 +203,48 @@ def _seed_openbao() -> dict:
         **{"django-secret-key":            rand,
            "application-jwt-secret-key":   rand})
 
+    drive = get_or_create("drive",
+        **{"django-secret-key": rand})
+
+    # DKIM key pair -- generated together since private and public keys are coupled.
+    # Read existing keys first; only generate a new pair when absent.
+    existing_messages_raw = bao(
+        f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
+        f"bao kv get -format=json secret/messages 2>/dev/null || echo '{{}}'"
+    )
+    existing_messages = {}
+    try:
+        existing_messages = json.loads(existing_messages_raw).get("data", {}).get("data", {})
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    if existing_messages.get("dkim-private-key"):
+        _dkim_private = existing_messages["dkim-private-key"]
+        _dkim_public = existing_messages.get("dkim-public-key", "")
+    else:
+        _dkim_private, _dkim_public = _gen_dkim_key_pair()
+
+    messages = get_or_create("messages",
+        **{"django-secret-key":      rand,
+           "salt-key":               rand,
+           "mda-api-secret":         rand,
+           "dkim-private-key":       lambda: _dkim_private,
+           "dkim-public-key":        lambda: _dkim_public,
+           "rspamd-password":        rand,
+           "socks-proxy-users":      lambda: f"sunbeam:{rand()}",
+           "mta-out-smtp-username":  lambda: "sunbeam",
+           "mta-out-smtp-password":  rand})
+
+    collabora = get_or_create("collabora",
+        **{"username": lambda: "admin",
+           "password": rand})
+
+    tuwunel = get_or_create("tuwunel",
+        **{"oidc-client-id":      lambda: "",
+           "oidc-client-secret":  lambda: "",
+           "turn-secret":         lambda: "",
+           "registration-token":  rand})
+
     # Scaleway S3 credentials for CNPG barman backups.
     # Read from `scw config` at seed time; falls back to empty string (operator must fill in).
     def _scw_config(key):
@@ -195,6 +263,29 @@ def _seed_openbao() -> dict:
            "secret-access-key": lambda: _scw_config("secret-key")})
 
     # Write all secrets to KV (idempotent -- puts same values back)
+    # messages secrets written separately first (multi-field KV, avoids line-length issues)
+    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
+        f"bao kv put secret/messages"
+        f" django-secret-key=\"{messages['django-secret-key']}\""
+        f" salt-key=\"{messages['salt-key']}\""
+        f" mda-api-secret=\"{messages['mda-api-secret']}\""
+        f" rspamd-password=\"{messages['rspamd-password']}\""
+        f" socks-proxy-users=\"{messages['socks-proxy-users']}\""
+        f" mta-out-smtp-username=\"{messages['mta-out-smtp-username']}\""
+        f" mta-out-smtp-password=\"{messages['mta-out-smtp-password']}\""
+        f"'")
+    # DKIM keys stored separately (large PEM values)
+    dkim_priv_b64 = base64.b64encode(messages['dkim-private-key'].encode()).decode()
+    dkim_pub_b64  = base64.b64encode(messages['dkim-public-key'].encode()).decode()
+    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
+        f"echo {dkim_priv_b64} | base64 -d > /tmp/dkim_priv.pem && "
+        f"echo {dkim_pub_b64}  | base64 -d > /tmp/dkim_pub.pem && "
+        f"bao kv patch secret/messages"
+        f" dkim-private-key=\"$(cat /tmp/dkim_priv.pem)\""
+        f" dkim-public-key=\"$(cat /tmp/dkim_pub.pem)\" && "
+        f"rm /tmp/dkim_priv.pem /tmp/dkim_pub.pem"
+        f"'")
+
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
         f"bao kv put secret/hydra           system-secret=\"{hydra['system-secret']}\" cookie-secret=\"{hydra['cookie-secret']}\" pairwise-salt=\"{hydra['pairwise-salt']}\" && "
         f"bao kv put secret/kratos          secrets-default=\"{kratos['secrets-default']}\" secrets-cookie=\"{kratos['secrets-cookie']}\" smtp-connection-uri=\"{kratos['smtp-connection-uri']}\" && "
@@ -207,8 +298,11 @@ def _seed_openbao() -> dict:
         f"bao kv put secret/kratos-admin    cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\" && "
         f"bao kv put secret/docs            django-secret-key=\"{docs['django-secret-key']}\" collaboration-secret=\"{docs['collaboration-secret']}\" && "
         f"bao kv put secret/meet            django-secret-key=\"{meet['django-secret-key']}\" application-jwt-secret-key=\"{meet['application-jwt-secret-key']}\" && "
+        f"bao kv put secret/drive           django-secret-key=\"{drive['django-secret-key']}\" && "
+        f"bao kv put secret/collabora       username=\"{collabora['username']}\" password=\"{collabora['password']}\" && "
         f"bao kv put secret/grafana          admin-password=\"{grafana['admin-password']}\" && "
-        f"bao kv put secret/scaleway-s3     access-key-id=\"{scaleway_s3['access-key-id']}\" secret-access-key=\"{scaleway_s3['secret-access-key']}\""
+        f"bao kv put secret/scaleway-s3     access-key-id=\"{scaleway_s3['access-key-id']}\" secret-access-key=\"{scaleway_s3['secret-access-key']}\" && "
+        f"bao kv put secret/tuwunel         oidc-client-id=\"{tuwunel['oidc-client-id']}\" oidc-client-secret=\"{tuwunel['oidc-client-secret']}\" turn-secret=\"{tuwunel['turn-secret']}\" registration-token=\"{tuwunel['registration-token']}\""
         f"'")
 
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
@@ -231,7 +325,7 @@ def _seed_openbao() -> dict:
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
         f"bao write auth/kubernetes/role/vso "
         f"bound_service_account_names=default "
-        f"bound_service_account_namespaces=ory,devtools,storage,lasuite,media,data,monitoring "
+        f"bound_service_account_namespaces=ory,devtools,storage,lasuite,matrix,media,data,monitoring "
         f"policies=vso-reader "
         f"ttl=1h")
 
@@ -250,6 +344,7 @@ def _seed_openbao() -> dict:
         "livekit-api-key":         livekit["api-key"],
         "livekit-api-secret":      livekit["api-secret"],
         "kratos-admin-cookie-secret": kratos_admin["cookie-secret"],
+        "messages-dkim-public-key": messages.get("dkim-public-key", ""),
         "_ob_pod":                 ob_pod,
         "_root_token":             root_token,
     }
@@ -560,6 +655,30 @@ def cmd_seed() -> dict:
     create_secret("devtools", "gitea-admin-credentials",
                   username=GITEA_ADMIN_USER, password=gitea_admin_pass)
 
+    # Sync Gitea admin password to Gitea's own DB (Gitea's existingSecret only
+    # applies on first run — subsequent K8s secret updates are not picked up
+    # automatically by Gitea).
+    if gitea_admin_pass:
+        gitea_pod = kube_out(
+            "-n", "devtools", "get", "pods",
+            "-l=app.kubernetes.io/name=gitea",
+            "-o=jsonpath={.items[0].metadata.name}",
+        )
+        if gitea_pod:
+            r = subprocess.run(
+                ["kubectl", context_arg(), "-n", "devtools", "exec", gitea_pod,
+                 "--", "gitea", "admin", "user", "change-password",
+                 "--username", GITEA_ADMIN_USER, "--password", gitea_admin_pass,
+                 "--must-change-password=false"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                ok(f"Gitea admin password synced to Gitea DB.")
+            else:
+                warn(f"Could not sync Gitea admin password: {r.stderr.strip()}")
+        else:
+            warn("Gitea pod not found — admin password NOT synced to Gitea DB. Run seed again after Gitea is deployed.")
+
     ensure_ns("storage")
     s3_json = (
         '{"identities":[{"name":"seaweed","credentials":[{"accessKey":"'
@@ -579,6 +698,8 @@ def cmd_seed() -> dict:
     create_secret("lasuite", "people-django-secret",
                   DJANGO_SECRET_KEY=django_secret)
 
+    ensure_ns("matrix")
+
     ensure_ns("media")
     ensure_ns("monitoring")
 
@@ -591,6 +712,17 @@ def cmd_seed() -> dict:
     if recovery_code:
         ok("Admin recovery code (enter on the page above):")
         print(f"  {recovery_code}")
+
+    dkim_pub = creds.get("messages-dkim-public-key", "")
+    if dkim_pub:
+        b64_key = "".join(
+            dkim_pub.replace("-----BEGIN PUBLIC KEY-----", "")
+                     .replace("-----END PUBLIC KEY-----", "")
+                     .split()
+        )
+        domain = get_domain()
+        ok("DKIM DNS record (add to DNS at your registrar):")
+        print(f"  default._domainkey.{domain}  TXT  \"v=DKIM1; k=rsa; p={b64_key}\"")
 
     ok("All secrets seeded.")
     return creds
