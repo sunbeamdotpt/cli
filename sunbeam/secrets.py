@@ -15,6 +15,11 @@ from sunbeam.output import step, ok, warn, die
 ADMIN_USERNAME = "estudio-admin"
 
 
+def _gen_fernet_key() -> str:
+    """Generate a Fernet-compatible key (32 random bytes, URL-safe base64)."""
+    return base64.urlsafe_b64encode(_secrets.token_bytes(32)).decode()
+
+
 def _gen_dkim_key_pair() -> tuple[str, str]:
     """Generate an RSA 2048-bit DKIM key pair using openssl.
 
@@ -133,6 +138,9 @@ def _seed_openbao() -> dict:
         return {}
 
     # Read-or-generate helper: preserves existing KV values; only generates missing ones.
+    # Tracks which paths had new values so we only write back when necessary.
+    _dirty_paths: set = set()
+
     def get_or_create(path, **fields):
         raw = bao(
             f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
@@ -145,7 +153,12 @@ def _seed_openbao() -> dict:
             pass
         result = {}
         for key, default_fn in fields.items():
-            result[key] = existing.get(key) or default_fn()
+            val = existing.get(key)
+            if val:
+                result[key] = val
+            else:
+                result[key] = default_fn()
+                _dirty_paths.add(path)
         return result
 
     def rand():
@@ -193,7 +206,9 @@ def _seed_openbao() -> dict:
     kratos_admin = get_or_create("kratos-admin",
         **{"cookie-secret":      rand,
            "csrf-cookie-secret": rand,
-           "admin-identity-ids": lambda: ""})
+           "admin-identity-ids": lambda: "",
+           "s3-access-key":      lambda: seaweedfs["access-key"],
+           "s3-secret-key":      lambda: seaweedfs["secret-key"]})
 
     docs = get_or_create("docs",
         **{"django-secret-key":      rand,
@@ -225,15 +240,16 @@ def _seed_openbao() -> dict:
         _dkim_private, _dkim_public = _gen_dkim_key_pair()
 
     messages = get_or_create("messages",
-        **{"django-secret-key":      rand,
-           "salt-key":               rand,
-           "mda-api-secret":         rand,
-           "dkim-private-key":       lambda: _dkim_private,
-           "dkim-public-key":        lambda: _dkim_public,
-           "rspamd-password":        rand,
-           "socks-proxy-users":      lambda: f"sunbeam:{rand()}",
-           "mta-out-smtp-username":  lambda: "sunbeam",
-           "mta-out-smtp-password":  rand})
+        **{"django-secret-key":        rand,
+           "salt-key":                 rand,
+           "mda-api-secret":           rand,
+           "oidc-refresh-token-key":   _gen_fernet_key,
+           "dkim-private-key":         lambda: _dkim_private,
+           "dkim-public-key":          lambda: _dkim_public,
+           "rspamd-password":          rand,
+           "socks-proxy-users":        lambda: f"sunbeam:{rand()}",
+           "mta-out-smtp-username":    lambda: "sunbeam",
+           "mta-out-smtp-password":    rand})
 
     collabora = get_or_create("collabora",
         **{"username": lambda: "admin",
@@ -262,48 +278,92 @@ def _seed_openbao() -> dict:
         **{"access-key-id":     lambda: _scw_config("access-key"),
            "secret-access-key": lambda: _scw_config("secret-key")})
 
-    # Write all secrets to KV (idempotent -- puts same values back)
-    # messages secrets written separately first (multi-field KV, avoids line-length issues)
-    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
-        f"bao kv put secret/messages"
-        f" django-secret-key=\"{messages['django-secret-key']}\""
-        f" salt-key=\"{messages['salt-key']}\""
-        f" mda-api-secret=\"{messages['mda-api-secret']}\""
-        f" rspamd-password=\"{messages['rspamd-password']}\""
-        f" socks-proxy-users=\"{messages['socks-proxy-users']}\""
-        f" mta-out-smtp-username=\"{messages['mta-out-smtp-username']}\""
-        f" mta-out-smtp-password=\"{messages['mta-out-smtp-password']}\""
-        f"'")
-    # DKIM keys stored separately (large PEM values)
-    dkim_priv_b64 = base64.b64encode(messages['dkim-private-key'].encode()).decode()
-    dkim_pub_b64  = base64.b64encode(messages['dkim-public-key'].encode()).decode()
-    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
-        f"echo {dkim_priv_b64} | base64 -d > /tmp/dkim_priv.pem && "
-        f"echo {dkim_pub_b64}  | base64 -d > /tmp/dkim_pub.pem && "
-        f"bao kv patch secret/messages"
-        f" dkim-private-key=\"$(cat /tmp/dkim_priv.pem)\""
-        f" dkim-public-key=\"$(cat /tmp/dkim_pub.pem)\" && "
-        f"rm /tmp/dkim_priv.pem /tmp/dkim_pub.pem"
-        f"'")
+    # Only write secrets to OpenBao KV for paths that have new/missing values.
+    # This avoids unnecessary KV version bumps which trigger VSO re-syncs and
+    # rollout restarts across the cluster.
+    if not _dirty_paths:
+        ok("All OpenBao KV secrets already present -- skipping writes.")
+    else:
+        ok(f"Writing new secrets to OpenBao KV ({', '.join(sorted(_dirty_paths))})...")
 
-    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
-        f"bao kv put secret/hydra           system-secret=\"{hydra['system-secret']}\" cookie-secret=\"{hydra['cookie-secret']}\" pairwise-salt=\"{hydra['pairwise-salt']}\" && "
-        f"bao kv put secret/kratos          secrets-default=\"{kratos['secrets-default']}\" secrets-cookie=\"{kratos['secrets-cookie']}\" smtp-connection-uri=\"{kratos['smtp-connection-uri']}\" && "
-        f"bao kv put secret/gitea           admin-username=\"{gitea['admin-username']}\" admin-password=\"{gitea['admin-password']}\" && "
-        f"bao kv put secret/seaweedfs       access-key=\"{seaweedfs['access-key']}\" secret-key=\"{seaweedfs['secret-key']}\" && "
-        f"bao kv put secret/hive            oidc-client-id=\"{hive['oidc-client-id']}\" oidc-client-secret=\"{hive['oidc-client-secret']}\" && "
-        f"bao kv put secret/livekit         api-key=\"{livekit['api-key']}\" api-secret=\"{livekit['api-secret']}\" && "
-        f"bao kv put secret/people          django-secret-key=\"{people['django-secret-key']}\" && "
-        f"bao kv put secret/login-ui        cookie-secret=\"{login_ui['cookie-secret']}\" csrf-cookie-secret=\"{login_ui['csrf-cookie-secret']}\" && "
-        f"bao kv put secret/kratos-admin    cookie-secret=\"{kratos_admin['cookie-secret']}\" csrf-cookie-secret=\"{kratos_admin['csrf-cookie-secret']}\" admin-identity-ids=\"{kratos_admin['admin-identity-ids']}\" && "
-        f"bao kv put secret/docs            django-secret-key=\"{docs['django-secret-key']}\" collaboration-secret=\"{docs['collaboration-secret']}\" && "
-        f"bao kv put secret/meet            django-secret-key=\"{meet['django-secret-key']}\" application-jwt-secret-key=\"{meet['application-jwt-secret-key']}\" && "
-        f"bao kv put secret/drive           django-secret-key=\"{drive['django-secret-key']}\" && "
-        f"bao kv put secret/collabora       username=\"{collabora['username']}\" password=\"{collabora['password']}\" && "
-        f"bao kv put secret/grafana          admin-password=\"{grafana['admin-password']}\" && "
-        f"bao kv put secret/scaleway-s3     access-key-id=\"{scaleway_s3['access-key-id']}\" secret-access-key=\"{scaleway_s3['secret-access-key']}\" && "
-        f"bao kv put secret/tuwunel         oidc-client-id=\"{tuwunel['oidc-client-id']}\" oidc-client-secret=\"{tuwunel['oidc-client-secret']}\" turn-secret=\"{tuwunel['turn-secret']}\" registration-token=\"{tuwunel['registration-token']}\""
-        f"'")
+        def _kv_put(path, **kv):
+            pairs = " ".join(f'{k}="{v}"' for k, v in kv.items())
+            bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
+                f"bao kv put secret/{path} {pairs}")
+
+        if "messages" in _dirty_paths:
+            _kv_put("messages",
+                **{"django-secret-key":      messages["django-secret-key"],
+                   "salt-key":               messages["salt-key"],
+                   "mda-api-secret":         messages["mda-api-secret"],
+                   "oidc-refresh-token-key": messages["oidc-refresh-token-key"],
+                   "rspamd-password":        messages["rspamd-password"],
+                   "socks-proxy-users":      messages["socks-proxy-users"],
+                   "mta-out-smtp-username":  messages["mta-out-smtp-username"],
+                   "mta-out-smtp-password":  messages["mta-out-smtp-password"]})
+            # DKIM keys stored separately (large PEM values)
+            dkim_priv_b64 = base64.b64encode(messages['dkim-private-key'].encode()).decode()
+            dkim_pub_b64  = base64.b64encode(messages['dkim-public-key'].encode()).decode()
+            bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' sh -c '"
+                f"echo {dkim_priv_b64} | base64 -d > /tmp/dkim_priv.pem && "
+                f"echo {dkim_pub_b64}  | base64 -d > /tmp/dkim_pub.pem && "
+                f"bao kv patch secret/messages"
+                f" dkim-private-key=\"$(cat /tmp/dkim_priv.pem)\""
+                f" dkim-public-key=\"$(cat /tmp/dkim_pub.pem)\" && "
+                f"rm /tmp/dkim_priv.pem /tmp/dkim_pub.pem"
+                f"'")
+        if "hydra" in _dirty_paths:
+            _kv_put("hydra", **{"system-secret": hydra["system-secret"],
+                                "cookie-secret": hydra["cookie-secret"],
+                                "pairwise-salt": hydra["pairwise-salt"]})
+        if "kratos" in _dirty_paths:
+            _kv_put("kratos", **{"secrets-default": kratos["secrets-default"],
+                                 "secrets-cookie": kratos["secrets-cookie"],
+                                 "smtp-connection-uri": kratos["smtp-connection-uri"]})
+        if "gitea" in _dirty_paths:
+            _kv_put("gitea", **{"admin-username": gitea["admin-username"],
+                                "admin-password": gitea["admin-password"]})
+        if "seaweedfs" in _dirty_paths:
+            _kv_put("seaweedfs", **{"access-key": seaweedfs["access-key"],
+                                    "secret-key": seaweedfs["secret-key"]})
+        if "hive" in _dirty_paths:
+            _kv_put("hive", **{"oidc-client-id": hive["oidc-client-id"],
+                               "oidc-client-secret": hive["oidc-client-secret"]})
+        if "livekit" in _dirty_paths:
+            _kv_put("livekit", **{"api-key": livekit["api-key"],
+                                  "api-secret": livekit["api-secret"]})
+        if "people" in _dirty_paths:
+            _kv_put("people", **{"django-secret-key": people["django-secret-key"]})
+        if "login-ui" in _dirty_paths:
+            _kv_put("login-ui", **{"cookie-secret": login_ui["cookie-secret"],
+                                   "csrf-cookie-secret": login_ui["csrf-cookie-secret"]})
+        if "kratos-admin" in _dirty_paths:
+            _kv_put("kratos-admin", **{"cookie-secret": kratos_admin["cookie-secret"],
+                                       "csrf-cookie-secret": kratos_admin["csrf-cookie-secret"],
+                                       "admin-identity-ids": kratos_admin["admin-identity-ids"],
+                                       "s3-access-key": kratos_admin["s3-access-key"],
+                                       "s3-secret-key": kratos_admin["s3-secret-key"]})
+        if "docs" in _dirty_paths:
+            _kv_put("docs", **{"django-secret-key": docs["django-secret-key"],
+                               "collaboration-secret": docs["collaboration-secret"]})
+        if "meet" in _dirty_paths:
+            _kv_put("meet", **{"django-secret-key": meet["django-secret-key"],
+                               "application-jwt-secret-key": meet["application-jwt-secret-key"]})
+        if "drive" in _dirty_paths:
+            _kv_put("drive", **{"django-secret-key": drive["django-secret-key"]})
+        if "collabora" in _dirty_paths:
+            _kv_put("collabora", **{"username": collabora["username"],
+                                    "password": collabora["password"]})
+        if "grafana" in _dirty_paths:
+            _kv_put("grafana", **{"admin-password": grafana["admin-password"]})
+        if "scaleway-s3" in _dirty_paths:
+            _kv_put("scaleway-s3", **{"access-key-id": scaleway_s3["access-key-id"],
+                                      "secret-access-key": scaleway_s3["secret-access-key"]})
+        if "tuwunel" in _dirty_paths:
+            _kv_put("tuwunel", **{"oidc-client-id": tuwunel["oidc-client-id"],
+                                  "oidc-client-secret": tuwunel["oidc-client-secret"],
+                                  "turn-secret": tuwunel["turn-secret"],
+                                  "registration-token": tuwunel["registration-token"]})
 
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
     ok("Configuring Kubernetes auth for VSO...")
@@ -519,7 +579,7 @@ def _seed_kratos_admin_identity(ob_pod: str, root_token: str) -> tuple[str, str]
                 ok(f"  admin identity exists ({identity_id[:8]}...)")
             else:
                 identity = _kratos_api(base, "/identities", method="POST", body={
-                    "schema_id": "default",
+                    "schema_id": "employee",
                     "traits": {"email": admin_email},
                     "state": "active",
                 })
