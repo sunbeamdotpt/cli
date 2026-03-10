@@ -12,7 +12,8 @@ from sunbeam.tools import run_tool, CACHE_DIR
 from sunbeam.output import step, ok, warn, die
 
 LIMA_VM = "sunbeam"
-SECRETS_DIR = Path(__file__).parents[3] / "infrastructure" / "secrets" / "local"
+from sunbeam.config import get_infra_dir as _get_infra_dir
+SECRETS_DIR = _get_infra_dir() / "secrets" / "local"
 
 GITEA_ADMIN_USER = "gitea_admin"
 

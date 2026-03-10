@@ -645,52 +645,11 @@ def _build_kratos_admin(push: bool = False, deploy: bool = False):
 
     step(f"Building kratos-admin-ui -> {image} ...")
 
-    if env.is_prod:
-        # Cross-compile Deno for x86_64 and package into a minimal image.
-        if not shutil.which("deno"):
-            die("deno not found — install Deno: https://deno.land/")
-        if not shutil.which("npm"):
-            die("npm not found — install Node.js")
-
-        ok("Building UI assets (npm run build)...")
-        _run(["npm", "run", "build"], cwd=str(kratos_admin_dir / "ui"))
-
-        ok("Cross-compiling Deno binary for x86_64-linux-gnu...")
-        _run([
-            "deno", "compile",
-            "--target", "x86_64-unknown-linux-gnu",
-            "--allow-net", "--allow-read", "--allow-env",
-            "--include", "ui/dist",
-            "-o", "kratos-admin-x86_64",
-            "main.ts",
-        ], cwd=str(kratos_admin_dir))
-
-        bin_path = kratos_admin_dir / "kratos-admin-x86_64"
-        if not bin_path.exists():
-            die("Deno cross-compilation produced no binary")
-
-        pkg_dir = Path(tempfile.mkdtemp(prefix="kratos-admin-pkg-"))
-        shutil.copy2(str(bin_path), str(pkg_dir / "kratos-admin"))
-        dockerfile = pkg_dir / "Dockerfile"
-        dockerfile.write_text(
-            "FROM gcr.io/distroless/cc-debian12:nonroot\n"
-            "WORKDIR /app\n"
-            "COPY kratos-admin ./\n"
-            "EXPOSE 3000\n"
-            'ENTRYPOINT ["/app/kratos-admin"]\n'
-        )
-
-        try:
-            _build_image(env, image, dockerfile, pkg_dir, push=push)
-        finally:
-            shutil.rmtree(str(pkg_dir), ignore_errors=True)
-    else:
-        # Local: buildkitd handles the full Dockerfile build
-        _build_image(
-            env, image,
-            kratos_admin_dir / "Dockerfile", kratos_admin_dir,
-            push=push,
-        )
+    _build_image(
+        env, image,
+        kratos_admin_dir / "Dockerfile", kratos_admin_dir,
+        push=push,
+    )
 
     if deploy:
         _deploy_rollout(env, ["kratos-admin-ui"], "ory", timeout="120s")

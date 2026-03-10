@@ -643,14 +643,18 @@ class TestConfigCli(unittest.TestCase):
 
     def test_config_cli_set_dispatch(self):
         """Test that config set CLI dispatches correctly."""
+        mock_existing = MagicMock()
+        mock_existing.production_host = "old@example.com"
+        mock_existing.infra_directory = "/old/infra"
+        mock_existing.acme_email = ""
         mock_save = MagicMock()
         mock_config = MagicMock(
-            SunbeamConfig=MagicMock(return_value="mock_config"),
+            load_config=MagicMock(return_value=mock_existing),
             save_config=mock_save
         )
-        
-        with patch.object(sys, "argv", ["sunbeam", "config", "set", 
-                                        "--host", "cli@example.com", 
+
+        with patch.object(sys, "argv", ["sunbeam", "config", "set",
+                                        "--host", "cli@example.com",
                                         "--infra-dir", "/cli/infra"]):
             with patch.dict("sys.modules", {"sunbeam.config": mock_config}):
                 import importlib, sunbeam.cli as cli_mod
@@ -659,14 +663,12 @@ class TestConfigCli(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        
-        # Verify SunbeamConfig was called with correct args
-        mock_config.SunbeamConfig.assert_called_once_with(
-            production_host="cli@example.com",
-            infra_directory="/cli/infra"
-        )
-        # Verify save_config was called
-        mock_save.assert_called_once_with("mock_config")
+
+        # Verify existing config was loaded and updated
+        self.assertEqual(mock_existing.production_host, "cli@example.com")
+        self.assertEqual(mock_existing.infra_directory, "/cli/infra")
+        # Verify save_config was called with the updated config
+        mock_save.assert_called_once_with(mock_existing)
 
     def test_config_cli_get_dispatch(self):
         """Test that config get CLI dispatches correctly."""
