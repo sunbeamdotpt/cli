@@ -8,8 +8,8 @@ from sunbeam.kube import kube, kube_out, parse_target
 from sunbeam.tools import ensure_tool
 from sunbeam.output import step, ok, warn, die
 
-MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "media", "ory", "storage",
-              "vault-secrets-operator"]
+MANAGED_NS = ["data", "devtools", "ingress", "lasuite", "matrix", "media", "ory",
+              "storage", "vault-secrets-operator"]
 
 SERVICES_TO_RESTART = [
     ("ory",      "hydra"),
@@ -22,6 +22,7 @@ SERVICES_TO_RESTART = [
     ("lasuite",  "people-frontend"),
     ("lasuite",  "people-celery-worker"),
     ("lasuite",  "people-celery-beat"),
+    ("matrix",   "tuwunel"),
     ("media",    "livekit-server"),
 ]
 
@@ -186,8 +187,9 @@ def cmd_logs(target: str, follow: bool):
     if not name:
         die("Logs require a service name, e.g. 'ory/kratos'.")
 
+    _kube_mod.ensure_tunnel()
     kubectl = str(ensure_tool("kubectl"))
-    cmd = [kubectl, "--context=sunbeam", "-n", ns, "logs",
+    cmd = [kubectl, _kube_mod.context_arg(), "-n", ns, "logs",
            "-l", f"app={name}", "--tail=100"]
     if follow:
         cmd.append("--follow")

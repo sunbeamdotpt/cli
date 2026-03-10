@@ -82,7 +82,8 @@ def main() -> None:
                                   "docs-frontend", "people-frontend", "people",
                                   "messages", "messages-backend", "messages-frontend",
                                   "messages-mta-in", "messages-mta-out",
-                                  "messages-mpa", "messages-socks-proxy"],
+                                  "messages-mpa", "messages-socks-proxy",
+                                  "tuwunel"],
                          help="What to build")
     p_build.add_argument("--push", action="store_true",
                          help="Push image to registry after building")
@@ -104,12 +105,14 @@ def main() -> None:
     p_config = sub.add_parser("config", help="Manage sunbeam configuration")
     config_sub = p_config.add_subparsers(dest="config_action", metavar="action")
 
-    # sunbeam config set --host HOST --infra-dir DIR
+    # sunbeam config set --host HOST --infra-dir DIR --acme-email EMAIL
     p_config_set = config_sub.add_parser("set", help="Set configuration values")
     p_config_set.add_argument("--host", default="",
                            help="Production SSH host (e.g. user@server.example.com)")
     p_config_set.add_argument("--infra-dir", default="",
                            help="Infrastructure directory root")
+    p_config_set.add_argument("--acme-email", default="",
+                           help="ACME email for Let's Encrypt certificates (e.g. ops@sunbeam.pt)")
 
     # sunbeam config get
     config_sub.add_parser("get", help="Get current configuration")
@@ -249,17 +252,21 @@ def main() -> None:
             p_config.print_help()
             sys.exit(0)
         elif action == "set":
-            config = SunbeamConfig(
-                production_host=args.host if args.host else "",
-                infra_directory=args.infra_dir if args.infra_dir else ""
-            )
+            config = load_config()
+            if args.host:
+                config.production_host = args.host
+            if args.infra_dir:
+                config.infra_directory = args.infra_dir
+            if args.acme_email:
+                config.acme_email = args.acme_email
             save_config(config)
         elif action == "get":
             from sunbeam.output import ok
             config = load_config()
             ok(f"Production host: {config.production_host or '(not set)'}")
             ok(f"Infrastructure directory: {config.infra_directory or '(not set)'}")
-            
+            ok(f"ACME email: {config.acme_email or '(not set)'}")
+
             # Also show effective production host (from config or env)
             effective_host = get_production_host()
             if effective_host:
