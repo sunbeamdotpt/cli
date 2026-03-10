@@ -227,6 +227,7 @@ def cmd_bao(bao_args: list[str]) -> int:
 
 def kustomize_build(overlay: Path, domain: str, email: str = "") -> str:
     """Run kustomize build --enable-helm and apply domain/email substitution."""
+    import socket as _socket
     r = run_tool(
         "kustomize", "build", "--enable-helm", str(overlay),
         capture_output=True, text=True, check=True,
@@ -235,5 +236,22 @@ def kustomize_build(overlay: Path, domain: str, email: str = "") -> str:
     text = domain_replace(text, domain)
     if email:
         text = text.replace("ACME_EMAIL", email)
+    if "REGISTRY_HOST_IP" in text:
+        registry_ip = ""
+        try:
+            registry_ip = _socket.gethostbyname(f"src.{domain}")
+        except _socket.gaierror:
+            pass
+        if not registry_ip:
+            # DNS not resolvable locally (VPN, split-horizon, etc.) — derive IP from SSH host config
+            from sunbeam.config import get_production_host as _get_host
+            ssh_host = _get_host()
+            # ssh_host may be "user@host" or just "host"
+            raw = ssh_host.split("@")[-1].split(":")[0]
+            try:
+                registry_ip = _socket.gethostbyname(raw)
+            except _socket.gaierror:
+                registry_ip = raw  # raw is already an IP in typical config
+        text = text.replace("REGISTRY_HOST_IP", registry_ip)
     text = text.replace("\n      annotations: null", "")
     return text
