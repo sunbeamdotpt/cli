@@ -4,6 +4,7 @@
 //! which maps them to exit codes and log output.
 
 /// Exit codes for the sunbeam CLI.
+#[allow(dead_code)]
 pub mod exit {
     pub const SUCCESS: i32 = 0;
     pub const GENERAL: i32 = 1;
