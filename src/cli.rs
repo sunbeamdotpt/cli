@@ -146,11 +146,84 @@ pub enum Verb {
         action: Option<UserAction>,
     },
 
+    /// Authenticate with Sunbeam (OAuth2 login via browser).
+    Auth {
+        #[command(subcommand)]
+        action: Option<AuthAction>,
+    },
+
+    /// Project management across Planka and Gitea.
+    Pm {
+        #[command(subcommand)]
+        action: Option<PmAction>,
+    },
+
     /// Self-update from latest mainline commit.
     Update,
 
     /// Print version info.
     Version,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthAction {
+    /// Log in via browser (OAuth2 authorization code flow).
+    Login,
+    /// Log out (remove cached tokens).
+    Logout,
+    /// Show current authentication status.
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PmAction {
+    /// List tickets across Planka and Gitea.
+    List {
+        /// Filter by source: planka, gitea, or all (default: all).
+        #[arg(long, default_value = "all")]
+        source: String,
+        /// Filter by state: open, closed, all (default: open).
+        #[arg(long, default_value = "open")]
+        state: String,
+    },
+    /// Show ticket details.
+    Show {
+        /// Ticket ID (e.g. p:42 for Planka, g:studio/cli#7 for Gitea).
+        id: String,
+    },
+    /// Create a new ticket.
+    Create {
+        /// Ticket title.
+        title: String,
+        /// Ticket body/description.
+        #[arg(long, default_value = "")]
+        body: String,
+        /// Source: planka or gitea.
+        #[arg(long, default_value = "gitea")]
+        source: String,
+        /// Target: board ID for Planka, or org/repo for Gitea.
+        #[arg(long, default_value = "")]
+        target: String,
+    },
+    /// Add a comment to a ticket.
+    Comment {
+        /// Ticket ID.
+        id: String,
+        /// Comment text.
+        text: String,
+    },
+    /// Close/complete a ticket.
+    Close {
+        /// Ticket ID.
+        id: String,
+    },
+    /// Assign a user to a ticket.
+    Assign {
+        /// Ticket ID.
+        id: String,
+        /// Username or email to assign.
+        user: String,
+    },
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -922,6 +995,47 @@ pub async fn dispatch() -> Result<()> {
             }
             Some(UserAction::Offboard { target }) => {
                 crate::users::cmd_user_offboard(&target).await
+            }
+        },
+
+        Some(Verb::Auth { action }) => match action {
+            None => {
+                crate::auth::cmd_auth_status().await
+            }
+            Some(AuthAction::Login) => crate::auth::cmd_auth_login().await,
+            Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
+            Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
+        },
+
+        Some(Verb::Pm { action }) => match action {
+            None => {
+                use clap::CommandFactory;
+                let mut cmd = Cli::command();
+                let sub = cmd
+                    .find_subcommand_mut("pm")
+                    .expect("pm subcommand");
+                sub.print_help()?;
+                println!();
+                Ok(())
+            }
+            Some(PmAction::List { source, state }) => {
+                let src = if source == "all" { None } else { Some(source.as_str()) };
+                crate::pm::cmd_pm_list(src, &state).await
+            }
+            Some(PmAction::Show { id }) => {
+                crate::pm::cmd_pm_show(&id).await
+            }
+            Some(PmAction::Create { title, body, source, target }) => {
+                crate::pm::cmd_pm_create(&title, &body, &source, &target).await
+            }
+            Some(PmAction::Comment { id, text }) => {
+                crate::pm::cmd_pm_comment(&id, &text).await
+            }
+            Some(PmAction::Close { id }) => {
+                crate::pm::cmd_pm_close(&id).await
+            }
+            Some(PmAction::Assign { id, user }) => {
+                crate::pm::cmd_pm_assign(&id, &user).await
             }
         },
 
