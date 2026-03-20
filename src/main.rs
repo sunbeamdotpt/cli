@@ -1,3 +1,6 @@
+#[macro_use]
+mod error;
+
 mod checks;
 mod cli;
 mod cluster;
@@ -14,16 +17,35 @@ mod tools;
 mod update;
 mod users;
 
-use anyhow::Result;
-
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
-        eprintln!("\nERROR: {e:#}");
-        std::process::exit(1);
-    }
-}
+    // Initialize tracing subscriber.
+    // Respects RUST_LOG env var (e.g. RUST_LOG=debug, RUST_LOG=sunbeam=trace).
+    // Default: warn for dependencies, info for sunbeam.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("sunbeam=info,warn")
+            }),
+        )
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
 
-async fn run() -> Result<()> {
-    cli::dispatch().await
+    match cli::dispatch().await {
+        Ok(()) => {}
+        Err(e) => {
+            let code = e.exit_code();
+            tracing::error!("{e}");
+
+            // Print source chain for non-trivial errors
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                tracing::debug!("caused by: {cause}");
+                source = std::error::Error::source(cause);
+            }
+
+            std::process::exit(code);
+        }
+    }
 }
