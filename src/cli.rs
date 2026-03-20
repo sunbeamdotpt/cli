@@ -149,13 +149,25 @@ pub enum Verb {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
-    /// Log in via browser (OAuth2 authorization code flow).
+    /// Log in to both SSO and Gitea.
     Login {
         /// Domain to authenticate against (e.g. sunbeam.pt).
         #[arg(long)]
         domain: Option<String>,
     },
-    /// Log out (remove cached tokens).
+    /// Log in to SSO only (Hydra OIDC — for Planka, identity management).
+    Sso {
+        /// Domain to authenticate against.
+        #[arg(long)]
+        domain: Option<String>,
+    },
+    /// Log in to Gitea only (personal access token).
+    Git {
+        /// Domain to authenticate against.
+        #[arg(long)]
+        domain: Option<String>,
+    },
+    /// Log out (remove all cached tokens).
     Logout,
     /// Show current authentication status.
     Status,
@@ -1022,11 +1034,15 @@ pub async fn dispatch() -> Result<()> {
         },
 
         Some(Verb::Auth { action }) => match action {
-            None => {
-                crate::auth::cmd_auth_status().await
-            }
+            None => crate::auth::cmd_auth_status().await,
             Some(AuthAction::Login { domain }) => {
-                crate::auth::cmd_auth_login(domain.as_deref()).await
+                crate::auth::cmd_auth_login_all(domain.as_deref()).await
+            }
+            Some(AuthAction::Sso { domain }) => {
+                crate::auth::cmd_auth_sso_login(domain.as_deref()).await
+            }
+            Some(AuthAction::Git { domain }) => {
+                crate::auth::cmd_auth_git_login(domain.as_deref()).await
             }
             Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
             Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,

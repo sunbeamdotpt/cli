@@ -142,7 +142,7 @@ pub struct CardUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub list_id: Option<u64>,
+    pub list_id: Option<serde_json::Value>,
 }
 
 struct PlankaClient {
@@ -168,13 +168,13 @@ mod planka_json {
     #[derive(Debug, Clone, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Card {
-        pub id: u64,
+        pub id: serde_json::Value,
         #[serde(default)]
         pub name: String,
         #[serde(default)]
         pub description: Option<String>,
         #[serde(default)]
-        pub list_id: Option<u64>,
+        pub list_id: Option<serde_json::Value>,
         #[serde(default)]
         pub created_at: Option<String>,
         #[serde(default)]
@@ -208,21 +208,21 @@ mod planka_json {
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct CardMembership {
-        pub card_id: u64,
-        pub user_id: u64,
+        pub card_id: serde_json::Value,
+        pub user_id: serde_json::Value,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct CardLabel {
-        pub card_id: u64,
-        pub label_id: u64,
+        pub card_id: serde_json::Value,
+        pub label_id: serde_json::Value,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Label {
-        pub id: u64,
+        pub id: serde_json::Value,
         #[serde(default)]
         pub name: Option<String>,
     }
@@ -230,7 +230,7 @@ mod planka_json {
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct List {
-        pub id: u64,
+        pub id: serde_json::Value,
         #[serde(default)]
         pub name: String,
     }
@@ -238,7 +238,7 @@ mod planka_json {
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct User {
-        pub id: u64,
+        pub id: serde_json::Value,
         #[serde(default)]
         pub name: Option<String>,
         #[serde(default)]
@@ -301,7 +301,7 @@ mod planka_json {
             // Derive web URL from API base URL (strip `/api`).
             let web_base = base_url.trim_end_matches("/api");
             Ticket {
-                id: format!("planka:{}", self.id),
+                id: format!("p:{}", self.id.as_str().unwrap_or(&self.id.to_string())),
                 source: Source::Planka,
                 title: self.name,
                 description: self.description.unwrap_or_default(),
@@ -342,27 +342,29 @@ impl PlankaClient {
             .build()
             .map_err(|e| SunbeamError::network(format!("Failed to build HTTP client: {e}")))?;
 
-        // Try OIDC exchange first to get a Planka-native JWT.
-        let exchange_url = format!("{base_url}/access-tokens/exchange-using-oidc");
+        // Exchange the Hydra access token for a Planka JWT via our custom endpoint.
+        let exchange_url = format!("{base_url}/access-tokens/exchange-using-token");
         let exchange_resp = http
             .post(&exchange_url)
-            .bearer_auth(&hydra_token)
+            .json(&serde_json::json!({ "token": hydra_token }))
             .send()
-            .await;
+            .await
+            .map_err(|e| SunbeamError::network(format!("Planka token exchange failed: {e}")))?;
 
-        let token = match exchange_resp {
-            Ok(resp) if resp.status().is_success() => {
-                let body: planka_json::ExchangeResponse = resp
-                    .json()
-                    .await
-                    .map_err(|e| SunbeamError::network(format!("Planka OIDC exchange parse error: {e}")))?;
-                body.token
-                    .or(body.item)
-                    .unwrap_or_else(|| hydra_token.clone())
-            }
-            // Exchange not available or failed -- fall back to using the Hydra token directly.
-            _ => hydra_token,
-        };
+        if !exchange_resp.status().is_success() {
+            let status = exchange_resp.status();
+            let body = exchange_resp.text().await.unwrap_or_default();
+            return Err(SunbeamError::identity(format!(
+                "Planka token exchange returned {status}: {body}"
+            )));
+        }
+
+        let body: serde_json::Value = exchange_resp.json().await?;
+        let token = body
+            .get("item")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SunbeamError::identity("Planka exchange response missing 'item' field"))?
+            .to_string();
 
         Ok(Self {
             base_url,
@@ -371,8 +373,66 @@ impl PlankaClient {
         })
     }
 
+    /// Discover all projects and boards, then fetch cards from each.
+    async fn list_all_cards(&self) -> Result<Vec<Ticket>> {
+        // GET /api/projects returns all projects the user has access to,
+        // with included boards.
+        let url = format!("{}/projects", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| SunbeamError::network(format!("Planka list projects: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(SunbeamError::network(format!(
+                "Planka GET projects returned {}",
+                resp.status()
+            )));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        // Extract board IDs — Planka uses string IDs (snowflake-style)
+        let board_ids: Vec<String> = body
+            .get("included")
+            .and_then(|inc| inc.get("boards"))
+            .and_then(|b| b.as_array())
+            .map(|boards| {
+                boards
+                    .iter()
+                    .filter_map(|b| {
+                        b.get("id").and_then(|id| {
+                            id.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| id.as_u64().map(|n| n.to_string()))
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if board_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Fetch cards from each board
+        let mut all_tickets = Vec::new();
+        for board_id in &board_ids {
+            match self.list_cards(board_id).await {
+                Ok(tickets) => all_tickets.extend(tickets),
+                Err(e) => {
+                    crate::output::warn(&format!("Planka board {board_id}: {e}"));
+                }
+            }
+        }
+
+        Ok(all_tickets)
+    }
+
     /// GET /api/boards/{id} and extract all cards.
-    async fn list_cards(&self, board_id: u64) -> Result<Vec<Ticket>> {
+    async fn list_cards(&self, board_id: &str) -> Result<Vec<Ticket>> {
         let url = format!("{}/boards/{board_id}", self.base_url);
         let resp = self
             .http
@@ -501,7 +561,7 @@ impl PlankaClient {
         self.update_card(
             id,
             &CardUpdate {
-                list_id: Some(list_id),
+                list_id: Some(serde_json::Value::Number(list_id.into())),
                 ..Default::default()
             },
         )
@@ -642,7 +702,7 @@ mod gitea_json {
                 .unwrap_or_else(|| format!("{web_base}/{org}/{repo}/issues/{}", self.number));
 
             Ticket {
-                id: format!("gitea:{org}/{repo}#{}", self.number),
+                id: format!("g:{org}/{repo}#{}", self.number),
                 source: Source::Gitea,
                 title: self.title,
                 description: self.body.unwrap_or_default(),
@@ -670,7 +730,8 @@ impl GiteaClient {
     /// Create a new Gitea client using the Hydra OAuth2 token.
     async fn new(domain: &str) -> Result<Self> {
         let base_url = format!("https://src.{domain}/api/v1");
-        let token = get_token().await?;
+        // Gitea needs its own PAT, not the Hydra access token
+        let token = crate::auth::get_gitea_token()?;
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -681,6 +742,25 @@ impl GiteaClient {
             token,
             http,
         })
+    }
+
+    /// Build a request with Gitea PAT auth (`Authorization: token <pat>`).
+    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
+        self.http
+            .get(url)
+            .header("Authorization", format!("token {}", self.token))
+    }
+
+    fn authed_post(&self, url: &str) -> reqwest::RequestBuilder {
+        self.http
+            .post(url)
+            .header("Authorization", format!("token {}", self.token))
+    }
+
+    fn authed_patch(&self, url: &str) -> reqwest::RequestBuilder {
+        self.http
+            .patch(url)
+            .header("Authorization", format!("token {}", self.token))
     }
 
     /// List issues for an org/repo (or search across an org).
@@ -705,7 +785,7 @@ impl GiteaClient {
                 let resp = self
                     .http
                     .get(&url)
-                    .bearer_auth(&self.token)
+                    .header("Authorization", format!("token {}", self.token))
                     .query(&[("state", state), ("type", "issues"), ("limit", "50")])
                     .send()
                     .await
@@ -734,7 +814,7 @@ impl GiteaClient {
                 let repos_resp = self
                     .http
                     .get(&repos_url)
-                    .bearer_auth(&self.token)
+                    .header("Authorization", format!("token {}", self.token))
                     .query(&[("limit", "50")])
                     .send()
                     .await
@@ -774,7 +854,7 @@ impl GiteaClient {
         let resp = self
             .http
             .get(&url)
-            .bearer_auth(&self.token)
+            .header("Authorization", format!("token {}", self.token))
             .send()
             .await
             .map_err(|e| SunbeamError::network(format!("Gitea get_issue: {e}")))?;
@@ -811,7 +891,7 @@ impl GiteaClient {
         let resp = self
             .http
             .post(&url)
-            .bearer_auth(&self.token)
+            .header("Authorization", format!("token {}", self.token))
             .json(&payload)
             .send()
             .await
@@ -844,7 +924,7 @@ impl GiteaClient {
         let resp = self
             .http
             .patch(&url)
-            .bearer_auth(&self.token)
+            .header("Authorization", format!("token {}", self.token))
             .json(updates)
             .send()
             .await
@@ -890,7 +970,7 @@ impl GiteaClient {
         let resp = self
             .http
             .post(&url)
-            .bearer_auth(&self.token)
+            .header("Authorization", format!("token {}", self.token))
             .json(&payload)
             .send()
             .await
@@ -923,7 +1003,7 @@ impl GiteaClient {
         let resp = self
             .http
             .post(&url)
-            .bearer_auth(&self.token)
+            .header("Authorization", format!("token {}", self.token))
             .json(&payload)
             .send()
             .await
@@ -1009,8 +1089,7 @@ pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
     let planka_fut = async {
         if fetch_planka {
             let client = PlankaClient::new(&domain).await?;
-            // Board ID 1 as default; in practice this would be configurable.
-            client.list_cards(1).await
+            client.list_all_cards().await
         } else {
             Ok(vec![])
         }
@@ -1314,7 +1393,7 @@ mod tests {
     fn test_display_ticket_list_table() {
         let tickets = vec![
             Ticket {
-                id: "planka:1".to_string(),
+                id: "p:1".to_string(),
                 source: Source::Planka,
                 title: "Fix login".to_string(),
                 description: String::new(),
@@ -1326,7 +1405,7 @@ mod tests {
                 url: "https://projects.example.com/cards/1".to_string(),
             },
             Ticket {
-                id: "gitea:studio/cli#7".to_string(),
+                id: "g:studio/cli#7".to_string(),
                 source: Source::Gitea,
                 title: "Add tests".to_string(),
                 description: "We need more tests.".to_string(),
@@ -1353,8 +1432,8 @@ mod tests {
             .collect();
 
         let tbl = output::table(&rows, &["ID", "STATUS", "TITLE", "ASSIGNEES", "SOURCE"]);
-        assert!(tbl.contains("planka:1"));
-        assert!(tbl.contains("gitea:studio/cli#7"));
+        assert!(tbl.contains("p:1"));
+        assert!(tbl.contains("g:studio/cli#7"));
         assert!(tbl.contains("open"));
         assert!(tbl.contains("in-progress"));
         assert!(tbl.contains("Fix login"));
@@ -1379,7 +1458,7 @@ mod tests {
         let update = CardUpdate {
             name: Some("New name".to_string()),
             description: None,
-            list_id: Some(5),
+            list_id: Some(serde_json::json!(5)),
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["name"], "New name");
@@ -1411,19 +1490,19 @@ mod tests {
             card_labels: vec![],
             labels: vec![],
             lists: vec![
-                List { id: 1, name: "To Do".to_string() },
-                List { id: 2, name: "In Progress".to_string() },
-                List { id: 3, name: "Done".to_string() },
-                List { id: 4, name: "Archived / Closed".to_string() },
+                List { id: serde_json::json!(1), name: "To Do".to_string() },
+                List { id: serde_json::json!(2), name: "In Progress".to_string() },
+                List { id: serde_json::json!(3), name: "Done".to_string() },
+                List { id: serde_json::json!(4), name: "Archived / Closed".to_string() },
             ],
             users: vec![],
         };
 
-        let make_card = |list_id| Card {
-            id: 1,
+        let make_card = |list_id: u64| Card {
+            id: serde_json::json!(1),
             name: "test".to_string(),
             description: None,
-            list_id: Some(list_id),
+            list_id: Some(serde_json::json!(list_id)),
             created_at: None,
             updated_at: None,
         };
@@ -1466,7 +1545,7 @@ mod tests {
         };
 
         let ticket = issue.to_ticket("https://src.example.com/api/v1", "studio", "app");
-        assert_eq!(ticket.id, "gitea:studio/app#42");
+        assert_eq!(ticket.id, "g:studio/app#42");
         assert_eq!(ticket.source, Source::Gitea);
         assert_eq!(ticket.title, "Bug report");
         assert_eq!(ticket.description, "Something broke");
