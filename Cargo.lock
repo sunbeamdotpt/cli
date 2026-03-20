@@ -3530,6 +3530,7 @@ dependencies = [
  "clap",
  "dirs",
  "flate2",
+ "futures",
  "hmac",
  "k8s-openapi",
  "kube",
@@ -3550,6 +3551,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

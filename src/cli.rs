@@ -326,6 +326,338 @@ fn default_context(env: &Env) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).unwrap()
+    }
+
+    // 1. test_up
+    #[test]
+    fn test_up() {
+        let cli = parse(&["sunbeam", "up"]);
+        assert!(matches!(cli.verb, Some(Verb::Up)));
+    }
+
+    // 2. test_status_no_target
+    #[test]
+    fn test_status_no_target() {
+        let cli = parse(&["sunbeam", "status"]);
+        match cli.verb {
+            Some(Verb::Status { target }) => assert!(target.is_none()),
+            _ => panic!("expected Status"),
+        }
+    }
+
+    // 3. test_status_with_namespace
+    #[test]
+    fn test_status_with_namespace() {
+        let cli = parse(&["sunbeam", "status", "ory"]);
+        match cli.verb {
+            Some(Verb::Status { target }) => assert_eq!(target.unwrap(), "ory"),
+            _ => panic!("expected Status"),
+        }
+    }
+
+    // 4. test_logs_no_follow
+    #[test]
+    fn test_logs_no_follow() {
+        let cli = parse(&["sunbeam", "logs", "ory/kratos"]);
+        match cli.verb {
+            Some(Verb::Logs { target, follow }) => {
+                assert_eq!(target, "ory/kratos");
+                assert!(!follow);
+            }
+            _ => panic!("expected Logs"),
+        }
+    }
+
+    // 5. test_logs_follow_short
+    #[test]
+    fn test_logs_follow_short() {
+        let cli = parse(&["sunbeam", "logs", "ory/kratos", "-f"]);
+        match cli.verb {
+            Some(Verb::Logs { follow, .. }) => assert!(follow),
+            _ => panic!("expected Logs"),
+        }
+    }
+
+    // 6. test_build_proxy
+    #[test]
+    fn test_build_proxy() {
+        let cli = parse(&["sunbeam", "build", "proxy"]);
+        match cli.verb {
+            Some(Verb::Build { what, push, deploy }) => {
+                assert!(matches!(what, BuildTarget::Proxy));
+                assert!(!push);
+                assert!(!deploy);
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    // 7. test_build_deploy_flag
+    #[test]
+    fn test_build_deploy_flag() {
+        let cli = parse(&["sunbeam", "build", "proxy", "--deploy"]);
+        match cli.verb {
+            Some(Verb::Build { deploy, push, .. }) => {
+                assert!(deploy);
+                // clap does not imply --push; that logic is in dispatch()
+                assert!(!push);
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    // 8. test_build_invalid_target
+    #[test]
+    fn test_build_invalid_target() {
+        let result = Cli::try_parse_from(&["sunbeam", "build", "notavalidtarget"]);
+        assert!(result.is_err());
+    }
+
+    // 9. test_user_set_password
+    #[test]
+    fn test_user_set_password() {
+        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com", "hunter2"]);
+        match cli.verb {
+            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
+                assert_eq!(target, "admin@example.com");
+                assert_eq!(password, "hunter2");
+            }
+            _ => panic!("expected User SetPassword"),
+        }
+    }
+
+    // 10. test_user_onboard_basic
+    #[test]
+    fn test_user_onboard_basic() {
+        let cli = parse(&["sunbeam", "user", "onboard", "a@b.com"]);
+        match cli.verb {
+            Some(Verb::User { action: Some(UserAction::Onboard {
+                email, name, schema, no_email, notify, ..
+            }) }) => {
+                assert_eq!(email, "a@b.com");
+                assert_eq!(name, "");
+                assert_eq!(schema, "employee");
+                assert!(!no_email);
+                assert_eq!(notify, "");
+            }
+            _ => panic!("expected User Onboard"),
+        }
+    }
+
+    // 11. test_user_onboard_full
+    #[test]
+    fn test_user_onboard_full() {
+        let cli = parse(&[
+            "sunbeam", "user", "onboard", "a@b.com",
+            "--name", "A B", "--schema", "default", "--no-email",
+            "--job-title", "Engineer", "--department", "Dev",
+            "--office-location", "Paris", "--hire-date", "2026-01-15",
+            "--manager", "boss@b.com",
+        ]);
+        match cli.verb {
+            Some(Verb::User { action: Some(UserAction::Onboard {
+                email, name, schema, no_email, job_title,
+                department, office_location, hire_date, manager, ..
+            }) }) => {
+                assert_eq!(email, "a@b.com");
+                assert_eq!(name, "A B");
+                assert_eq!(schema, "default");
+                assert!(no_email);
+                assert_eq!(job_title, "Engineer");
+                assert_eq!(department, "Dev");
+                assert_eq!(office_location, "Paris");
+                assert_eq!(hire_date, "2026-01-15");
+                assert_eq!(manager, "boss@b.com");
+            }
+            _ => panic!("expected User Onboard"),
+        }
+    }
+
+    // 12. test_apply_no_namespace
+    #[test]
+    fn test_apply_no_namespace() {
+        let cli = parse(&["sunbeam", "apply"]);
+        match cli.verb {
+            Some(Verb::Apply { namespace, .. }) => assert!(namespace.is_none()),
+            _ => panic!("expected Apply"),
+        }
+    }
+
+    // 13. test_apply_with_namespace
+    #[test]
+    fn test_apply_with_namespace() {
+        let cli = parse(&["sunbeam", "apply", "lasuite"]);
+        match cli.verb {
+            Some(Verb::Apply { namespace, .. }) => assert_eq!(namespace.unwrap(), "lasuite"),
+            _ => panic!("expected Apply"),
+        }
+    }
+
+    // 14. test_config_set
+    #[test]
+    fn test_config_set() {
+        let cli = parse(&[
+            "sunbeam", "config", "set",
+            "--host", "user@example.com",
+            "--infra-dir", "/path/to/infra",
+        ]);
+        match cli.verb {
+            Some(Verb::Config { action: Some(ConfigAction::Set { host, infra_dir, .. }) }) => {
+                assert_eq!(host, "user@example.com");
+                assert_eq!(infra_dir, "/path/to/infra");
+            }
+            _ => panic!("expected Config Set"),
+        }
+    }
+
+    // 15. test_config_get / test_config_clear
+    #[test]
+    fn test_config_get() {
+        let cli = parse(&["sunbeam", "config", "get"]);
+        match cli.verb {
+            Some(Verb::Config { action: Some(ConfigAction::Get) }) => {}
+            _ => panic!("expected Config Get"),
+        }
+    }
+
+    #[test]
+    fn test_config_clear() {
+        let cli = parse(&["sunbeam", "config", "clear"]);
+        match cli.verb {
+            Some(Verb::Config { action: Some(ConfigAction::Clear) }) => {}
+            _ => panic!("expected Config Clear"),
+        }
+    }
+
+    // 16. test_no_args_prints_help
+    #[test]
+    fn test_no_args_prints_help() {
+        let cli = parse(&["sunbeam"]);
+        assert!(cli.verb.is_none());
+    }
+
+    // 17. test_get_json_output
+    #[test]
+    fn test_get_json_output() {
+        let cli = parse(&["sunbeam", "get", "ory/kratos-abc", "-o", "json"]);
+        match cli.verb {
+            Some(Verb::Get { target, output }) => {
+                assert_eq!(target, "ory/kratos-abc");
+                assert_eq!(output, "json");
+            }
+            _ => panic!("expected Get"),
+        }
+    }
+
+    // 18. test_check_with_target
+    #[test]
+    fn test_check_with_target() {
+        let cli = parse(&["sunbeam", "check", "devtools"]);
+        match cli.verb {
+            Some(Verb::Check { target }) => assert_eq!(target.unwrap(), "devtools"),
+            _ => panic!("expected Check"),
+        }
+    }
+
+    // 19. test_build_messages_components
+    #[test]
+    fn test_build_messages_backend() {
+        let cli = parse(&["sunbeam", "build", "messages-backend"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesBackend));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_build_messages_frontend() {
+        let cli = parse(&["sunbeam", "build", "messages-frontend"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesFrontend));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_build_messages_mta_in() {
+        let cli = parse(&["sunbeam", "build", "messages-mta-in"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesMtaIn));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_build_messages_mta_out() {
+        let cli = parse(&["sunbeam", "build", "messages-mta-out"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesMtaOut));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_build_messages_mpa() {
+        let cli = parse(&["sunbeam", "build", "messages-mpa"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesMpa));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_build_messages_socks_proxy() {
+        let cli = parse(&["sunbeam", "build", "messages-socks-proxy"]);
+        match cli.verb {
+            Some(Verb::Build { what, .. }) => {
+                assert!(matches!(what, BuildTarget::MessagesSocksProxy));
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    // 20. test_hire_date_validation
+    #[test]
+    fn test_hire_date_valid() {
+        let cli = parse(&[
+            "sunbeam", "user", "onboard", "a@b.com",
+            "--hire-date", "2026-01-15",
+        ]);
+        match cli.verb {
+            Some(Verb::User { action: Some(UserAction::Onboard { hire_date, .. }) }) => {
+                assert_eq!(hire_date, "2026-01-15");
+            }
+            _ => panic!("expected User Onboard"),
+        }
+    }
+
+    #[test]
+    fn test_hire_date_invalid() {
+        let result = Cli::try_parse_from(&[
+            "sunbeam", "user", "onboard", "a@b.com",
+            "--hire-date", "not-a-date",
+        ]);
+        assert!(result.is_err());
+    }
+}
+
 /// Main dispatch function — parse CLI args and route to subcommands.
 pub async fn dispatch() -> Result<()> {
     let cli = Cli::parse();
