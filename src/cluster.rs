@@ -2,10 +2,9 @@
 //!
 //! Pure K8s implementation: no Lima VM operations.
 
+use crate::constants::GITEA_ADMIN_USER;
 use crate::error::{Result, ResultExt, SunbeamError};
 use std::path::PathBuf;
-
-const GITEA_ADMIN_USER: &str = "gitea_admin";
 
 const CERT_MANAGER_URL: &str =
     "https://github.com/cert-manager/cert-manager/releases/download/v1.17.0/cert-manager.yaml";
@@ -161,6 +160,12 @@ async fn ensure_tls_cert(domain: &str) -> Result<()> {
     std::fs::write(&key_path, key_pair.serialize_pem())
         .with_ctx(|| format!("Failed to write {}", key_path.display()))?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
     crate::output::ok(&format!("Cert generated. Domain: {domain}"));
     Ok(())
 }
@@ -237,7 +242,7 @@ async fn wait_for_core() -> Result<()> {
 // Print URLs
 // ---------------------------------------------------------------------------
 
-fn print_urls(domain: &str, gitea_admin_pass: &str) {
+fn print_urls(domain: &str, _gitea_admin_pass: &str) {
     let sep = "\u{2500}".repeat(60);
     println!("\n{sep}");
     println!("  Stack is up.  Domain: {domain}");
@@ -254,7 +259,7 @@ fn print_urls(domain: &str, gitea_admin_pass: &str) {
         (
             "Gitea",
             format!(
-                "https://src.{domain}/  ({GITEA_ADMIN_USER} / {gitea_admin_pass})"
+                "https://src.{domain}/  ({GITEA_ADMIN_USER} / <from openbao>)"
             ),
         ),
     ];
@@ -446,12 +451,11 @@ mod tests {
     #[test]
     fn print_urls_gitea_includes_credentials() {
         let domain = "example.local";
-        let pass = "s3cret";
         let gitea_url = format!(
-            "https://src.{domain}/  ({GITEA_ADMIN_USER} / {pass})"
+            "https://src.{domain}/  ({GITEA_ADMIN_USER} / <from openbao>)"
         );
         assert!(gitea_url.contains(GITEA_ADMIN_USER));
-        assert!(gitea_url.contains(pass));
+        assert!(gitea_url.contains("<from openbao>"));
         assert!(gitea_url.contains(&format!("src.{domain}")));
     }
 }

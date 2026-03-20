@@ -1,17 +1,5 @@
 use crate::error::Result;
-
-pub const MANAGED_NS: &[&str] = &[
-    "data",
-    "devtools",
-    "ingress",
-    "lasuite",
-    "matrix",
-    "media",
-    "monitoring",
-    "ory",
-    "storage",
-    "vault-secrets-operator",
-];
+use crate::constants::MANAGED_NS;
 
 /// Return only the YAML documents that belong to the given namespace.
 pub fn filter_by_namespace(manifests: &str, namespace: &str) -> String {
@@ -109,9 +97,7 @@ pub async fn cmd_apply(env: &str, domain: &str, email: &str, namespace: &str) ->
     // If cert-manager is in the overlay, wait for its webhook then re-apply
     let cert_manager_present = overlay
         .join("../../base/cert-manager")
-        .canonicalize()
-        .map(|p| p.exists())
-        .unwrap_or(false);
+        .exists();
 
     if cert_manager_present && namespace.is_empty() {
         if wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await {
@@ -149,11 +135,18 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
     };
 
     crate::output::ok("Cleaning up immutable Jobs and test Pods...");
+
+    // Prune stale VaultStaticSecrets that share a name with VaultDynamicSecrets
+    prune_stale_vault_static_secrets(&ns_list).await;
+
     for ns in &ns_list {
         // Delete all jobs
         let client = match crate::kube::get_client().await {
             Ok(c) => c,
-            Err(_) => return,
+            Err(e) => {
+                crate::output::warn(&format!("Failed to get kube client: {e}"));
+                return;
+            }
         };
         let jobs: kube::api::Api<k8s_openapi::api::batch::v1::Job> =
             kube::api::Api::namespaced(client.clone(), ns);
@@ -179,6 +172,67 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
                         let dp = kube::api::DeleteParams::default();
                         let _ = pods.delete(name, &dp).await;
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Prune VaultStaticSecrets that share a name with VaultDynamicSecrets in the same namespace.
+async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
+    let client = match crate::kube::get_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            crate::output::warn(&format!("Failed to get kube client for VSS pruning: {e}"));
+            return;
+        }
+    };
+
+    let vss_ar = kube::api::ApiResource {
+        group: "secrets.hashicorp.com".into(),
+        version: "v1beta1".into(),
+        api_version: "secrets.hashicorp.com/v1beta1".into(),
+        kind: "VaultStaticSecret".into(),
+        plural: "vaultstaticsecrets".into(),
+    };
+
+    let vds_ar = kube::api::ApiResource {
+        group: "secrets.hashicorp.com".into(),
+        version: "v1beta1".into(),
+        api_version: "secrets.hashicorp.com/v1beta1".into(),
+        kind: "VaultDynamicSecret".into(),
+        plural: "vaultdynamicsecrets".into(),
+    };
+
+    for ns in namespaces {
+        let vss_api: kube::api::Api<kube::api::DynamicObject> =
+            kube::api::Api::namespaced_with(client.clone(), ns, &vss_ar);
+        let vds_api: kube::api::Api<kube::api::DynamicObject> =
+            kube::api::Api::namespaced_with(client.clone(), ns, &vds_ar);
+
+        let vss_list = match vss_api.list(&kube::api::ListParams::default()).await {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let vds_list = match vds_api.list(&kube::api::ListParams::default()).await {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let vds_names: std::collections::HashSet<String> = vds_list
+            .items
+            .iter()
+            .filter_map(|o| o.metadata.name.clone())
+            .collect();
+
+        for vss in &vss_list.items {
+            if let Some(name) = &vss.metadata.name {
+                if vds_names.contains(name) {
+                    crate::output::ok(&format!(
+                        "Pruning stale VaultStaticSecret {ns}/{name} (replaced by VaultDynamicSecret)"
+                    ));
+                    let dp = kube::api::DeleteParams::default();
+                    let _ = vss_api.delete(name, &dp).await;
                 }
             }
         }
@@ -422,8 +476,7 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
     }
 
     // Build the full exec command: exec deploy/opensearch -n data -c opensearch -- curl ...
-    let mut exec_cmd: Vec<&str> = vec!["curl"];
-    exec_cmd = curl_args;
+    let exec_cmd = curl_args;
 
     match crate::kube::kube_exec("data", "opensearch-0", &exec_cmd, Some("opensearch")).await {
         Ok((0, out)) if !out.is_empty() => Some(out),
