@@ -132,18 +132,42 @@ async fn port_forward(
         .port();
 
     let pod_name = pod_name.to_string();
+    let ns = namespace.to_string();
     let task = tokio::spawn(async move {
+        let mut current_pod = pod_name;
         loop {
             let (mut client_stream, _) = match listener.accept().await {
                 Ok(s) => s,
                 Err(_) => break,
             };
 
-            let mut pf = match pods.portforward(&pod_name, &[remote_port]).await {
+            let pf_result = pods.portforward(&current_pod, &[remote_port]).await;
+            let mut pf = match pf_result {
                 Ok(pf) => pf,
                 Err(e) => {
-                    eprintln!("port-forward error: {e}");
-                    continue;
+                    tracing::warn!("Port-forward failed, re-resolving pod: {e}");
+                    // Re-resolve the pod in case it restarted with a new name
+                    if let Ok(new_client) = k::get_client().await {
+                        let new_pods: Api<Pod> = Api::namespaced(new_client.clone(), &ns);
+                        let lp = ListParams::default();
+                        if let Ok(pod_list) = new_pods.list(&lp).await {
+                            if let Some(name) = pod_list
+                                .items
+                                .iter()
+                                .find(|p| {
+                                    p.metadata
+                                        .name
+                                        .as_deref()
+                                        .map(|n| n.starts_with(current_pod.split('-').next().unwrap_or("")))
+                                        .unwrap_or(false)
+                                })
+                                .and_then(|p| p.metadata.name.clone())
+                            {
+                                current_pod = name;
+                            }
+                        }
+                    }
+                    continue; // next accept() iteration will retry
                 }
             };
 
@@ -928,7 +952,76 @@ async fn seed_kratos_admin_identity(bao: &BaoClient) -> (String, String) {
 // ── cmd_seed — main entry point ─────────────────────────────────────────────
 
 /// Seed OpenBao KV with crypto-random credentials, then mirror to K8s Secrets.
+/// File-based advisory lock for `cmd_seed` to prevent concurrent runs.
+struct SeedLock {
+    path: std::path::PathBuf,
+}
+
+impl SeedLock {
+    fn acquire() -> Result<Self> {
+        let lock_path = dirs::data_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".local/share"))
+            .join("sunbeam")
+            .join("seed.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap())?;
+
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                write!(f, "{}", std::process::id())?;
+                Ok(SeedLock { path: lock_path })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Check if the PID in the file is still alive
+                if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
+                    if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                        // kill(pid, 0) checks if process exists without sending a signal
+                        let alive = is_pid_alive(pid);
+                        if alive {
+                            return Err(SunbeamError::secrets(
+                                "Another sunbeam seed is already running. Wait for it to finish.",
+                            ));
+                        }
+                    }
+                }
+                // Stale lock, remove and retry
+                std::fs::remove_file(&lock_path)?;
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock_path)?;
+                use std::io::Write;
+                write!(f, "{}", std::process::id())?;
+                Ok(SeedLock { path: lock_path })
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl Drop for SeedLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Check if a process with the given PID is still alive.
+fn is_pid_alive(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 pub async fn cmd_seed() -> Result<()> {
+    let _lock = SeedLock::acquire()?;
     step("Seeding secrets...");
 
     let seed_result = seed_openbao().await?;

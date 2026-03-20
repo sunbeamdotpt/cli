@@ -267,8 +267,8 @@ pub enum UserAction {
     SetPassword {
         /// Email or identity ID.
         target: String,
-        /// New password.
-        password: String,
+        /// New password. If omitted, reads from stdin.
+        password: Option<String>,
     },
     /// Onboard new user (create + welcome email).
     Onboard {
@@ -427,7 +427,19 @@ mod tests {
         match cli.verb {
             Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
                 assert_eq!(target, "admin@example.com");
-                assert_eq!(password, "hunter2");
+                assert_eq!(password, Some("hunter2".to_string()));
+            }
+            _ => panic!("expected User SetPassword"),
+        }
+    }
+
+    #[test]
+    fn test_user_set_password_no_password() {
+        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com"]);
+        match cli.verb {
+            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
+                assert_eq!(target, "admin@example.com");
+                assert!(password.is_none());
             }
             _ => panic!("expected User SetPassword"),
         }
@@ -871,7 +883,16 @@ pub async fn dispatch() -> Result<()> {
                 crate::users::cmd_user_enable(&target).await
             }
             Some(UserAction::SetPassword { target, password }) => {
-                crate::users::cmd_user_set_password(&target, &password).await
+                let pw = match password {
+                    Some(p) => p,
+                    None => {
+                        eprint!("Password: ");
+                        let mut pw = String::new();
+                        std::io::stdin().read_line(&mut pw)?;
+                        pw.trim().to_string()
+                    }
+                };
+                crate::users::cmd_user_set_password(&target, &pw).await
             }
             Some(UserAction::Onboard {
                 email,
