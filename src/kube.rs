@@ -712,6 +712,21 @@ mod tests {
         assert_eq!(result, "no match here");
     }
 
+    #[tokio::test]
+    async fn test_ensure_tunnel_noop_when_ssh_host_empty() {
+        // When ssh_host is empty (local dev), ensure_tunnel should return Ok
+        // immediately without spawning any SSH process.
+        // SSH_HOST OnceLock may already be set from another test, but the
+        // default (unset) value is "" which is what we want. If it was set
+        // to a non-empty value by a prior test in the same process, this
+        // test would attempt a real SSH connection and fail — that is acceptable
+        // as a signal that test isolation changed.
+        //
+        // In a fresh test binary SSH_HOST is unset, so ssh_host() returns "".
+        let result = ensure_tunnel().await;
+        assert!(result.is_ok(), "ensure_tunnel should be a no-op when ssh_host is empty");
+    }
+
     #[test]
     fn test_create_secret_data_encoding() {
         // Test that we can build the expected JSON structure for secret creation

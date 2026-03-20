@@ -203,32 +203,43 @@ async fn generate_recovery(base_url: &str, identity_id: &str) -> Result<(String,
 }
 
 /// Find the next sequential employee ID by scanning all employee identities.
+///
+/// Paginates through all identities using `page` and `page_size` params to
+/// avoid missing employee IDs when there are more than 200 identities.
 async fn next_employee_id(base_url: &str) -> Result<String> {
-    let result = kratos_api(
-        base_url,
-        "/identities?page_size=200",
-        "GET",
-        None,
-        &[],
-    )
-    .await?;
-
-    let identities = match result {
-        Some(Value::Array(arr)) => arr,
-        _ => vec![],
-    };
-
     let mut max_num: u64 = 0;
-    for ident in &identities {
-        if let Some(eid) = ident
-            .get("traits")
-            .and_then(|t| t.get("employee_id"))
-            .and_then(|v| v.as_str())
-        {
-            if let Ok(n) = eid.parse::<u64>() {
-                max_num = max_num.max(n);
+    let mut page = 1;
+    loop {
+        let result = kratos_api(
+            base_url,
+            &format!("/identities?page_size=200&page={page}"),
+            "GET",
+            None,
+            &[],
+        )
+        .await?;
+
+        let identities = match result {
+            Some(Value::Array(arr)) if !arr.is_empty() => arr,
+            _ => break,
+        };
+
+        for ident in &identities {
+            if let Some(eid) = ident
+                .get("traits")
+                .and_then(|t| t.get("employee_id"))
+                .and_then(|v| v.as_str())
+            {
+                if let Ok(n) = eid.parse::<u64>() {
+                    max_num = max_num.max(n);
+                }
             }
         }
+
+        if identities.len() < 200 {
+            break; // last page
+        }
+        page += 1;
     }
 
     Ok((max_num + 1).to_string())
