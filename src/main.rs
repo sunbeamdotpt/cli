@@ -1,6 +1,7 @@
 #[macro_use]
 mod error;
 
+mod auth;
 mod checks;
 mod cli;
 mod cluster;
@@ -12,6 +13,7 @@ mod kube;
 mod manifests;
 mod openbao;
 mod output;
+mod pm;
 mod secrets;
 mod services;
 mod tools;
