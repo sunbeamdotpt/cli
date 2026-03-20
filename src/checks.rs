@@ -1,6 +1,6 @@
 //! Service-level health checks — functional probes beyond pod readiness.
 
-use anyhow::Result;
+use crate::error::Result;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use k8s_openapi::api::core::v1::Pod;
@@ -87,7 +87,7 @@ async fn http_get(
     client: &reqwest::Client,
     url: &str,
     headers: Option<&[(&str, &str)]>,
-) -> Result<(u16, Vec<u8>), String> {
+) -> std::result::Result<(u16, Vec<u8>), String> {
     let mut req = client.get(url);
     if let Some(hdrs) = headers {
         for (k, v) in hdrs {

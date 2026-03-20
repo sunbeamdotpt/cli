@@ -1,6 +1,6 @@
 //! Image building, mirroring, and pushing to Gitea registry.
 
-use anyhow::{bail, Context, Result};
+use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -86,7 +86,7 @@ async fn get_build_env() -> Result<BuildEnv> {
         "password",
     )
     .await
-    .context("gitea-admin-credentials secret not found -- run seed first.")?;
+    .ctx("gitea-admin-credentials secret not found -- run seed first.")?;
 
     let platform = if is_prod {
         "linux/amd64".to_string()
@@ -131,7 +131,7 @@ async fn buildctl_build_and_push(
 ) -> Result<()> {
     // Find a free local port for port-forward
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("Failed to bind ephemeral port")?;
+        .ctx("Failed to bind ephemeral port")?;
     let local_port = listener.local_addr()?.port();
     drop(listener);
 
@@ -144,10 +144,10 @@ async fn buildctl_build_and_push(
         }
     });
 
-    let tmpdir = tempfile::TempDir::new().context("Failed to create temp dir")?;
+    let tmpdir = tempfile::TempDir::new().ctx("Failed to create temp dir")?;
     let cfg_path = tmpdir.path().join("config.json");
     std::fs::write(&cfg_path, serde_json::to_string(&docker_cfg)?)
-        .context("Failed to write docker config")?;
+        .ctx("Failed to write docker config")?;
 
     // Start port-forward to buildkitd
     let ctx_arg = format!("--context={}", crate::kube::context());
@@ -165,14 +165,14 @@ async fn buildctl_build_and_push(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("Failed to start buildkitd port-forward")?;
+        .ctx("Failed to start buildkitd port-forward")?;
 
     // Wait for port-forward to become ready
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         if tokio::time::Instant::now() > deadline {
             pf.kill().await.ok();
-            bail!("buildkitd port-forward on :{local_port} did not become ready within 15s");
+            return Err(SunbeamError::tool("buildctl", format!("buildkitd port-forward on :{local_port} did not become ready within 15s")));
         }
         if tokio::net::TcpStream::connect(format!("127.0.0.1:{local_port}"))
             .await
@@ -247,8 +247,8 @@ async fn buildctl_build_and_push(
 
     match result {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => bail!("buildctl exited with status {status}"),
-        Err(e) => bail!("Failed to run buildctl: {e}"),
+        Ok(status) => return Err(SunbeamError::tool("buildctl", format!("exited with status {status}"))),
+        Err(e) => return Err(SunbeamError::tool("buildctl", format!("failed to run: {e}"))),
     }
 }
 
@@ -320,7 +320,7 @@ async fn get_node_addresses() -> Result<Vec<String>> {
     let node_list = api
         .list(&kube::api::ListParams::default())
         .await
-        .context("Failed to list nodes")?;
+        .ctx("Failed to list nodes")?;
 
     let mut addresses = Vec::new();
     for node in &node_list.items {
@@ -387,7 +387,7 @@ async fn ctr_pull_on_nodes(env: &BuildEnv, images: &[String]) -> Result<()> {
 
             match status {
                 Ok(s) if s.success() => ok(&format!("Pulled {img} on {node_ip}")),
-                _ => bail!("ctr pull failed on {node_ip} for {img}"),
+                _ => return Err(SunbeamError::tool("ctr", format!("pull failed on {node_ip} for {img}"))),
             }
         }
     }
@@ -440,7 +440,7 @@ async fn wait_deployment_ready(ns: &str, deployment: &str, timeout_secs: u64) ->
 
     loop {
         if Instant::now() > deadline {
-            bail!("Timed out waiting for deployment {ns}/{deployment}");
+            return Err(SunbeamError::build(format!("Timed out waiting for deployment {ns}/{deployment}")));
         }
 
         if let Some(dep) = api.get_opt(deployment).await? {
@@ -477,10 +477,10 @@ async fn docker_hub_token(repo: &str) -> Result<String> {
     );
     let resp: DockerAuthToken = reqwest::get(&url)
         .await
-        .context("Failed to fetch Docker Hub token")?
+        .ctx("Failed to fetch Docker Hub token")?
         .json()
         .await
-        .context("Failed to parse Docker Hub token response")?;
+        .ctx("Failed to parse Docker Hub token response")?;
     Ok(resp.token)
 }
 
@@ -502,18 +502,18 @@ async fn fetch_manifest_index(
         .header("Accept", accept)
         .send()
         .await
-        .context("Failed to fetch manifest from Docker Hub")?;
+        .ctx("Failed to fetch manifest from Docker Hub")?;
 
     if !resp.status().is_success() {
-        bail!(
+        return Err(SunbeamError::build(format!(
             "Docker Hub returned {} for {repo}:{tag}",
             resp.status()
-        );
+        )));
     }
 
     resp.json()
         .await
-        .context("Failed to parse manifest index JSON")
+        .ctx("Failed to parse manifest index JSON")
 }
 
 /// Build an OCI tar archive containing a patched index that maps both
@@ -729,7 +729,7 @@ pub async fn cmd_mirror() -> Result<()> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .context("Failed to spawn ssh for ctr import")?;
+                .ctx("Failed to spawn ssh for ctr import")?;
 
             if let Some(mut stdin) = import_cmd.stdin.take() {
                 use tokio::io::AsyncWriteExt;
@@ -854,7 +854,7 @@ async fn build_proxy(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let proxy_dir = crate::config::get_repo_root().join("proxy");
     if !proxy_dir.is_dir() {
-        bail!("Proxy source not found at {}", proxy_dir.display());
+        return Err(SunbeamError::build(format!("Proxy source not found at {}", proxy_dir.display())));
     }
 
     let image = format!("{}/studio/proxy:latest", env.registry);
@@ -883,7 +883,7 @@ async fn build_tuwunel(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let tuwunel_dir = crate::config::get_repo_root().join("tuwunel");
     if !tuwunel_dir.is_dir() {
-        bail!("Tuwunel source not found at {}", tuwunel_dir.display());
+        return Err(SunbeamError::build(format!("Tuwunel source not found at {}", tuwunel_dir.display())));
     }
 
     let image = format!("{}/studio/tuwunel:latest", env.registry);
@@ -916,10 +916,10 @@ async fn build_integration(push: bool, deploy: bool) -> Result<()> {
     let dockerignore = integration_service_dir.join(".dockerignore");
 
     if !dockerfile.exists() {
-        bail!(
+        return Err(SunbeamError::build(format!(
             "integration-service Dockerfile not found at {}",
             dockerfile.display()
-        );
+        )));
     }
     if !sunbeam_dir
         .join("integration")
@@ -927,11 +927,11 @@ async fn build_integration(push: bool, deploy: bool) -> Result<()> {
         .join("widgets")
         .is_dir()
     {
-        bail!(
+        return Err(SunbeamError::build(format!(
             "integration repo not found at {} -- \
              run: cd sunbeam && git clone https://github.com/suitenumerique/integration.git",
             sunbeam_dir.join("integration").display()
-        );
+        )));
     }
 
     let image = format!("{}/studio/integration:latest", env.registry);
@@ -974,10 +974,10 @@ async fn build_kratos_admin(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let kratos_admin_dir = crate::config::get_repo_root().join("kratos-admin");
     if !kratos_admin_dir.is_dir() {
-        bail!(
+        return Err(SunbeamError::build(format!(
             "kratos-admin source not found at {}",
             kratos_admin_dir.display()
-        );
+        )));
     }
 
     let image = format!("{}/studio/kratos-admin-ui:latest", env.registry);
@@ -1006,7 +1006,7 @@ async fn build_meet(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let meet_dir = crate::config::get_repo_root().join("meet");
     if !meet_dir.is_dir() {
-        bail!("meet source not found at {}", meet_dir.display());
+        return Err(SunbeamError::build(format!("meet source not found at {}", meet_dir.display())));
     }
 
     let backend_image = format!("{}/studio/meet-backend:latest", env.registry);
@@ -1031,10 +1031,10 @@ async fn build_meet(push: bool, deploy: bool) -> Result<()> {
     step(&format!("Building meet-frontend -> {frontend_image} ..."));
     let frontend_dockerfile = meet_dir.join("src").join("frontend").join("Dockerfile");
     if !frontend_dockerfile.exists() {
-        bail!(
+        return Err(SunbeamError::build(format!(
             "meet frontend Dockerfile not found at {}",
             frontend_dockerfile.display()
-        );
+        )));
     }
 
     let mut build_args = HashMap::new();
@@ -1070,14 +1070,14 @@ async fn build_people(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let people_dir = crate::config::get_repo_root().join("people");
     if !people_dir.is_dir() {
-        bail!("people source not found at {}", people_dir.display());
+        return Err(SunbeamError::build(format!("people source not found at {}", people_dir.display())));
     }
 
     let workspace_dir = people_dir.join("src").join("frontend");
     let app_dir = workspace_dir.join("apps").join("desk");
     let dockerfile = workspace_dir.join("Dockerfile");
     if !dockerfile.exists() {
-        bail!("Dockerfile not found at {}", dockerfile.display());
+        return Err(SunbeamError::build(format!("Dockerfile not found at {}", dockerfile.display())));
     }
 
     let image = format!("{}/studio/people-frontend:latest", env.registry);
@@ -1090,9 +1090,9 @@ async fn build_people(push: bool, deploy: bool) -> Result<()> {
         .current_dir(&workspace_dir)
         .status()
         .await
-        .context("Failed to run yarn install")?;
+        .ctx("Failed to run yarn install")?;
     if !yarn_status.success() {
-        bail!("yarn install failed");
+        return Err(SunbeamError::tool("yarn", "install failed"));
     }
 
     // cunningham design tokens
@@ -1106,9 +1106,9 @@ async fn build_people(push: bool, deploy: bool) -> Result<()> {
         .current_dir(&app_dir)
         .status()
         .await
-        .context("Failed to run cunningham")?;
+        .ctx("Failed to run cunningham")?;
     if !cunningham_status.success() {
-        bail!("cunningham failed");
+        return Err(SunbeamError::tool("cunningham", "design token generation failed"));
     }
 
     let mut build_args = HashMap::new();
@@ -1177,7 +1177,7 @@ async fn build_messages(what: &str, push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let messages_dir = crate::config::get_repo_root().join("messages");
     if !messages_dir.is_dir() {
-        bail!("messages source not found at {}", messages_dir.display());
+        return Err(SunbeamError::build(format!("messages source not found at {}", messages_dir.display())));
     }
 
     let components: Vec<_> = if what == "messages" {
@@ -1278,10 +1278,10 @@ async fn build_la_suite_frontend(
     let dockerfile = repo_dir.join(dockerfile_rel);
 
     if !repo_dir.is_dir() {
-        bail!("{app} source not found at {}", repo_dir.display());
+        return Err(SunbeamError::build(format!("{app} source not found at {}", repo_dir.display())));
     }
     if !dockerfile.exists() {
-        bail!("Dockerfile not found at {}", dockerfile.display());
+        return Err(SunbeamError::build(format!("Dockerfile not found at {}", dockerfile.display())));
     }
 
     let image = format!("{}/studio/{image_name}:latest", env.registry);
@@ -1293,9 +1293,9 @@ async fn build_la_suite_frontend(
         .current_dir(&workspace_dir)
         .status()
         .await
-        .context("Failed to run yarn install")?;
+        .ctx("Failed to run yarn install")?;
     if !yarn_status.success() {
-        bail!("yarn install failed");
+        return Err(SunbeamError::tool("yarn", "install failed"));
     }
 
     ok("Regenerating cunningham design tokens (yarn build-theme)...");
@@ -1304,9 +1304,9 @@ async fn build_la_suite_frontend(
         .current_dir(&app_dir)
         .status()
         .await
-        .context("Failed to run yarn build-theme")?;
+        .ctx("Failed to run yarn build-theme")?;
     if !theme_status.success() {
-        bail!("yarn build-theme failed");
+        return Err(SunbeamError::tool("yarn", "build-theme failed"));
     }
 
     let mut build_args = HashMap::new();
@@ -1338,7 +1338,7 @@ async fn patch_dockerfile_uv(
     platform: &str,
 ) -> Result<(PathBuf, Vec<PathBuf>)> {
     let content = std::fs::read_to_string(dockerfile_path)
-        .context("Failed to read Dockerfile for uv patching")?;
+        .ctx("Failed to read Dockerfile for uv patching")?;
 
     // Match COPY --from=ghcr.io/astral-sh/uv@sha256:... /uv /uvx /bin/
     let original_copy = content
@@ -1408,7 +1408,7 @@ async fn patch_dockerfile_uv(
     // Download tarball
     let response = reqwest::get(&url)
         .await
-        .context("Failed to download uv release")?;
+        .ctx("Failed to download uv release")?;
     let tarball_bytes = response.bytes().await?;
 
     // Extract uv and uvx from tarball
@@ -1456,7 +1456,7 @@ async fn build_projects(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let projects_dir = crate::config::get_repo_root().join("projects");
     if !projects_dir.is_dir() {
-        bail!("projects source not found at {}", projects_dir.display());
+        return Err(SunbeamError::build(format!("projects source not found at {}", projects_dir.display())));
     }
 
     let image = format!("{}/studio/projects:latest", env.registry);
@@ -1485,7 +1485,7 @@ async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
     let env = get_build_env().await?;
     let cal_dir = crate::config::get_repo_root().join("calendars");
     if !cal_dir.is_dir() {
-        bail!("calendars source not found at {}", cal_dir.display());
+        return Err(SunbeamError::build(format!("calendars source not found at {}", cal_dir.display())));
     }
 
     let backend_dir = cal_dir.join("src").join("backend");

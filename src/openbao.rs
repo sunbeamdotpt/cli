@@ -3,7 +3,7 @@
 //! Replaces all `kubectl exec openbao-0 -- sh -c "bao ..."` calls from the
 //! Python version with direct HTTP API calls via port-forward to openbao:8200.
 
-use anyhow::{bail, Context, Result};
+use crate::error::{Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -96,13 +96,13 @@ impl BaoClient {
             .get(format!("{}/v1/sys/seal-status", self.base_url))
             .send()
             .await
-            .context("Failed to connect to OpenBao")?;
+            .ctx("Failed to connect to OpenBao")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             bail!("OpenBao seal-status returned {status}: {body}");
         }
-        resp.json().await.context("Failed to parse seal status")
+        resp.json().await.ctx("Failed to parse seal status")
     }
 
     /// Initialize OpenBao with the given number of key shares and threshold.
@@ -122,14 +122,14 @@ impl BaoClient {
             })
             .send()
             .await
-            .context("Failed to initialize OpenBao")?;
+            .ctx("Failed to initialize OpenBao")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             bail!("OpenBao init returned {status}: {body}");
         }
-        resp.json().await.context("Failed to parse init response")
+        resp.json().await.ctx("Failed to parse init response")
     }
 
     /// Unseal OpenBao with one key share.
@@ -145,14 +145,14 @@ impl BaoClient {
             .json(&UnsealRequest { key })
             .send()
             .await
-            .context("Failed to unseal OpenBao")?;
+            .ctx("Failed to unseal OpenBao")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             bail!("OpenBao unseal returned {status}: {body}");
         }
-        resp.json().await.context("Failed to parse unseal response")
+        resp.json().await.ctx("Failed to parse unseal response")
     }
 
     // ── Secrets engine management ───────────────────────────────────────
@@ -172,7 +172,7 @@ impl BaoClient {
             })
             .send()
             .await
-            .context("Failed to enable secrets engine")?;
+            .ctx("Failed to enable secrets engine")?;
 
         let status = resp.status();
         if status.is_success() || status.as_u16() == 400 {
@@ -193,7 +193,7 @@ impl BaoClient {
             .request(reqwest::Method::GET, &format!("{mount}/data/{path}"))
             .send()
             .await
-            .context("Failed to read KV secret")?;
+            .ctx("Failed to read KV secret")?;
 
         if resp.status().as_u16() == 404 {
             return Ok(None);
@@ -204,7 +204,7 @@ impl BaoClient {
             bail!("KV get {mount}/{path} returned {status}: {body}");
         }
 
-        let kv_resp: KvReadResponse = resp.json().await.context("Failed to parse KV response")?;
+        let kv_resp: KvReadResponse = resp.json().await.ctx("Failed to parse KV response")?;
         let data = kv_resp
             .data
             .and_then(|d| d.data)
@@ -251,7 +251,7 @@ impl BaoClient {
             .json(&KvWriteRequest { data })
             .send()
             .await
-            .context("Failed to write KV secret")?;
+            .ctx("Failed to write KV secret")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -279,7 +279,7 @@ impl BaoClient {
             .json(&KvWriteRequest { data })
             .send()
             .await
-            .context("Failed to patch KV secret")?;
+            .ctx("Failed to patch KV secret")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -295,7 +295,7 @@ impl BaoClient {
             .request(reqwest::Method::DELETE, &format!("{mount}/data/{path}"))
             .send()
             .await
-            .context("Failed to delete KV secret")?;
+            .ctx("Failed to delete KV secret")?;
 
         // 404 is fine (already deleted)
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
@@ -323,7 +323,7 @@ impl BaoClient {
             })
             .send()
             .await
-            .context("Failed to enable auth method")?;
+            .ctx("Failed to enable auth method")?;
 
         let status = resp.status();
         if status.is_success() || status.as_u16() == 400 {
@@ -349,7 +349,7 @@ impl BaoClient {
             .json(&PolicyRequest { policy: policy_hcl })
             .send()
             .await
-            .context("Failed to write policy")?;
+            .ctx("Failed to write policy")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -370,7 +370,7 @@ impl BaoClient {
             .json(data)
             .send()
             .await
-            .with_context(|| format!("Failed to write to {path}"))?;
+            .with_ctx(|| format!("Failed to write to {path}"))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -382,7 +382,7 @@ impl BaoClient {
         if body.is_empty() {
             Ok(serde_json::Value::Null)
         } else {
-            serde_json::from_str(&body).context("Failed to parse write response")
+            serde_json::from_str(&body).ctx("Failed to parse write response")
         }
     }
 
@@ -392,7 +392,7 @@ impl BaoClient {
             .request(reqwest::Method::GET, path)
             .send()
             .await
-            .with_context(|| format!("Failed to read {path}"))?;
+            .with_ctx(|| format!("Failed to read {path}"))?;
 
         if resp.status().as_u16() == 404 {
             return Ok(None);

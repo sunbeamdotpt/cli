@@ -1,9 +1,9 @@
 //! User management -- Kratos identity operations via port-forwarded admin API.
 
-use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::io::Write;
 
+use crate::error::{Result, ResultExt, SunbeamError};
 use crate::output::{ok, step, table, warn};
 
 const SMTP_LOCAL_PORT: u16 = 10025;
@@ -33,7 +33,7 @@ fn spawn_port_forward(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .with_context(|| format!("Failed to spawn port-forward to {ns}/svc/{svc}"))?;
+        .with_ctx(|| format!("Failed to spawn port-forward to {ns}/svc/{svc}"))?;
 
     // Give the port-forward time to bind
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -99,7 +99,7 @@ fn api(
         req = req.json(b);
     }
 
-    let resp = req.send().with_context(|| format!("HTTP {method} {url} failed"))?;
+    let resp = req.send().with_ctx(|| format!("HTTP {method} {url} failed"))?;
     let status = resp.status().as_u16();
 
     if !resp.status().is_success() {
@@ -115,7 +115,7 @@ fn api(
         return Ok(None);
     }
     let val: Value = serde_json::from_str(&text)
-        .with_context(|| format!("Failed to parse API response as JSON: {text}"))?;
+        .with_ctx(|| format!("Failed to parse API response as JSON: {text}"))?;
     Ok(Some(val))
 }
 
@@ -158,7 +158,7 @@ fn find_identity(base_url: &str, target: &str, required: bool) -> Result<Option<
     }
 
     if required {
-        bail!("Identity not found: {target}");
+        return Err(SunbeamError::identity(format!("Identity not found: {target}")));
     }
     Ok(None)
 }
@@ -290,7 +290,7 @@ fn identity_id(identity: &Value) -> Result<String> {
         .get("id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .context("Identity missing 'id' field")
+        .ok_or_else(|| SunbeamError::identity("Identity missing 'id' field"))
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ pub async fn cmd_user_get(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     drop(pf);
 
     println!("{}", serde_json::to_string_pretty(&identity)?);
@@ -372,7 +372,7 @@ pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result
 
     let pf = PortForward::kratos()?;
     let identity = kratos_api(&pf.base_url, "/identities", "POST", Some(&body), &[])?
-        .context("Failed to create identity")?;
+        .ok_or_else(|| SunbeamError::identity("Failed to create identity"))?;
 
     let iid = identity_id(&identity)?;
     ok(&format!("Created identity: {iid}"));
@@ -401,7 +401,7 @@ pub async fn cmd_user_delete(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
     kratos_api(
         &pf.base_url,
@@ -421,7 +421,7 @@ pub async fn cmd_user_recover(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
     let (link, code) = generate_recovery(&pf.base_url, &iid)?;
     drop(pf);
@@ -438,7 +438,7 @@ pub async fn cmd_user_disable(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
 
     let put_body = identity_put_body(&identity, Some("inactive"), None);
@@ -471,7 +471,7 @@ pub async fn cmd_user_enable(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
 
     let put_body = identity_put_body(&identity, Some("active"), None);
@@ -493,7 +493,7 @@ pub async fn cmd_user_set_password(target: &str, password: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
 
     let extra = serde_json::json!({
@@ -577,15 +577,17 @@ Messages (Matrix):
 
     let from: Mailbox = format!("Sunbeam Studios <noreply@{domain}>")
         .parse()
-        .context("Invalid from address")?;
-    let to: Mailbox = email.parse().context("Invalid recipient address")?;
+        .map_err(|e| SunbeamError::Other(format!("Invalid from address: {e}")))?;
+    let to: Mailbox = email
+        .parse()
+        .map_err(|e| SunbeamError::Other(format!("Invalid recipient address: {e}")))?;
 
     let message = Message::builder()
         .from(from)
         .to(to)
         .subject("Welcome to Sunbeam Studios -- Set Your Password")
         .body(body_text)
-        .context("Failed to build email message")?;
+        .ctx("Failed to build email message")?;
 
     let _pf = PortForward::new("lasuite", "postfix", SMTP_LOCAL_PORT, 25)?;
 
@@ -595,7 +597,7 @@ Messages (Matrix):
 
     mailer
         .send(&message)
-        .context("Failed to send welcome email via SMTP")?;
+        .ctx("Failed to send welcome email via SMTP")?;
 
     ok(&format!("Welcome email sent to {email}"));
     Ok(())
@@ -669,7 +671,7 @@ pub async fn cmd_user_onboard(
             });
 
             let identity = kratos_api(&pf.base_url, "/identities", "POST", Some(&body), &[])?
-                .context("Failed to create identity")?;
+                .ok_or_else(|| SunbeamError::identity("Failed to create identity"))?;
 
             let iid = identity_id(&identity)?;
             ok(&format!("Created identity: {iid}"));
@@ -729,7 +731,7 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
 
     let pf = PortForward::kratos()?;
     let identity = find_identity(&pf.base_url, target, true)?
-        .context("Identity not found")?;
+        .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
 
     step("Disabling identity...");

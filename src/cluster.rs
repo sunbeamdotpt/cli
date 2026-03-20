@@ -2,7 +2,7 @@
 //!
 //! Pure K8s implementation: no Lima VM operations.
 
-use anyhow::{bail, Context, Result};
+use crate::error::{Result, ResultExt, SunbeamError};
 use std::path::PathBuf;
 
 const GITEA_ADMIN_USER: &str = "gitea_admin";
@@ -36,10 +36,10 @@ async fn ensure_cert_manager() -> Result<()> {
     // Download and apply cert-manager YAML
     let body = reqwest::get(CERT_MANAGER_URL)
         .await
-        .context("Failed to download cert-manager manifest")?
+        .ctx("Failed to download cert-manager manifest")?
         .text()
         .await
-        .context("Failed to read cert-manager manifest body")?;
+        .ctx("Failed to read cert-manager manifest body")?;
 
     crate::kube::kube_apply(&body).await?;
 
@@ -73,7 +73,7 @@ async fn ensure_linkerd() -> Result<()> {
     crate::output::ok("Installing Gateway API CRDs...");
     let gateway_body = reqwest::get(GATEWAY_API_CRDS_URL)
         .await
-        .context("Failed to download Gateway API CRDs")?
+        .ctx("Failed to download Gateway API CRDs")?
         .text()
         .await?;
 
@@ -86,11 +86,11 @@ async fn ensure_linkerd() -> Result<()> {
         .args(["install", "--crds"])
         .output()
         .await
-        .context("Failed to run `linkerd install --crds`")?;
+        .ctx("Failed to run `linkerd install --crds`")?;
 
     if !crds_output.status.success() {
         let stderr = String::from_utf8_lossy(&crds_output.stderr);
-        bail!("linkerd install --crds failed: {stderr}");
+        return Err(SunbeamError::tool("linkerd", format!("install --crds failed: {stderr}")));
     }
     let crds = String::from_utf8_lossy(&crds_output.stdout);
     crate::kube::kube_apply(&crds).await?;
@@ -101,11 +101,11 @@ async fn ensure_linkerd() -> Result<()> {
         .args(["install"])
         .output()
         .await
-        .context("Failed to run `linkerd install`")?;
+        .ctx("Failed to run `linkerd install`")?;
 
     if !cp_output.status.success() {
         let stderr = String::from_utf8_lossy(&cp_output.stderr);
-        bail!("linkerd install failed: {stderr}");
+        return Err(SunbeamError::tool("linkerd", format!("install failed: {stderr}")));
     }
     let cp = String::from_utf8_lossy(&cp_output.stdout);
     crate::kube::kube_apply(&cp).await?;
@@ -141,24 +141,25 @@ async fn ensure_tls_cert(domain: &str) -> Result<()> {
 
     crate::output::ok(&format!("Generating wildcard cert for *.{domain}..."));
     std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create secrets dir: {}", dir.display()))?;
+        .with_ctx(|| format!("Failed to create secrets dir: {}", dir.display()))?;
 
     let subject_alt_names = vec![format!("*.{domain}")];
     let mut params = rcgen::CertificateParams::new(subject_alt_names)
-        .context("Failed to create certificate params")?;
+        .map_err(|e| SunbeamError::kube(format!("Failed to create certificate params: {e}")))?;
     params
         .distinguished_name
         .push(rcgen::DnType::CommonName, format!("*.{domain}"));
 
-    let key_pair = rcgen::KeyPair::generate().context("Failed to generate key pair")?;
+    let key_pair = rcgen::KeyPair::generate()
+        .map_err(|e| SunbeamError::kube(format!("Failed to generate key pair: {e}")))?;
     let cert = params
         .self_signed(&key_pair)
-        .context("Failed to generate self-signed certificate")?;
+        .map_err(|e| SunbeamError::kube(format!("Failed to generate self-signed certificate: {e}")))?;
 
     std::fs::write(&cert_path, cert.pem())
-        .with_context(|| format!("Failed to write {}", cert_path.display()))?;
+        .with_ctx(|| format!("Failed to write {}", cert_path.display()))?;
     std::fs::write(&key_path, key_pair.serialize_pem())
-        .with_context(|| format!("Failed to write {}", key_path.display()))?;
+        .with_ctx(|| format!("Failed to write {}", key_path.display()))?;
 
     crate::output::ok(&format!("Cert generated. Domain: {domain}"));
     Ok(())
@@ -176,9 +177,9 @@ async fn ensure_tls_secret(domain: &str) -> Result<()> {
 
     let dir = secrets_dir();
     let cert_pem =
-        std::fs::read_to_string(dir.join("tls.crt")).context("Failed to read tls.crt")?;
+        std::fs::read_to_string(dir.join("tls.crt")).ctx("Failed to read tls.crt")?;
     let key_pem =
-        std::fs::read_to_string(dir.join("tls.key")).context("Failed to read tls.key")?;
+        std::fs::read_to_string(dir.join("tls.key")).ctx("Failed to read tls.key")?;
 
     // Create TLS secret via kube-rs
     let client = crate::kube::get_client().await?;
@@ -211,7 +212,7 @@ async fn ensure_tls_secret(domain: &str) -> Result<()> {
     let pp = kube::api::PatchParams::apply("sunbeam").force();
     api.patch("pingora-tls", &pp, &kube::api::Patch::Apply(secret_obj))
         .await
-        .context("Failed to create TLS secret")?;
+        .ctx("Failed to create TLS secret")?;
 
     crate::output::ok("Done.");
     Ok(())
@@ -289,7 +290,7 @@ async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) -> Result<(
 
     loop {
         if Instant::now() > deadline {
-            bail!("Timed out waiting for deployment {ns}/{deployment}");
+            return Err(SunbeamError::kube(format!("Timed out waiting for deployment {ns}/{deployment}")));
         }
 
         match api.get_opt(deployment).await? {

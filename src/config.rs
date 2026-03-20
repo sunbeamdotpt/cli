@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -47,7 +47,7 @@ pub fn load_config() -> SunbeamConfig {
 pub fn save_config(config: &SunbeamConfig) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
+        std::fs::create_dir_all(parent).with_ctx(|| {
             format!(
                 "Failed to create config directory: {}",
                 parent.display()
@@ -56,7 +56,7 @@ pub fn save_config(config: &SunbeamConfig) -> Result<()> {
     }
     let content = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, content)
-        .with_context(|| format!("Failed to save config to {}", path.display()))?;
+        .with_ctx(|| format!("Failed to save config to {}", path.display()))?;
     crate::output::ok(&format!("Configuration saved to {}", path.display()));
     Ok(())
 }
@@ -114,7 +114,7 @@ pub fn clear_config() -> Result<()> {
     let path = config_path();
     if path.exists() {
         std::fs::remove_file(&path)
-            .with_context(|| format!("Failed to remove {}", path.display()))?;
+            .with_ctx(|| format!("Failed to remove {}", path.display()))?;
         crate::output::ok(&format!(
             "Configuration cleared from {}",
             path.display()

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use crate::error::{Result, ResultExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -141,7 +141,7 @@ pub async fn cmd_update() -> Result<()> {
     let binary_artifact = artifacts
         .iter()
         .find(|a| a.name == wanted)
-        .with_context(|| format!("No artifact found for platform '{wanted}'"))?;
+        .with_ctx(|| format!("No artifact found for platform '{wanted}'"))?;
 
     let checksums_artifact = artifacts
         .iter()
@@ -157,7 +157,7 @@ pub async fn cmd_update() -> Result<()> {
         .send()
         .await?
         .error_for_status()
-        .context("Failed to download binary artifact")?
+        .ctx("Failed to download binary artifact")?
         .bytes()
         .await?;
 
@@ -174,7 +174,7 @@ pub async fn cmd_update() -> Result<()> {
             .send()
             .await?
             .error_for_status()
-            .context("Failed to download checksums")?
+            .ctx("Failed to download checksums")?
             .text()
             .await?;
 
@@ -186,7 +186,7 @@ pub async fn cmd_update() -> Result<()> {
 
     // 5. Atomic self-replace
     crate::output::step("Installing update...");
-    let current_exe = std::env::current_exe().context("Failed to determine current executable path")?;
+    let current_exe = std::env::current_exe().ctx("Failed to determine current executable path")?;
     atomic_replace(&current_exe, &binary_bytes)?;
 
     crate::output::ok(&format!(
@@ -273,7 +273,7 @@ async fn fetch_latest_commit(client: &reqwest::Client, forge_url: &str) -> Resul
         .send()
         .await?
         .error_for_status()
-        .context("Failed to query mainline branch")?
+        .ctx("Failed to query mainline branch")?
         .json()
         .await?;
     Ok(resp.commit.id)
@@ -287,7 +287,7 @@ async fn fetch_artifacts(client: &reqwest::Client, forge_url: &str) -> Result<Ve
         .send()
         .await?
         .error_for_status()
-        .context("Failed to query CI artifacts")?
+        .ctx("Failed to query CI artifacts")?
         .json()
         .await?;
     Ok(resp.artifacts)
@@ -329,23 +329,23 @@ fn verify_checksum(binary: &[u8], artifact_name: &str, checksums_text: &str) -> 
 fn atomic_replace(target: &std::path::Path, new_bytes: &[u8]) -> Result<()> {
     let parent = target
         .parent()
-        .context("Cannot determine parent directory of current executable")?;
+        .ctx("Cannot determine parent directory of current executable")?;
 
     let tmp_path = parent.join(".sunbeam-update.tmp");
 
     // Write new binary
-    fs::write(&tmp_path, new_bytes).context("Failed to write temporary update file")?;
+    fs::write(&tmp_path, new_bytes).ctx("Failed to write temporary update file")?;
 
     // Set executable permissions (unix)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o755))
-            .context("Failed to set executable permissions")?;
+            .ctx("Failed to set executable permissions")?;
     }
 
     // Atomic rename
-    fs::rename(&tmp_path, target).context("Failed to replace current executable")?;
+    fs::rename(&tmp_path, target).ctx("Failed to replace current executable")?;
 
     Ok(())
 }
