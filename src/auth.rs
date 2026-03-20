@@ -20,6 +20,9 @@ pub struct AuthTokens {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
     pub domain: String,
+    /// Gitea personal access token (created during auth login).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gitea_token: Option<String>,
 }
 
 /// Default client ID when the K8s secret is unavailable.
@@ -265,6 +268,7 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
         expires_at,
         id_token: token_resp.id_token.or_else(|| cached.id_token.clone()),
         domain: cached.domain.clone(),
+        gitea_token: cached.gitea_token.clone(),
     };
 
     write_cache(&new_tokens)?;
@@ -342,6 +346,7 @@ async fn bind_callback_listener() -> Result<(tokio::net::TcpListener, u16)> {
 async fn wait_for_callback(
     listener: tokio::net::TcpListener,
     expected_state: &str,
+    redirect_url: Option<&str>,
 ) -> Result<CallbackParams> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -400,23 +405,44 @@ async fn wait_for_callback(
         ));
     }
 
-    // Send success response
-    let html = concat!(
-        "<!DOCTYPE html><html><head><style>",
-        "body{font-family:system-ui,sans-serif;display:flex;justify-content:center;",
-        "align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}",
-        ".card{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}",
-        "h2{margin:0 0 1rem}p{color:#9ca3af}",
-        "</style></head><body><div class='card'>",
-        "<h2>Authentication successful</h2>",
-        "<p>You can close this tab and return to the terminal.</p>",
-        "</div></body></html>"
-    );
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        html.len(),
-        html
-    );
+    // Send success response — redirect to next step if provided, otherwise show done page
+    let response = if let Some(next_url) = redirect_url {
+        let html = format!(
+            "<!DOCTYPE html><html><head>\
+             <meta http-equiv='refresh' content='1;url={next_url}'>\
+             <style>\
+             body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;\
+             align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}}\
+             .card{{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}}\
+             h2{{margin:0 0 1rem}}p{{color:#9ca3af}}a{{color:#d97706}}\
+             </style></head><body><div class='card'>\
+             <h2>SSO login successful</h2>\
+             <p>Redirecting to Gitea token setup...</p>\
+             <p><a href='{next_url}'>Click here if not redirected</a></p>\
+             </div></body></html>"
+        );
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        )
+    } else {
+        let html = "\
+             <!DOCTYPE html><html><head><style>\
+             body{font-family:system-ui,sans-serif;display:flex;justify-content:center;\
+             align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}\
+             .card{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}\
+             h2{margin:0 0 1rem}p{color:#9ca3af}\
+             </style></head><body><div class='card'>\
+             <h2>Authentication successful</h2>\
+             <p>You can close this tab and return to the terminal.</p>\
+             </div></body></html>";
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        )
+    };
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
 
@@ -464,7 +490,12 @@ pub async fn get_token() -> Result<String> {
 }
 
 /// Interactive browser-based OAuth2 login.
-pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
+/// SSO login — Hydra OIDC authorization code flow with PKCE.
+/// `gitea_redirect`: if Some, the browser callback page auto-redirects to Gitea token page.
+pub async fn cmd_auth_sso_login_with_redirect(
+    domain_override: Option<&str>,
+    gitea_redirect: Option<&str>,
+) -> Result<()> {
     crate::output::step("Authenticating with Hydra");
 
     // Resolve domain: explicit flag > cached token domain > config > cluster discovery
@@ -507,7 +538,7 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
 
     // Wait for callback
     crate::output::ok("Waiting for authentication callback...");
-    let callback = wait_for_callback(listener, &state).await?;
+    let callback = wait_for_callback(listener, &state, gitea_redirect).await?;
 
     // Exchange code for tokens
     crate::output::ok("Exchanging authorization code for tokens...");
@@ -529,22 +560,115 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         expires_at,
         id_token: token_resp.id_token.clone(),
         domain: domain.clone(),
+        gitea_token: None,
     };
 
-    write_cache(&tokens)?;
-
     // Print success with email if available
-    if let Some(ref id_token) = tokens.id_token {
-        if let Some(email) = extract_email(id_token) {
-            crate::output::ok(&format!("Logged in as {email}"));
-        } else {
-            crate::output::ok("Logged in successfully");
-        }
+    let email = tokens
+        .id_token
+        .as_ref()
+        .and_then(|t| extract_email(t));
+    if let Some(ref email) = email {
+        crate::output::ok(&format!("Logged in as {email}"));
     } else {
         crate::output::ok("Logged in successfully");
     }
 
+    write_cache(&tokens)?;
     Ok(())
+}
+
+/// SSO login — standalone (no redirect after callback).
+pub async fn cmd_auth_sso_login(domain_override: Option<&str>) -> Result<()> {
+    cmd_auth_sso_login_with_redirect(domain_override, None).await
+}
+
+/// Gitea token login — opens the PAT creation page and prompts for the token.
+pub async fn cmd_auth_git_login(domain_override: Option<&str>) -> Result<()> {
+    crate::output::step("Setting up Gitea API access");
+
+    let domain = resolve_domain(domain_override).await?;
+    let url = format!("https://src.{domain}/user/settings/applications");
+
+    crate::output::ok("Opening Gitea token page in your browser...");
+    crate::output::ok("Create a token with all scopes selected, then paste it below.");
+    println!("\n    {url}\n");
+
+    let _ = open_browser(&url);
+
+    // Prompt for the token
+    eprint!("    Gitea token: ");
+    let mut token = String::new();
+    std::io::stdin()
+        .read_line(&mut token)
+        .ctx("Failed to read token from stdin")?;
+    let token = token.trim().to_string();
+
+    if token.is_empty() {
+        return Err(SunbeamError::identity("No token provided."));
+    }
+
+    // Verify the token works
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("https://src.{domain}/api/v1/user"))
+        .header("Authorization", format!("token {token}"))
+        .send()
+        .await
+        .ctx("Failed to verify Gitea token")?;
+
+    if !resp.status().is_success() {
+        return Err(SunbeamError::identity(format!(
+            "Gitea token is invalid (HTTP {}). Check the token and try again.",
+            resp.status()
+        )));
+    }
+
+    let user: serde_json::Value = resp.json().await?;
+    let login = user
+        .get("login")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    // Save to cache
+    let mut tokens = read_cache().unwrap_or_else(|_| AuthTokens {
+        access_token: String::new(),
+        refresh_token: String::new(),
+        expires_at: Utc::now(),
+        id_token: None,
+        domain: domain.clone(),
+        gitea_token: None,
+    });
+    tokens.gitea_token = Some(token);
+    if tokens.domain.is_empty() {
+        tokens.domain = domain;
+    }
+    write_cache(&tokens)?;
+
+    crate::output::ok(&format!("Gitea authenticated as {login}"));
+    Ok(())
+}
+
+/// Combined login — SSO first, then Gitea.
+pub async fn cmd_auth_login_all(domain_override: Option<&str>) -> Result<()> {
+    // Resolve domain early so we can build the Gitea redirect URL
+    let domain = resolve_domain(domain_override).await?;
+    let gitea_url = format!("https://src.{domain}/user/settings/applications");
+    cmd_auth_sso_login_with_redirect(Some(&domain), Some(&gitea_url)).await?;
+    cmd_auth_git_login(Some(&domain)).await?;
+    Ok(())
+}
+
+/// Get the Gitea API token (for use by pm.rs).
+pub fn get_gitea_token() -> Result<String> {
+    let tokens = read_cache().map_err(|_| {
+        SunbeamError::identity("Not logged in. Run `sunbeam auth login` first.")
+    })?;
+    tokens.gitea_token.ok_or_else(|| {
+        SunbeamError::identity(
+            "No Gitea token. Run `sunbeam auth login` or `sunbeam auth set-gitea-token <token>`.",
+        )
+    })
 }
 
 /// Remove cached auth tokens.
@@ -674,6 +798,7 @@ mod tests {
             expires_at: Utc::now() + Duration::hours(1),
             id_token: Some("eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ.sig".to_string()),
             domain: "sunbeam.pt".to_string(),
+            gitea_token: None,
         };
 
         let json = serde_json::to_string_pretty(&tokens).unwrap();
@@ -699,6 +824,7 @@ mod tests {
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
+            gitea_token: None,
         };
 
         let json = serde_json::to_string(&tokens).unwrap();
@@ -717,6 +843,7 @@ mod tests {
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
+            gitea_token: None,
         };
 
         let now = Utc::now();
@@ -732,6 +859,7 @@ mod tests {
             expires_at: Utc::now() - Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
+            gitea_token: None,
         };
 
         let now = Utc::now();
@@ -747,6 +875,7 @@ mod tests {
             expires_at: Utc::now() + Duration::seconds(30),
             id_token: None,
             domain: "example.com".to_string(),
+            gitea_token: None,
         };
 
         let now = Utc::now();
