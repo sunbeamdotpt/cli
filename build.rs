@@ -21,6 +21,11 @@ fn main() {
     let commit = git_commit_sha();
     println!("cargo:rustc-env=SUNBEAM_COMMIT={commit}");
 
+    // Build target triple and build date
+    println!("cargo:rustc-env=SUNBEAM_TARGET={target}");
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    println!("cargo:rustc-env=SUNBEAM_BUILD_DATE={date}");
+
     // Rebuild if git HEAD changes
     println!("cargo:rerun-if-changed=.git/HEAD");
 }

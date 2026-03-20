@@ -6,6 +6,7 @@ mod gitea;
 mod images;
 mod kube;
 mod manifests;
+mod openbao;
 mod output;
 mod secrets;
 mod services;
