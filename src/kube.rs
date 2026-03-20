@@ -9,12 +9,14 @@ use kube::{Client, Config};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokio::sync::OnceCell;
 
 static CONTEXT: OnceLock<String> = OnceLock::new();
 static SSH_HOST: OnceLock<String> = OnceLock::new();
 static KUBE_CLIENT: OnceCell<Client> = OnceCell::const_new();
+static SSH_TUNNEL: Mutex<Option<tokio::process::Child>> = Mutex::new(None);
+static API_DISCOVERY: OnceCell<kube::discovery::Discovery> = OnceCell::const_new();
 
 /// Set the active kubectl context and optional SSH host for production tunnel.
 pub fn set_context(ctx: &str, ssh_host: &str) {
@@ -55,7 +57,7 @@ pub async fn ensure_tunnel() -> Result<()> {
 
     crate::output::ok(&format!("Opening SSH tunnel to {host}..."));
 
-    let _child = tokio::process::Command::new("ssh")
+    let child = tokio::process::Command::new("ssh")
         .args([
             "-p",
             "2222",
@@ -72,6 +74,11 @@ pub async fn ensure_tunnel() -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .ctx("Failed to spawn SSH tunnel")?;
+
+    // Store child so it lives for the process lifetime (and can be killed on cleanup)
+    if let Ok(mut guard) = SSH_TUNNEL.lock() {
+        *guard = Some(child);
+    }
 
     // Wait for tunnel to become available
     for _ in 0..20 {
@@ -161,14 +168,8 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
             Api::all_with(client.clone(), &ar)
         };
 
-        let patch: serde_json::Value = serde_json::from_str(
-            &serde_json::to_string(
-                &serde_yaml::from_str::<serde_json::Value>(doc)
-                    .ctx("Failed to parse YAML to JSON")?,
-            )
-            .ctx("Failed to serialize to JSON")?,
-        )
-        .ctx("Failed to parse JSON")?;
+        let patch: serde_json::Value =
+            serde_yaml::from_str(doc).ctx("Failed to parse YAML to JSON value")?;
 
         api.patch(name, &ssapply, &Patch::Apply(patch))
             .await
@@ -191,10 +192,14 @@ async fn resolve_api_resource(
         ("", api_version) // core API group
     };
 
-    let disc = discovery::Discovery::new(client.clone())
-        .run()
-        .await
-        .ctx("API discovery failed")?;
+    let disc = API_DISCOVERY
+        .get_or_try_init(|| async {
+            discovery::Discovery::new(client.clone())
+                .run()
+                .await
+                .ctx("API discovery failed")
+        })
+        .await?;
 
     for api_group in disc.groups() {
         if api_group.name() == group {
@@ -516,11 +521,9 @@ pub async fn kustomize_build(overlay: &Path, domain: &str, email: &str) -> Resul
 
 /// Resolve the registry host IP for REGISTRY_HOST_IP substitution.
 async fn resolve_registry_ip(domain: &str) -> String {
-    use std::net::ToSocketAddrs;
-
     // Try DNS for src.<domain>
     let hostname = format!("src.{domain}:443");
-    if let Ok(mut addrs) = hostname.to_socket_addrs() {
+    if let Ok(mut addrs) = tokio::net::lookup_host(&hostname).await {
         if let Some(addr) = addrs.next() {
             return addr.ip().to_string();
         }
@@ -537,7 +540,7 @@ async fn resolve_registry_ip(domain: &str) -> String {
             .next()
             .unwrap_or(&ssh_host);
         let host_lookup = format!("{raw}:443");
-        if let Ok(mut addrs) = host_lookup.to_socket_addrs() {
+        if let Ok(mut addrs) = tokio::net::lookup_host(&host_lookup).await {
             if let Some(addr) = addrs.next() {
                 return addr.ip().to_string();
             }
@@ -593,14 +596,26 @@ pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
         .await
         .ctx("root-token not found in openbao-keys secret")?;
 
-    // Build the command string for sh -c
-    let bao_arg_str = bao_args.join(" ");
-    let bao_cmd = format!("VAULT_TOKEN={root_token} bao {bao_arg_str}");
+    // Build the exec command using env to set VAULT_TOKEN without shell interpretation
+    let vault_token_env = format!("VAULT_TOKEN={root_token}");
+    let mut kubectl_args = vec![
+        format!("--context={}", context()),
+        "-n".to_string(),
+        "data".to_string(),
+        "exec".to_string(),
+        ob_pod,
+        "-c".to_string(),
+        "openbao".to_string(),
+        "--".to_string(),
+        "env".to_string(),
+        vault_token_env,
+        "bao".to_string(),
+    ];
+    kubectl_args.extend(bao_args.iter().cloned());
 
     // Use kubectl for full TTY support
     let status = tokio::process::Command::new("kubectl")
-        .arg(format!("--context={}", context()))
-        .args(["-n", "data", "exec", &ob_pod, "-c", "openbao", "--", "sh", "-c", &bao_cmd])
+        .args(&kubectl_args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

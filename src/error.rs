@@ -190,6 +190,14 @@ impl<T, E: Into<SunbeamError>> ResultExt<T> for std::result::Result<T, E> {
                     context: context.to_string(),
                     source,
                 },
+                SunbeamError::Secrets(msg) => SunbeamError::Secrets(format!("{context}: {msg}")),
+                SunbeamError::Config(msg) => SunbeamError::Config(format!("{context}: {msg}")),
+                SunbeamError::Build(msg) => SunbeamError::Build(format!("{context}: {msg}")),
+                SunbeamError::Identity(msg) => SunbeamError::Identity(format!("{context}: {msg}")),
+                SunbeamError::ExternalTool { tool, detail } => SunbeamError::ExternalTool {
+                    tool,
+                    detail: format!("{context}: {detail}"),
+                },
                 other => SunbeamError::Other(format!("{context}: {other}")),
             }
         })
@@ -211,6 +219,14 @@ impl<T, E: Into<SunbeamError>> ResultExt<T> for std::result::Result<T, E> {
                 SunbeamError::Io { source, .. } => SunbeamError::Io {
                     context,
                     source,
+                },
+                SunbeamError::Secrets(msg) => SunbeamError::Secrets(format!("{context}: {msg}")),
+                SunbeamError::Config(msg) => SunbeamError::Config(format!("{context}: {msg}")),
+                SunbeamError::Build(msg) => SunbeamError::Build(format!("{context}: {msg}")),
+                SunbeamError::Identity(msg) => SunbeamError::Identity(format!("{context}: {msg}")),
+                SunbeamError::ExternalTool { tool, detail } => SunbeamError::ExternalTool {
+                    tool,
+                    detail: format!("{context}: {detail}"),
                 },
                 other => SunbeamError::Other(format!("{context}: {other}")),
             }
