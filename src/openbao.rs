@@ -158,7 +158,7 @@ impl BaoClient {
     // ── Secrets engine management ───────────────────────────────────────
 
     /// Enable a secrets engine at the given path.
-    /// Returns Ok(()) even if already enabled (409 is tolerated).
+    /// Returns Ok(()) even if already enabled (400 is tolerated).
     pub async fn enable_secrets_engine(&self, path: &str, engine_type: &str) -> Result<()> {
         #[derive(Serialize)]
         struct EnableRequest<'a> {
