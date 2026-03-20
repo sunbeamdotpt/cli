@@ -103,6 +103,49 @@ struct OidcDiscovery {
     token_endpoint: String,
 }
 
+/// Resolve the domain for authentication, trying multiple sources.
+async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
+    // 1. Explicit --domain flag
+    if let Some(d) = explicit {
+        if !d.is_empty() {
+            return Ok(d.to_string());
+        }
+    }
+
+    // 2. Cached token domain (already logged in to a domain)
+    if let Ok(tokens) = read_cache() {
+        if !tokens.domain.is_empty() {
+            crate::output::ok(&format!("Using cached domain: {}", tokens.domain));
+            return Ok(tokens.domain);
+        }
+    }
+
+    // 3. Config: derive from production_host
+    let config = crate::config::load_config();
+    if !config.production_host.is_empty() {
+        let host = &config.production_host;
+        let raw = host.split('@').last().unwrap_or(host);
+        let raw = raw.split(':').next().unwrap_or(raw);
+        // Take the last 2+ segments as the domain (e.g. admin.sunbeam.pt -> sunbeam.pt)
+        let parts: Vec<&str> = raw.split('.').collect();
+        if parts.len() >= 2 {
+            let domain = format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+            return Ok(domain);
+        }
+    }
+
+    // 4. Try cluster discovery (may fail if not connected)
+    match crate::kube::get_domain().await {
+        Ok(d) if !d.is_empty() && !d.starts_with(".") => return Ok(d),
+        _ => {}
+    }
+
+    Err(SunbeamError::config(
+        "Could not determine domain. Use --domain flag, or configure with:\n  \
+         sunbeam config set --host user@your-server.example.com"
+    ))
+}
+
 async fn discover_oidc(domain: &str) -> Result<OidcDiscovery> {
     let url = format!("https://auth.{domain}/.well-known/openid-configuration");
     let client = reqwest::Client::new();
@@ -403,25 +446,11 @@ pub async fn get_token() -> Result<String> {
 }
 
 /// Interactive browser-based OAuth2 login.
-pub async fn cmd_auth_login() -> Result<()> {
+pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
     crate::output::step("Authenticating with Hydra");
 
-    // Resolve domain
-    let config = crate::config::load_config();
-    let domain = if !config.production_host.is_empty() {
-        // Extract domain from production host if available
-        let host = &config.production_host;
-        let raw = host.split('@').last().unwrap_or(host);
-        let raw = raw.split(':').next().unwrap_or(raw);
-        // If it looks like an IP or hostname, try to get domain from cluster
-        if raw.contains('.') && !raw.chars().next().unwrap_or('0').is_ascii_digit() {
-            raw.to_string()
-        } else {
-            crate::kube::get_domain().await?
-        }
-    } else {
-        crate::kube::get_domain().await?
-    };
+    // Resolve domain: explicit flag > cached token domain > config > cluster discovery
+    let domain = resolve_domain(domain_override).await?;
 
     crate::output::ok(&format!("Domain: {domain}"));
 
