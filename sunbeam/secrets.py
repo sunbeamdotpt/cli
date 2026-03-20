@@ -50,7 +50,7 @@ GITEA_ADMIN_USER = "gitea_admin"
 PG_USERS = [
     "kratos", "hydra", "gitea", "hive",
     "docs", "meet", "drive", "messages", "conversations",
-    "people", "find",
+    "people", "find", "calendars", "projects",
 ]
 
 
@@ -221,6 +221,16 @@ def _seed_openbao() -> dict:
     drive = get_or_create("drive",
         **{"django-secret-key": rand})
 
+    projects = get_or_create("projects",
+        **{"secret-key": rand})
+
+    calendars = get_or_create("calendars",
+        **{"django-secret-key":       lambda: _secrets.token_urlsafe(50),
+           "salt-key":                rand,
+           "caldav-inbound-api-key":  rand,
+           "caldav-outbound-api-key": rand,
+           "caldav-internal-api-key": rand})
+
     # DKIM key pair -- generated together since private and public keys are coupled.
     # Read existing keys first; only generate a new pair when absent.
     existing_messages_raw = bao(
@@ -351,6 +361,14 @@ def _seed_openbao() -> dict:
                                "application-jwt-secret-key": meet["application-jwt-secret-key"]})
         if "drive" in _dirty_paths:
             _kv_put("drive", **{"django-secret-key": drive["django-secret-key"]})
+        if "projects" in _dirty_paths:
+            _kv_put("projects", **{"secret-key": projects["secret-key"]})
+        if "calendars" in _dirty_paths:
+            _kv_put("calendars", **{"django-secret-key": calendars["django-secret-key"],
+                                    "salt-key": calendars["salt-key"],
+                                    "caldav-inbound-api-key": calendars["caldav-inbound-api-key"],
+                                    "caldav-outbound-api-key": calendars["caldav-outbound-api-key"],
+                                    "caldav-internal-api-key": calendars["caldav-internal-api-key"]})
         if "collabora" in _dirty_paths:
             _kv_put("collabora", **{"username": collabora["username"],
                                     "password": collabora["password"]})
@@ -660,6 +678,7 @@ def cmd_seed() -> dict:
             "drive": "drive_db", "messages": "messages_db",
             "conversations": "conversations_db",
             "people": "people_db", "find": "find_db",
+            "calendars": "calendars_db", "projects": "projects_db",
         }
         for user in PG_USERS:
             # Only CREATE if missing -- passwords are managed by OpenBao static roles.
