@@ -6,10 +6,9 @@
 
 use crate::error::{Result, ResultExt, SunbeamError};
 use k8s_openapi::api::core::v1::Pod;
-use kube::api::{Api, ListParams};
+use kube::api::{Api, ApiResource, DynamicObject, ListParams};
 use rand::RngCore;
-use rsa::pkcs1::EncodeRsaPublicKey;
-use rsa::pkcs8::EncodePrivateKey;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -73,7 +72,7 @@ fn gen_dkim_key_pair() -> (String, String) {
     };
 
     let public_key = private_key.to_public_key();
-    let public_pem = match public_key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF) {
+    let public_pem = match public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF) {
         Ok(p) => p.to_string(),
         Err(e) => {
             warn(&format!("Public key PEM encoding failed: {e}"));
@@ -643,7 +642,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
 
         for (path, data) in all_paths {
             if dirty_paths.contains(*path) {
-                bao.kv_put("secret", path, data).await?;
+                bao.kv_patch("secret", path, data).await?;
             }
         }
     }
@@ -739,15 +738,16 @@ async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
 
     let existing_vault_pass = bao.kv_get_field("secret", "vault", "pg-password").await?;
     let vault_pg_pass = if existing_vault_pass.is_empty() {
-        rand_token()
+        let new_pass = rand_token();
+        let mut vault_data = HashMap::new();
+        vault_data.insert("pg-password".to_string(), new_pass.clone());
+        bao.kv_put("secret", "vault", &vault_data).await?;
+        ok("vault KV entry written.");
+        new_pass
     } else {
+        ok("vault KV entry already present -- skipping write.");
         existing_vault_pass
     };
-
-    let mut vault_data = HashMap::new();
-    vault_data.insert("pg-password".to_string(), vault_pg_pass.clone());
-    bao.kv_put("secret", "vault", &vault_data).await?;
-    ok("vault KV entry written.");
 
     let create_vault_sql = concat!(
         "DO $$ BEGIN ",
@@ -981,18 +981,31 @@ pub async fn cmd_seed() -> Result<()> {
     let mut pg_pod = String::new();
 
     let client = k::get_client().await?;
+    let ar = ApiResource {
+        group: "postgresql.cnpg.io".into(),
+        version: "v1".into(),
+        api_version: "postgresql.cnpg.io/v1".into(),
+        kind: "Cluster".into(),
+        plural: "clusters".into(),
+    };
+    let cnpg_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "data", &ar);
     for _ in 0..60 {
-        let pods: Api<Pod> = Api::namespaced(client.clone(), "data");
-        let lp = ListParams::default().labels("cnpg.io/cluster=postgres,role=primary");
-        if let Ok(pod_list) = pods.list(&lp).await {
-            if let Some(pod) = pod_list.items.first() {
-                if let Some(name) = pod.metadata.name.as_deref() {
-                    if pod
-                        .status
-                        .as_ref()
-                        .and_then(|s| s.phase.as_deref())
-                        .unwrap_or("")
-                        == "Running"
+        if let Ok(cluster) = cnpg_api.get("postgres").await {
+            let phase = cluster
+                .data
+                .get("status")
+                .and_then(|s| s.get("phase"))
+                .and_then(|p| p.as_str())
+                .unwrap_or("");
+            if phase == "Cluster in healthy state" {
+                // Cluster is healthy — find the primary pod name
+                let pods: Api<Pod> = Api::namespaced(client.clone(), "data");
+                let lp = ListParams::default().labels("cnpg.io/cluster=postgres,role=primary");
+                if let Ok(pod_list) = pods.list(&lp).await {
+                    if let Some(name) = pod_list
+                        .items
+                        .first()
+                        .and_then(|p| p.metadata.name.as_deref())
                     {
                         pg_pod = name.to_string();
                         ok(&format!("Postgres ready ({pg_pod})."));
@@ -1137,7 +1150,7 @@ pub async fn cmd_seed() -> Result<()> {
                         &gitea_admin_pass,
                         "--must-change-password=false",
                     ],
-                    None,
+                    Some("gitea"),
                 )
                 .await
                 {
@@ -1517,8 +1530,12 @@ mod tests {
             "Private key should be PKCS8 PEM"
         );
         assert!(
-            public_pem.contains("BEGIN RSA PUBLIC KEY"),
-            "Public key should be PEM"
+            public_pem.contains("BEGIN PUBLIC KEY"),
+            "Public key should be SPKI PEM (not PKCS#1)"
+        );
+        assert!(
+            !public_pem.contains("BEGIN RSA PUBLIC KEY"),
+            "Public key should NOT be PKCS#1 format"
         );
         assert!(!private_pem.is_empty());
         assert!(!public_pem.is_empty());
@@ -1576,7 +1593,7 @@ mod tests {
 
     #[test]
     fn test_dkim_public_key_extraction() {
-        let pem = "-----BEGIN RSA PUBLIC KEY-----\nMIIBCgKCAQ...\nbase64data\n-----END RSA PUBLIC KEY-----";
+        let pem = "-----BEGIN PUBLIC KEY-----\nMIIBCgKCAQ...\nbase64data\n-----END PUBLIC KEY-----";
         let b64_key: String = pem
             .replace("-----BEGIN PUBLIC KEY-----", "")
             .replace("-----END PUBLIC KEY-----", "")
