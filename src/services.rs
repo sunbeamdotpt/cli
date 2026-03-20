@@ -5,21 +5,9 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, DynamicObject, ListParams, LogParams};
 use kube::ResourceExt;
 use std::collections::BTreeMap;
+use crate::constants::MANAGED_NS;
 use crate::kube::{get_client, kube_rollout_restart, parse_target};
 use crate::output::{ok, step, warn};
-
-/// Namespaces managed by sunbeam.
-pub const MANAGED_NS: &[&str] = &[
-    "data",
-    "devtools",
-    "ingress",
-    "lasuite",
-    "matrix",
-    "media",
-    "ory",
-    "storage",
-    "vault-secrets-operator",
-];
 
 /// Services that can be rollout-restarted, as (namespace, deployment) pairs.
 pub const SERVICES_TO_RESTART: &[(&str, &str)] = &[
@@ -462,8 +450,9 @@ mod tests {
         assert!(MANAGED_NS.contains(&"matrix"));
         assert!(MANAGED_NS.contains(&"media"));
         assert!(MANAGED_NS.contains(&"storage"));
+        assert!(MANAGED_NS.contains(&"monitoring"));
         assert!(MANAGED_NS.contains(&"vault-secrets-operator"));
-        assert_eq!(MANAGED_NS.len(), 9);
+        assert_eq!(MANAGED_NS.len(), 10);
     }
 
     #[test]

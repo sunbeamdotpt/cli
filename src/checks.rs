@@ -136,7 +136,7 @@ async fn check_gitea_version(domain: &str, client: &reqwest::Client) -> CheckRes
 /// GET /api/v1/user with admin credentials -> 200 and login field.
 async fn check_gitea_auth(domain: &str, client: &reqwest::Client) -> CheckResult {
     let username = {
-        let u = kube_secret("devtools", "gitea-admin-credentials", "admin-username").await;
+        let u = kube_secret("devtools", "gitea-admin-credentials", "username").await;
         if u.is_empty() {
             "gitea_admin".to_string()
         } else {
@@ -144,13 +144,13 @@ async fn check_gitea_auth(domain: &str, client: &reqwest::Client) -> CheckResult
         }
     };
     let password =
-        kube_secret("devtools", "gitea-admin-credentials", "admin-password").await;
+        kube_secret("devtools", "gitea-admin-credentials", "password").await;
     if password.is_empty() {
         return CheckResult::fail(
             "gitea-auth",
             "devtools",
             "gitea",
-            "admin-password not found in secret",
+            "password not found in secret",
         );
     }
 
@@ -895,7 +895,7 @@ mod tests {
             "gitea-auth",
             "devtools",
             "gitea",
-            "admin-password not found in secret",
+            "password not found in secret",
         );
         assert!(!r.passed);
         assert!(r.detail.contains("secret"));

@@ -7,21 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::cli::BuildTarget;
+use crate::constants::{GITEA_ADMIN_USER, MANAGED_NS};
 use crate::output::{ok, step, warn};
-
-const GITEA_ADMIN_USER: &str = "gitea_admin";
-
-const MANAGED_NS: &[&str] = &[
-    "data",
-    "devtools",
-    "ingress",
-    "lasuite",
-    "matrix",
-    "media",
-    "ory",
-    "storage",
-    "vault-secrets-operator",
-];
 
 /// amd64-only images that need mirroring: (source, org, repo, tag).
 const AMD64_ONLY_IMAGES: &[(&str, &str, &str, &str)] = &[
