@@ -538,6 +538,211 @@ pub async fn cmd_user_set_password(target: &str, password: &str) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// App-level provisioning (best-effort)
+// ---------------------------------------------------------------------------
+
+/// Resolve a deployment to the name of a running pod.
+async fn pod_for_deployment(ns: &str, deployment: &str) -> Result<String> {
+    let client = crate::kube::get_client().await?;
+    let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
+        kube::Api::namespaced(client.clone(), ns);
+
+    let label = format!("app.kubernetes.io/name={deployment}");
+    let lp = kube::api::ListParams::default().labels(&label);
+    let pod_list = pods
+        .list(&lp)
+        .await
+        .with_ctx(|| format!("Failed to list pods for deployment {deployment} in {ns}"))?;
+
+    for pod in &pod_list.items {
+        if let Some(status) = &pod.status {
+            let phase = status.phase.as_deref().unwrap_or("");
+            if phase == "Running" {
+                if let Some(name) = &pod.metadata.name {
+                    return Ok(name.clone());
+                }
+            }
+        }
+    }
+
+    // Fallback: try with app= label
+    let label2 = format!("app={deployment}");
+    let lp2 = kube::api::ListParams::default().labels(&label2);
+    let pod_list2 = match pods.list(&lp2).await {
+        Ok(list) => list,
+        Err(_) => {
+            return Err(SunbeamError::kube(format!(
+                "No running pod found for deployment {deployment} in {ns}"
+            )));
+        }
+    };
+
+    for pod in &pod_list2.items {
+        if let Some(status) = &pod.status {
+            let phase = status.phase.as_deref().unwrap_or("");
+            if phase == "Running" {
+                if let Some(name) = &pod.metadata.name {
+                    return Ok(name.clone());
+                }
+            }
+        }
+    }
+
+    Err(SunbeamError::kube(format!(
+        "No running pod found for deployment {deployment} in {ns}"
+    )))
+}
+
+/// Create a mailbox in Messages via kubectl exec into the backend.
+async fn create_mailbox(email: &str, name: &str) {
+    let parts: Vec<&str> = email.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        warn(&format!("Invalid email for mailbox creation: {email}"));
+        return;
+    }
+    let local_part = parts[0];
+    let domain_part = parts[1];
+    let display_name = if name.is_empty() { local_part } else { name };
+    let _ = display_name; // used in Python for future features; kept for parity
+
+    step(&format!("Creating mailbox: {email}"));
+
+    let pod = match pod_for_deployment("lasuite", "messages-backend").await {
+        Ok(p) => p,
+        Err(e) => {
+            warn(&format!("Could not find messages-backend pod: {e}"));
+            return;
+        }
+    };
+
+    let script = format!(
+        "mb, created = Mailbox.objects.get_or_create(\n    local_part=\"{}\",\n    domain=MailDomain.objects.get(name=\"{}\"),\n)\nprint(\"created\" if created else \"exists\")\n",
+        local_part, domain_part,
+    );
+
+    let cmd: Vec<&str> = vec!["python", "manage.py", "shell", "-c", &script];
+    match crate::kube::kube_exec("lasuite", &pod, &cmd, Some("messages-backend")).await {
+        Ok((0, output)) if output.contains("created") => {
+            ok(&format!("Mailbox {email} created."));
+        }
+        Ok((0, output)) if output.contains("exists") => {
+            ok(&format!("Mailbox {email} already exists."));
+        }
+        Ok((_, output)) => {
+            warn(&format!(
+                "Could not create mailbox (Messages backend may not be running): {output}"
+            ));
+        }
+        Err(e) => {
+            warn(&format!("Could not create mailbox: {e}"));
+        }
+    }
+}
+
+/// Delete a mailbox and associated Django user in Messages.
+async fn delete_mailbox(email: &str) {
+    let parts: Vec<&str> = email.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        warn(&format!("Invalid email for mailbox deletion: {email}"));
+        return;
+    }
+    let local_part = parts[0];
+    let domain_part = parts[1];
+
+    step(&format!("Cleaning up mailbox: {email}"));
+
+    let pod = match pod_for_deployment("lasuite", "messages-backend").await {
+        Ok(p) => p,
+        Err(e) => {
+            warn(&format!("Could not find messages-backend pod: {e}"));
+            return;
+        }
+    };
+
+    let script = format!(
+        "from django.contrib.auth import get_user_model\nUser = get_user_model()\ndeleted = 0\nfor mb in Mailbox.objects.filter(local_part=\"{local_part}\", domain__name=\"{domain_part}\"):\n    mb.delete()\n    deleted += 1\ntry:\n    u = User.objects.get(email=\"{email}\")\n    u.delete()\n    deleted += 1\nexcept User.DoesNotExist:\n    pass\nprint(f\"deleted {{deleted}}\")\n",
+    );
+
+    let cmd: Vec<&str> = vec!["python", "manage.py", "shell", "-c", &script];
+    match crate::kube::kube_exec("lasuite", &pod, &cmd, Some("messages-backend")).await {
+        Ok((0, output)) if output.contains("deleted") => {
+            ok("Mailbox and user cleaned up.");
+        }
+        Ok((_, output)) => {
+            warn(&format!("Could not clean up mailbox: {output}"));
+        }
+        Err(e) => {
+            warn(&format!("Could not clean up mailbox: {e}"));
+        }
+    }
+}
+
+/// Create a Projects (Planka) user and add them as manager of the Default project.
+async fn setup_projects_user(email: &str, name: &str) {
+    step(&format!("Setting up Projects user: {email}"));
+
+    let pod = match pod_for_deployment("lasuite", "projects").await {
+        Ok(p) => p,
+        Err(e) => {
+            warn(&format!("Could not find projects pod: {e}"));
+            return;
+        }
+    };
+
+    let js = format!(
+        "const knex = require('knex')({{client: 'pg', connection: process.env.DATABASE_URL}});\nasync function go() {{\n  let user = await knex('user_account').where({{email: '{email}'}}).first();\n  if (!user) {{\n    const id = Date.now().toString();\n    await knex('user_account').insert({{\n      id, email: '{email}', name: '{name}', password: '',\n      is_admin: true, is_sso: true, language: 'en-US',\n      created_at: new Date(), updated_at: new Date()\n    }});\n    user = {{id}};\n    console.log('user_created');\n  }} else {{\n    console.log('user_exists');\n  }}\n  const project = await knex('project').where({{name: 'Default'}}).first();\n  if (project) {{\n    const exists = await knex('project_manager').where({{project_id: project.id, user_id: user.id}}).first();\n    if (!exists) {{\n      await knex('project_manager').insert({{\n        id: (Date.now()+1).toString(), project_id: project.id,\n        user_id: user.id, created_at: new Date()\n      }});\n      console.log('manager_added');\n    }} else {{\n      console.log('manager_exists');\n    }}\n  }} else {{\n    console.log('no_default_project');\n  }}\n}}\ngo().then(() => process.exit(0)).catch(e => {{ console.error(e.message); process.exit(1); }});\n",
+    );
+
+    let cmd: Vec<&str> = vec!["node", "-e", &js];
+    match crate::kube::kube_exec("lasuite", &pod, &cmd, Some("projects")).await {
+        Ok((0, output))
+            if output.contains("manager_added") || output.contains("manager_exists") =>
+        {
+            ok("Projects user ready.");
+        }
+        Ok((0, output)) if output.contains("no_default_project") => {
+            warn("No Default project found in Projects -- skip.");
+        }
+        Ok((_, output)) => {
+            warn(&format!("Could not set up Projects user: {output}"));
+        }
+        Err(e) => {
+            warn(&format!("Could not set up Projects user: {e}"));
+        }
+    }
+}
+
+/// Remove a user from Projects (Planka) -- delete memberships and soft-delete user.
+async fn cleanup_projects_user(email: &str) {
+    step(&format!("Cleaning up Projects user: {email}"));
+
+    let pod = match pod_for_deployment("lasuite", "projects").await {
+        Ok(p) => p,
+        Err(e) => {
+            warn(&format!("Could not find projects pod: {e}"));
+            return;
+        }
+    };
+
+    let js = format!(
+        "const knex = require('knex')({{client: 'pg', connection: process.env.DATABASE_URL}});\nasync function go() {{\n  const user = await knex('user_account').where({{email: '{email}'}}).first();\n  if (!user) {{ console.log('not_found'); return; }}\n  await knex('board_membership').where({{user_id: user.id}}).del();\n  await knex('project_manager').where({{user_id: user.id}}).del();\n  await knex('user_account').where({{id: user.id}}).update({{deleted_at: new Date()}});\n  console.log('cleaned');\n}}\ngo().then(() => process.exit(0)).catch(e => {{ console.error(e.message); process.exit(1); }});\n",
+    );
+
+    let cmd: Vec<&str> = vec!["node", "-e", &js];
+    match crate::kube::kube_exec("lasuite", &pod, &cmd, Some("projects")).await {
+        Ok((0, output)) if output.contains("cleaned") => {
+            ok("Projects user cleaned up.");
+        }
+        Ok((_, output)) => {
+            warn(&format!("Could not clean up Projects user: {output}"));
+        }
+        Err(e) => {
+            warn(&format!("Could not clean up Projects user: {e}"));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Onboard
 // ---------------------------------------------------------------------------
 
@@ -548,6 +753,8 @@ async fn send_welcome_email(
     name: &str,
     recovery_link: &str,
     recovery_code: &str,
+    job_title: &str,
+    department: &str,
 ) -> Result<()> {
     let greeting = if name.is_empty() {
         "Hi".to_string()
@@ -555,10 +762,18 @@ async fn send_welcome_email(
         format!("Hi {name}")
     };
 
+    let joining_line = if !job_title.is_empty() && !department.is_empty() {
+        format!(
+            " You're joining as {job_title} in the {department} department."
+        )
+    } else {
+        String::new()
+    };
+
     let body_text = format!(
         "{greeting},
 
-Welcome to Sunbeam Studios! Your account has been created.
+Welcome to Sunbeam Studios!{joining_line} Your account has been created.
 
 To set your password, open this link and enter the recovery code below:
 
@@ -642,7 +857,7 @@ pub async fn cmd_user_onboard(
 
     let pf = PortForward::kratos().await?;
 
-    let (iid, recovery_link, recovery_code) = {
+    let (iid, recovery_link, recovery_code, is_new) = {
         let existing = find_identity(&pf.base_url, email, false).await?;
 
         if let Some(existing) = existing {
@@ -650,7 +865,7 @@ pub async fn cmd_user_onboard(
             warn(&format!("Identity already exists: {}...", short_id(&iid)));
             step("Generating fresh recovery link...");
             let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
-            (iid, link, code)
+            (iid, link, code, false)
         } else {
             let mut traits = serde_json::json!({ "email": email });
             if !name.is_empty() {
@@ -717,16 +932,26 @@ pub async fn cmd_user_onboard(
             .await?;
 
             let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
-            (iid, link, code)
+            (iid, link, code, true)
         }
     };
 
     drop(pf);
 
+    // Provision app-level accounts for new users
+    if is_new {
+        create_mailbox(email, name).await;
+        setup_projects_user(email, name).await;
+    }
+
     if send_email {
         let domain = crate::kube::get_domain().await?;
         let recipient = if notify.is_empty() { email } else { notify };
-        send_welcome_email(&domain, recipient, name, &recovery_link, &recovery_code).await?;
+        send_welcome_email(
+            &domain, recipient, name, &recovery_link, &recovery_code,
+            job_title, department,
+        )
+        .await?;
     }
 
     ok(&format!("Identity ID: {iid}"));
@@ -798,6 +1023,17 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
     ok("Hydra consent sessions revoked.");
 
     drop(pf);
+
+    // Clean up Messages mailbox and Projects user
+    let email = identity
+        .get("traits")
+        .and_then(|t| t.get("email"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !email.is_empty() {
+        delete_mailbox(email).await;
+        cleanup_projects_user(email).await;
+    }
 
     ok(&format!("Offboarding complete for {}...", short_id(&iid)));
     warn("Existing access tokens expire within ~1h (Hydra TTL).");
