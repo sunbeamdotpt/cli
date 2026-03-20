@@ -1,6 +1,6 @@
 //! Gitea bootstrap -- admin setup, org creation, OIDC auth source configuration.
 
-use anyhow::Result;
+use crate::error::Result;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams};
 use serde_json::Value;

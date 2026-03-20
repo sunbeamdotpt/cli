@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use crate::error::{Result, SunbeamError};
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// Sunbeam local dev stack manager.
@@ -309,7 +309,7 @@ pub enum UserAction {
     },
 }
 
-fn validate_date(s: &str) -> Result<String, String> {
+fn validate_date(s: &str) -> std::result::Result<String, String> {
     if s.is_empty() {
         return Ok(s.to_string());
     }
@@ -672,10 +672,10 @@ pub async fn dispatch() -> Result<()> {
         Env::Production => {
             let host = crate::config::get_production_host();
             if host.is_empty() {
-                bail!(
+                return Err(SunbeamError::config(
                     "Production host not configured. \
-                     Use `sunbeam config set --host` or set SUNBEAM_SSH_HOST."
-                );
+                     Use `sunbeam config set --host` or set SUNBEAM_SSH_HOST.",
+                ));
             }
             Some(host)
         }

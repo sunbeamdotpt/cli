@@ -1,6 +1,6 @@
 //! Service management — status, logs, restart.
 
-use anyhow::{bail, Result};
+use crate::error::{Result, SunbeamError};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, DynamicObject, ListParams, LogParams};
 use kube::ResourceExt;
@@ -397,7 +397,7 @@ pub async fn cmd_get(target: &str, output: &str) -> Result<()> {
     let pod = api
         .get_opt(name)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("Pod {ns}/{name} not found."))?;
+        .ok_or_else(|| SunbeamError::kube(format!("Pod {ns}/{name} not found.")))?;
 
     let text = match output {
         "json" => serde_json::to_string_pretty(&pod)?,

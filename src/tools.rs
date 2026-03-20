@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Result, ResultExt};
 use std::path::PathBuf;
 
 static KUSTOMIZE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kustomize"));
@@ -15,7 +15,7 @@ fn cache_dir() -> PathBuf {
 fn extract_embedded(data: &[u8], name: &str) -> Result<PathBuf> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create cache dir: {}", dir.display()))?;
+        .with_ctx(|| format!("Failed to create cache dir: {}", dir.display()))?;
 
     let dest = dir.join(name);
 
@@ -29,7 +29,7 @@ fn extract_embedded(data: &[u8], name: &str) -> Result<PathBuf> {
     }
 
     std::fs::write(&dest, data)
-        .with_context(|| format!("Failed to write {}", dest.display()))?;
+        .with_ctx(|| format!("Failed to write {}", dest.display()))?;
 
     #[cfg(unix)]
     {

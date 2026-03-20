@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use crate::error::{Result, SunbeamError, ResultExt};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Namespace, Secret};
@@ -71,7 +71,7 @@ pub async fn ensure_tunnel() -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("Failed to spawn SSH tunnel")?;
+        .ctx("Failed to spawn SSH tunnel")?;
 
     // Wait for tunnel to become available
     for _ in 0..20 {
@@ -98,15 +98,15 @@ pub async fn get_client() -> Result<&'static Client> {
         .get_or_try_init(|| async {
             ensure_tunnel().await?;
 
-            let kubeconfig = Kubeconfig::read().context("Failed to read kubeconfig")?;
+            let kubeconfig = Kubeconfig::read().map_err(|e| SunbeamError::kube(format!("Failed to read kubeconfig: {e}")))?;
             let options = KubeConfigOptions {
                 context: Some(context().to_string()),
                 ..Default::default()
             };
             let config = Config::from_custom_kubeconfig(kubeconfig, &options)
                 .await
-                .context("Failed to build kube config from kubeconfig")?;
-            Client::try_from(config).context("Failed to create kube client")
+                .map_err(|e| SunbeamError::kube(format!("Failed to build kube config from kubeconfig: {e}")))?;
+            Client::try_from(config).ctx("Failed to create kube client")
         })
         .await
 }
@@ -129,7 +129,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
         // Parse the YAML to a DynamicObject so we can route it
         let obj: serde_yaml::Value =
-            serde_yaml::from_str(doc).context("Failed to parse YAML document")?;
+            serde_yaml::from_str(doc).ctx("Failed to parse YAML document")?;
 
         let api_version = obj
             .get("apiVersion")
@@ -164,15 +164,15 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         let patch: serde_json::Value = serde_json::from_str(
             &serde_json::to_string(
                 &serde_yaml::from_str::<serde_json::Value>(doc)
-                    .context("Failed to parse YAML to JSON")?,
+                    .ctx("Failed to parse YAML to JSON")?,
             )
-            .context("Failed to serialize to JSON")?,
+            .ctx("Failed to serialize to JSON")?,
         )
-        .context("Failed to parse JSON")?;
+        .ctx("Failed to parse JSON")?;
 
         api.patch(name, &ssapply, &Patch::Apply(patch))
             .await
-            .with_context(|| format!("Failed to apply {kind}/{name}"))?;
+            .with_ctx(|| format!("Failed to apply {kind}/{name}"))?;
     }
     Ok(())
 }
@@ -194,7 +194,7 @@ async fn resolve_api_resource(
     let disc = discovery::Discovery::new(client.clone())
         .run()
         .await
-        .context("API discovery failed")?;
+        .ctx("API discovery failed")?;
 
     for api_group in disc.groups() {
         if api_group.name() == group {
@@ -216,7 +216,7 @@ pub async fn kube_get_secret(ns: &str, name: &str) -> Result<Option<Secret>> {
     let api: Api<Secret> = Api::namespaced(client.clone(), ns);
     match api.get_opt(name).await {
         Ok(secret) => Ok(secret),
-        Err(e) => Err(e).context(format!("Failed to get secret {ns}/{name}")),
+        Err(e) => Err(e).with_ctx(|| format!("Failed to get secret {ns}/{name}")),
     }
 }
 
@@ -225,16 +225,16 @@ pub async fn kube_get_secret(ns: &str, name: &str) -> Result<Option<Secret>> {
 pub async fn kube_get_secret_field(ns: &str, name: &str, key: &str) -> Result<String> {
     let secret = kube_get_secret(ns, name)
         .await?
-        .with_context(|| format!("Secret {ns}/{name} not found"))?;
+        .with_ctx(|| format!("Secret {ns}/{name} not found"))?;
 
-    let data = secret.data.as_ref().context("Secret has no data")?;
+    let data = secret.data.as_ref().ctx("Secret has no data")?;
 
     let bytes = data
         .get(key)
-        .with_context(|| format!("Key {key:?} not found in secret {ns}/{name}"))?;
+        .with_ctx(|| format!("Key {key:?} not found in secret {ns}/{name}"))?;
 
     String::from_utf8(bytes.0.clone())
-        .with_context(|| format!("Key {key:?} in secret {ns}/{name} is not valid UTF-8"))
+        .with_ctx(|| format!("Key {key:?} in secret {ns}/{name} is not valid UTF-8"))
 }
 
 /// Check if a namespace exists.
@@ -245,7 +245,7 @@ pub async fn ns_exists(ns: &str) -> Result<bool> {
     match api.get_opt(ns).await {
         Ok(Some(_)) => Ok(true),
         Ok(None) => Ok(false),
-        Err(e) => Err(e).context(format!("Failed to check namespace {ns}")),
+        Err(e) => Err(e).with_ctx(|| format!("Failed to check namespace {ns}")),
     }
 }
 
@@ -265,7 +265,7 @@ pub async fn ensure_ns(ns: &str) -> Result<()> {
     let pp = PatchParams::apply("sunbeam").force();
     api.patch(ns, &pp, &Patch::Apply(ns_obj))
         .await
-        .with_context(|| format!("Failed to create namespace {ns}"))?;
+        .with_ctx(|| format!("Failed to create namespace {ns}"))?;
     Ok(())
 }
 
@@ -296,7 +296,7 @@ pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) 
     let pp = PatchParams::apply("sunbeam").force();
     api.patch(name, &pp, &Patch::Apply(secret_obj))
         .await
-        .with_context(|| format!("Failed to create/update secret {ns}/{name}"))?;
+        .with_ctx(|| format!("Failed to create/update secret {ns}/{name}"))?;
     Ok(())
 }
 
@@ -323,12 +323,12 @@ pub async fn kube_exec(
     let mut attached = pods
         .exec(pod, cmd_strings, &ep)
         .await
-        .with_context(|| format!("Failed to exec in pod {ns}/{pod}"))?;
+        .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
 
     let stdout = {
         let mut stdout_reader = attached
             .stdout()
-            .context("No stdout stream from exec")?;
+            .ctx("No stdout stream from exec")?;
         let mut buf = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut stdout_reader, &mut buf).await?;
         String::from_utf8_lossy(&buf).to_string()
@@ -336,7 +336,7 @@ pub async fn kube_exec(
 
     let status = attached
         .take_status()
-        .context("No status channel from exec")?;
+        .ctx("No status channel from exec")?;
 
     // Wait for the status
     let exit_code = if let Some(status) = status.await {
@@ -372,7 +372,7 @@ pub async fn kube_rollout_restart(ns: &str, deployment: &str) -> Result<()> {
 
     api.patch(deployment, &PatchParams::default(), &Patch::Strategic(patch))
         .await
-        .with_context(|| format!("Failed to restart deployment {ns}/{deployment}"))?;
+        .with_ctx(|| format!("Failed to restart deployment {ns}/{deployment}"))?;
     Ok(())
 }
 
@@ -485,14 +485,14 @@ pub async fn kustomize_build(overlay: &Path, domain: &str, email: &str) -> Resul
         .env("PATH", &env_path)
         .output()
         .await
-        .context("Failed to run kustomize")?;
+        .ctx("Failed to run kustomize")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("kustomize build failed: {stderr}");
     }
 
-    let mut text = String::from_utf8(output.stdout).context("kustomize output not UTF-8")?;
+    let mut text = String::from_utf8(output.stdout).ctx("kustomize output not UTF-8")?;
 
     // Domain substitution
     text = domain_replace(&text, domain);
@@ -565,7 +565,7 @@ pub async fn cmd_k8s(kubectl_args: &[String]) -> Result<()> {
         .stderr(Stdio::inherit())
         .status()
         .await
-        .context("Failed to run kubectl")?;
+        .ctx("Failed to run kubectl")?;
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
@@ -580,18 +580,18 @@ pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
     let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), "data");
 
     let lp = ListParams::default().labels("app.kubernetes.io/name=openbao");
-    let pod_list = pods.list(&lp).await.context("Failed to list OpenBao pods")?;
+    let pod_list = pods.list(&lp).await.ctx("Failed to list OpenBao pods")?;
     let ob_pod = pod_list
         .items
         .first()
         .and_then(|p| p.metadata.name.as_deref())
-        .context("OpenBao pod not found -- is the cluster running?")?
+        .ctx("OpenBao pod not found -- is the cluster running?")?
         .to_string();
 
     // Get root token
     let root_token = kube_get_secret_field("data", "openbao-keys", "root-token")
         .await
-        .context("root-token not found in openbao-keys secret")?;
+        .ctx("root-token not found in openbao-keys secret")?;
 
     // Build the command string for sh -c
     let bao_arg_str = bao_args.join(" ");
@@ -606,7 +606,7 @@ pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
         .stderr(Stdio::inherit())
         .status()
         .await
-        .context("Failed to run bao in OpenBao pod")?;
+        .ctx("Failed to run bao in OpenBao pod")?;
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
