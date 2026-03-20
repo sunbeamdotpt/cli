@@ -483,4 +483,16 @@ mod tests {
         let client = BaoClient::new("http://localhost:8200");
         assert!(client.token.is_none());
     }
+
+    #[tokio::test]
+    async fn test_seal_status_error_on_nonexistent_server() {
+        // Connecting to a port where nothing is listening should produce an
+        // error (connection refused), not a panic or hang.
+        let client = BaoClient::new("http://127.0.0.1:19999");
+        let result = client.seal_status().await;
+        assert!(
+            result.is_err(),
+            "seal_status should return an error when the server is unreachable"
+        );
+    }
 }
