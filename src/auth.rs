@@ -273,6 +273,14 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
 /// Try to read the client_id from K8s secret `oidc-sunbeam-cli` in `ory` namespace.
 /// Falls back to the default client ID.
 async fn resolve_client_id() -> String {
+    // Try reading from K8s secret — silently fall back if cluster is unreachable.
+    // The tracing ERROR from kube client init is noisy; suppress by not even trying
+    // when we know the cluster isn't configured.
+    let host = crate::config::get_production_host();
+    if host.is_empty() && crate::kube::ssh_host().is_empty() {
+        // No cluster configured, skip K8s lookup
+        return DEFAULT_CLIENT_ID.to_string();
+    }
     match crate::kube::kube_get_secret_field("ory", "oidc-sunbeam-cli", "client_id").await {
         Ok(id) if !id.is_empty() => id,
         _ => DEFAULT_CLIENT_ID.to_string(),
@@ -340,7 +348,15 @@ async fn wait_for_callback(
 ) -> Result<CallbackParams> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let (mut stream, _) = listener.accept().await.ctx("Failed to accept callback connection")?;
+    // Wait up to 5 minutes for the callback, or until Ctrl+C
+    let accept_result = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        listener.accept(),
+    )
+    .await
+    .map_err(|_| SunbeamError::identity("Login timed out (5 min). Try again with `sunbeam auth login`."))?;
+
+    let (mut stream, _) = accept_result.ctx("Failed to accept callback connection")?;
 
     let mut buf = vec![0u8; 4096];
     let n = stream
@@ -389,10 +405,15 @@ async fn wait_for_callback(
 
     // Send success response
     let html = concat!(
-        "<!DOCTYPE html><html><body>",
+        "<!DOCTYPE html><html><head><style>",
+        "body{font-family:system-ui,sans-serif;display:flex;justify-content:center;",
+        "align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}",
+        ".card{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}",
+        "h2{margin:0 0 1rem}p{color:#9ca3af}",
+        "</style></head><body><div class='card'>",
         "<h2>Authentication successful</h2>",
         "<p>You can close this tab and return to the terminal.</p>",
-        "</body></html>"
+        "</div></body></html>"
     );
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
