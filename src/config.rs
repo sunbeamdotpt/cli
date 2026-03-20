@@ -151,26 +151,24 @@ pub fn save_config(config: &SunbeamConfig) -> Result<()> {
 }
 
 /// Resolve the context to use, given CLI flags and config.
+///
+/// Priority (same as kubectl):
+///   1. `--context` flag (explicit context name)
+///   2. `current-context` from config
+///   3. Default to "local"
 pub fn resolve_context(
     config: &SunbeamConfig,
-    env_flag: &str,
+    _env_flag: &str,
     context_override: Option<&str>,
     domain_override: &str,
 ) -> Context {
-    // Start from the named context (CLI --env or current-context)
-    let context_name = context_override
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if env_flag == "production" {
-                "production".to_string()
-            } else if env_flag == "local" {
-                "local".to_string()
-            } else if !config.current_context.is_empty() {
-                config.current_context.clone()
-            } else {
-                "local".to_string()
-            }
-        });
+    let context_name = if let Some(explicit) = context_override {
+        explicit.to_string()
+    } else if !config.current_context.is_empty() {
+        config.current_context.clone()
+    } else {
+        "local".to_string()
+    };
 
     let mut ctx = config
         .contexts
@@ -340,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_context_from_env_flag() {
+    fn test_resolve_context_explicit_flag() {
         let mut config = SunbeamConfig::default();
         config.contexts.insert(
             "production".to_string(),
@@ -350,22 +348,57 @@ mod tests {
                 ..Default::default()
             },
         );
-        let ctx = resolve_context(&config, "production", None, "");
+        // --context production explicitly selects the named context
+        let ctx = resolve_context(&config, "", Some("production"), "");
         assert_eq!(ctx.domain, "sunbeam.pt");
         assert_eq!(ctx.kube_context, "production");
     }
 
     #[test]
+    fn test_resolve_context_current_context() {
+        let mut config = SunbeamConfig::default();
+        config.current_context = "staging".to_string();
+        config.contexts.insert(
+            "staging".to_string(),
+            Context {
+                domain: "staging.example.com".to_string(),
+                ..Default::default()
+            },
+        );
+        // No --context flag, uses current-context
+        let ctx = resolve_context(&config, "", None, "");
+        assert_eq!(ctx.domain, "staging.example.com");
+    }
+
+    #[test]
     fn test_resolve_context_domain_override() {
         let config = SunbeamConfig::default();
-        let ctx = resolve_context(&config, "local", None, "custom.example.com");
+        let ctx = resolve_context(&config, "", None, "custom.example.com");
         assert_eq!(ctx.domain, "custom.example.com");
     }
 
     #[test]
     fn test_resolve_context_defaults_local() {
         let config = SunbeamConfig::default();
-        let ctx = resolve_context(&config, "local", None, "");
+        // No current-context, no --context flag → defaults to "local"
+        let ctx = resolve_context(&config, "", None, "");
         assert_eq!(ctx.kube_context, "sunbeam");
+    }
+
+    #[test]
+    fn test_resolve_context_flag_overrides_current() {
+        let mut config = SunbeamConfig::default();
+        config.current_context = "staging".to_string();
+        config.contexts.insert(
+            "staging".to_string(),
+            Context { domain: "staging.example.com".to_string(), ..Default::default() },
+        );
+        config.contexts.insert(
+            "prod".to_string(),
+            Context { domain: "prod.example.com".to_string(), ..Default::default() },
+        );
+        // --context prod overrides current-context "staging"
+        let ctx = resolve_context(&config, "", Some("prod"), "");
+        assert_eq!(ctx.domain, "prod.example.com");
     }
 }
