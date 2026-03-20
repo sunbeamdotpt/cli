@@ -18,7 +18,7 @@ kube = { version = "0.99", features = ["client", "runtime", "derive", "ws"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 
 # HTTP + TLS
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 rustls = "0.23"
 
 # SSH
@@ -43,6 +43,10 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 # Archive handling
 flate2 = "1"
 tar = "0.4"
+
+# Async
+futures = "0.3"
+tokio-stream = "0.1"
 
 # Utility
 tempfile = "3"
