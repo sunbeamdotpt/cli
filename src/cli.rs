@@ -5,15 +5,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(name = "sunbeam", about = "Sunbeam local dev stack manager")]
 pub struct Cli {
-    /// Target environment.
-    #[arg(long, default_value = "local")]
-    pub env: Env,
-
-    /// kubectl context override.
+    /// Named context to use (overrides current-context from config).
     #[arg(long)]
     pub context: Option<String>,
 
-    /// Domain suffix for production deploys (e.g. sunbeam.pt).
+    /// Domain suffix override (e.g. sunbeam.pt).
     #[arg(long, default_value = "")]
     pub domain: String,
 
@@ -25,20 +21,6 @@ pub struct Cli {
     pub verb: Option<Verb>,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
-pub enum Env {
-    Local,
-    Production,
-}
-
-impl std::fmt::Display for Env {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Env::Local => write!(f, "local"),
-            Env::Production => write!(f, "production"),
-        }
-    }
-}
 
 #[derive(Subcommand, Debug)]
 pub enum Verb {
@@ -406,13 +388,6 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
         .map_err(|_| format!("Invalid date: '{s}' (expected YYYY-MM-DD)"))
 }
 
-/// Default kubectl context per environment.
-fn default_context(env: &Env) -> &'static str {
-    match env {
-        Env::Local => "sunbeam",
-        Env::Production => "production",
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -762,22 +737,23 @@ mod tests {
 pub async fn dispatch() -> Result<()> {
     let cli = Cli::parse();
 
-    // Resolve the active context from config + CLI flags
+    // Resolve the active context from config + CLI flags (like kubectl)
     let config = crate::config::load_config();
     let active = crate::config::resolve_context(
         &config,
-        &cli.env.to_string(),
+        "",
         cli.context.as_deref(),
         &cli.domain,
     );
 
     // Initialize kube context from the resolved context
-    let kube_ctx = if active.kube_context.is_empty() {
-        default_context(&cli.env)
+    let kube_ctx_str = if active.kube_context.is_empty() {
+        "sunbeam".to_string()
     } else {
-        &active.kube_context
+        active.kube_context.clone()
     };
-    crate::kube::set_context(kube_ctx, &active.ssh_host);
+    let ssh_host_str = active.ssh_host.clone();
+    crate::kube::set_context(&kube_ctx_str, &ssh_host_str);
 
     // Store active context globally for other modules to read
     crate::config::set_active_context(active);
@@ -803,7 +779,8 @@ pub async fn dispatch() -> Result<()> {
             domain,
             email,
         }) => {
-            let env_str = cli.env.to_string();
+            let is_production = !crate::config::active_context().ssh_host.is_empty();
+            let env_str = if is_production { "production" } else { "local" };
             let domain = if domain.is_empty() {
                 cli.domain.clone()
             } else {
@@ -817,7 +794,7 @@ pub async fn dispatch() -> Result<()> {
             let ns = namespace.unwrap_or_default();
 
             // Production full-apply requires --all or confirmation
-            if matches!(cli.env, Env::Production) && ns.is_empty() && !apply_all {
+            if is_production && ns.is_empty() && !apply_all {
                 crate::output::warn(
                     "This will apply ALL namespaces to production.",
                 );
