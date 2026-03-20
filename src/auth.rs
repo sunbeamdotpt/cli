@@ -273,18 +273,10 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
 /// Try to read the client_id from K8s secret `oidc-sunbeam-cli` in `ory` namespace.
 /// Falls back to the default client ID.
 async fn resolve_client_id() -> String {
-    // Try reading from K8s secret — silently fall back if cluster is unreachable.
-    // The tracing ERROR from kube client init is noisy; suppress by not even trying
-    // when we know the cluster isn't configured.
-    let host = crate::config::get_production_host();
-    if host.is_empty() && crate::kube::ssh_host().is_empty() {
-        // No cluster configured, skip K8s lookup
-        return DEFAULT_CLIENT_ID.to_string();
-    }
-    match crate::kube::kube_get_secret_field("ory", "oidc-sunbeam-cli", "client_id").await {
-        Ok(id) if !id.is_empty() => id,
-        _ => DEFAULT_CLIENT_ID.to_string(),
-    }
+    // The OAuth2Client is pre-created with a known client_id matching
+    // DEFAULT_CLIENT_ID ("sunbeam-cli") via a pre-seeded K8s secret.
+    // No cluster access needed.
+    DEFAULT_CLIENT_ID.to_string()
 }
 
 // ---------------------------------------------------------------------------
