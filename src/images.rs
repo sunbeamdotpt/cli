@@ -837,7 +837,7 @@ async fn clear_image_pull_error_pods() -> Result<()> {
 // Per-service build functions
 // ---------------------------------------------------------------------------
 
-async fn build_proxy(push: bool, deploy: bool) -> Result<()> {
+async fn build_proxy(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let proxy_dir = crate::config::get_repo_root().join("proxy");
     if !proxy_dir.is_dir() {
@@ -855,7 +855,7 @@ async fn build_proxy(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -866,7 +866,7 @@ async fn build_proxy(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_tuwunel(push: bool, deploy: bool) -> Result<()> {
+async fn build_tuwunel(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let tuwunel_dir = crate::config::get_repo_root().join("tuwunel");
     if !tuwunel_dir.is_dir() {
@@ -884,7 +884,7 @@ async fn build_tuwunel(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -895,7 +895,7 @@ async fn build_tuwunel(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_integration(push: bool, deploy: bool) -> Result<()> {
+async fn build_integration(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let sunbeam_dir = crate::config::get_repo_root();
     let integration_service_dir = sunbeam_dir.join("integration-service");
@@ -940,7 +940,7 @@ async fn build_integration(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await;
@@ -957,7 +957,7 @@ async fn build_integration(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_kratos_admin(push: bool, deploy: bool) -> Result<()> {
+async fn build_kratos_admin(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let kratos_admin_dir = crate::config::get_repo_root().join("kratos-admin");
     if !kratos_admin_dir.is_dir() {
@@ -978,7 +978,7 @@ async fn build_kratos_admin(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -989,7 +989,7 @@ async fn build_kratos_admin(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_meet(push: bool, deploy: bool) -> Result<()> {
+async fn build_meet(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let meet_dir = crate::config::get_repo_root().join("meet");
     if !meet_dir.is_dir() {
@@ -1009,7 +1009,7 @@ async fn build_meet(push: bool, deploy: bool) -> Result<()> {
         Some("backend-production"),
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1035,7 +1035,7 @@ async fn build_meet(push: bool, deploy: bool) -> Result<()> {
         Some("frontend-production"),
         Some(&build_args),
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1053,7 +1053,7 @@ async fn build_meet(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_people(push: bool, deploy: bool) -> Result<()> {
+async fn build_people(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let people_dir = crate::config::get_repo_root().join("people");
     if !people_dir.is_dir() {
@@ -1109,7 +1109,7 @@ async fn build_people(push: bool, deploy: bool) -> Result<()> {
         Some("frontend-production"),
         Some(&build_args),
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1160,7 +1160,7 @@ const MESSAGES_COMPONENTS: &[(&str, &str, &str, Option<&str>)] = &[
     ),
 ];
 
-async fn build_messages(what: &str, push: bool, deploy: bool) -> Result<()> {
+async fn build_messages(what: &str, push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let messages_dir = crate::config::get_repo_root().join("messages");
     if !messages_dir.is_dir() {
@@ -1214,7 +1214,7 @@ async fn build_messages(what: &str, push: bool, deploy: bool) -> Result<()> {
             *target,
             None,
             push,
-            false,
+            no_cache,
             &cleanup_paths,
         )
         .await?;
@@ -1257,6 +1257,7 @@ async fn build_la_suite_frontend(
     namespace: &str,
     push: bool,
     deploy: bool,
+    no_cache: bool,
 ) -> Result<()> {
     let env = get_build_env().await?;
 
@@ -1307,7 +1308,7 @@ async fn build_la_suite_frontend(
         Some("frontend-production"),
         Some(&build_args),
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1439,7 +1440,7 @@ async fn patch_dockerfile_uv(
     Ok((patched_df, cleanup))
 }
 
-async fn build_projects(push: bool, deploy: bool) -> Result<()> {
+async fn build_projects(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let projects_dir = crate::config::get_repo_root().join("projects");
     if !projects_dir.is_dir() {
@@ -1457,7 +1458,7 @@ async fn build_projects(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1468,7 +1469,36 @@ async fn build_projects(push: bool, deploy: bool) -> Result<()> {
     Ok(())
 }
 
-async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
+async fn build_sol(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
+    let env = get_build_env().await?;
+    let sol_dir = crate::config::get_repo_root().join("sol");
+    if !sol_dir.is_dir() {
+        return Err(SunbeamError::build(format!("Sol source not found at {}", sol_dir.display())));
+    }
+
+    let image = format!("{}/studio/sol:latest", env.registry);
+    step(&format!("Building sol -> {image} ..."));
+
+    build_image(
+        &env,
+        &image,
+        &sol_dir.join("Dockerfile"),
+        &sol_dir,
+        None,
+        None,
+        push,
+        no_cache,
+        &[],
+    )
+    .await?;
+
+    if deploy {
+        deploy_rollout(&env, &["sol"], "matrix", 120, None).await?;
+    }
+    Ok(())
+}
+
+async fn build_calendars(push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     let env = get_build_env().await?;
     let cal_dir = crate::config::get_repo_root().join("calendars");
     if !cal_dir.is_dir() {
@@ -1518,7 +1548,7 @@ async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
         Some("backend-production"),
         None,
         push,
-        false,
+        no_cache,
         &cleanup,
     )
     .await?;
@@ -1535,7 +1565,7 @@ async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
         None,
         None,
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1573,7 +1603,7 @@ async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
         Some("frontend-production"),
         Some(&build_args),
         push,
-        false,
+        no_cache,
         &[],
     )
     .await?;
@@ -1601,12 +1631,12 @@ async fn build_calendars(push: bool, deploy: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Build an image. Pass push=true to push, deploy=true to also apply + rollout.
-pub async fn cmd_build(what: &BuildTarget, push: bool, deploy: bool) -> Result<()> {
+pub async fn cmd_build(what: &BuildTarget, push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     match what {
-        BuildTarget::Proxy => build_proxy(push, deploy).await,
-        BuildTarget::Integration => build_integration(push, deploy).await,
-        BuildTarget::KratosAdmin => build_kratos_admin(push, deploy).await,
-        BuildTarget::Meet => build_meet(push, deploy).await,
+        BuildTarget::Proxy => build_proxy(push, deploy, no_cache).await,
+        BuildTarget::Integration => build_integration(push, deploy, no_cache).await,
+        BuildTarget::KratosAdmin => build_kratos_admin(push, deploy, no_cache).await,
+        BuildTarget::Meet => build_meet(push, deploy, no_cache).await,
         BuildTarget::DocsFrontend => {
             let repo_dir = crate::config::get_repo_root().join("docs");
             build_la_suite_frontend(
@@ -1620,22 +1650,24 @@ pub async fn cmd_build(what: &BuildTarget, push: bool, deploy: bool) -> Result<(
                 "lasuite",
                 push,
                 deploy,
+                no_cache,
             )
             .await
         }
-        BuildTarget::PeopleFrontend | BuildTarget::People => build_people(push, deploy).await,
-        BuildTarget::Messages => build_messages("messages", push, deploy).await,
-        BuildTarget::MessagesBackend => build_messages("messages-backend", push, deploy).await,
-        BuildTarget::MessagesFrontend => build_messages("messages-frontend", push, deploy).await,
-        BuildTarget::MessagesMtaIn => build_messages("messages-mta-in", push, deploy).await,
-        BuildTarget::MessagesMtaOut => build_messages("messages-mta-out", push, deploy).await,
-        BuildTarget::MessagesMpa => build_messages("messages-mpa", push, deploy).await,
+        BuildTarget::PeopleFrontend | BuildTarget::People => build_people(push, deploy, no_cache).await,
+        BuildTarget::Messages => build_messages("messages", push, deploy, no_cache).await,
+        BuildTarget::MessagesBackend => build_messages("messages-backend", push, deploy, no_cache).await,
+        BuildTarget::MessagesFrontend => build_messages("messages-frontend", push, deploy, no_cache).await,
+        BuildTarget::MessagesMtaIn => build_messages("messages-mta-in", push, deploy, no_cache).await,
+        BuildTarget::MessagesMtaOut => build_messages("messages-mta-out", push, deploy, no_cache).await,
+        BuildTarget::MessagesMpa => build_messages("messages-mpa", push, deploy, no_cache).await,
         BuildTarget::MessagesSocksProxy => {
-            build_messages("messages-socks-proxy", push, deploy).await
+            build_messages("messages-socks-proxy", push, deploy, no_cache).await
         }
-        BuildTarget::Tuwunel => build_tuwunel(push, deploy).await,
-        BuildTarget::Calendars => build_calendars(push, deploy).await,
-        BuildTarget::Projects => build_projects(push, deploy).await,
+        BuildTarget::Tuwunel => build_tuwunel(push, deploy, no_cache).await,
+        BuildTarget::Calendars => build_calendars(push, deploy, no_cache).await,
+        BuildTarget::Projects => build_projects(push, deploy, no_cache).await,
+        BuildTarget::Sol => build_sol(push, deploy, no_cache).await,
     }
 }
 
@@ -1730,6 +1762,7 @@ mod tests {
             BuildTarget::Tuwunel,
             BuildTarget::Calendars,
             BuildTarget::Projects,
+            BuildTarget::Sol,
         ];
         for t in &targets {
             let s = t.to_string();

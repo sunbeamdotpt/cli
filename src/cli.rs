@@ -88,6 +88,9 @@ pub enum Verb {
         /// Apply manifests and rollout restart after pushing (implies --push).
         #[arg(long)]
         deploy: bool,
+        /// Disable buildkitd layer cache.
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Functional service health checks.
@@ -243,6 +246,7 @@ pub enum BuildTarget {
     Tuwunel,
     Calendars,
     Projects,
+    Sol,
 }
 
 impl std::fmt::Display for BuildTarget {
@@ -265,6 +269,7 @@ impl std::fmt::Display for BuildTarget {
             BuildTarget::Tuwunel => "tuwunel",
             BuildTarget::Calendars => "calendars",
             BuildTarget::Projects => "projects",
+            BuildTarget::Sol => "sol",
         };
         write!(f, "{s}")
     }
@@ -465,10 +470,11 @@ mod tests {
     fn test_build_proxy() {
         let cli = parse(&["sunbeam", "build", "proxy"]);
         match cli.verb {
-            Some(Verb::Build { what, push, deploy }) => {
+            Some(Verb::Build { what, push, deploy, no_cache }) => {
                 assert!(matches!(what, BuildTarget::Proxy));
                 assert!(!push);
                 assert!(!deploy);
+                assert!(!no_cache);
             }
             _ => panic!("expected Build"),
         }
@@ -479,10 +485,11 @@ mod tests {
     fn test_build_deploy_flag() {
         let cli = parse(&["sunbeam", "build", "proxy", "--deploy"]);
         match cli.verb {
-            Some(Verb::Build { deploy, push, .. }) => {
+            Some(Verb::Build { deploy, push, no_cache, .. }) => {
                 assert!(deploy);
                 // clap does not imply --push; that logic is in dispatch()
                 assert!(!push);
+                assert!(!no_cache);
             }
             _ => panic!("expected Build"),
         }
@@ -838,9 +845,9 @@ pub async fn dispatch() -> Result<()> {
             crate::services::cmd_restart(target.as_deref()).await
         }
 
-        Some(Verb::Build { what, push, deploy }) => {
+        Some(Verb::Build { what, push, deploy, no_cache }) => {
             let push = push || deploy;
-            crate::images::cmd_build(&what, push, deploy).await
+            crate::images::cmd_build(&what, push, deploy, no_cache).await
         }
 
         Some(Verb::Check { target }) => {
