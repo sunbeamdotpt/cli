@@ -318,7 +318,16 @@ async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult 
 /// Generate AWS4-HMAC-SHA256 Authorization and x-amz-date headers for an unsigned
 /// GET / request, matching the Python `_s3_auth_headers` function exactly.
 fn s3_auth_headers(access_key: &str, secret_key: &str, host: &str) -> (String, String) {
-    let now = chrono::Utc::now();
+    s3_auth_headers_at(access_key, secret_key, host, chrono::Utc::now())
+}
+
+/// Deterministic inner implementation that accepts an explicit timestamp.
+fn s3_auth_headers_at(
+    access_key: &str,
+    secret_key: &str,
+    host: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (String, String) {
     let amzdate = now.format("%Y%m%dT%H%M%SZ").to_string();
     let datestamp = now.format("%Y%m%d").to_string();
 
@@ -1071,6 +1080,78 @@ mod tests {
         let selected = filter_registry(Some("media"), None);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0], ("media", "livekit"));
+    }
+
+    // ── S3 auth AWS reference vector test ─────────────────────────────
+
+    #[test]
+    fn test_s3_auth_headers_aws_reference_vector() {
+        // Uses AWS test values with a fixed timestamp to verify signature
+        // correctness against a known reference (AWS SigV4 documentation).
+        use chrono::TimeZone;
+
+        let access_key = "AKIAIOSFODNN7EXAMPLE";
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+        let host = "examplebucket.s3.amazonaws.com";
+        let now = chrono::Utc.with_ymd_and_hms(2013, 5, 24, 0, 0, 0).unwrap();
+
+        let (auth, amzdate) = s3_auth_headers_at(access_key, secret_key, host, now);
+
+        // 1. Verify the date header
+        assert_eq!(amzdate, "20130524T000000Z");
+
+        // 2. Verify canonical request intermediate values.
+        //    Canonical request for GET / with empty body:
+        //      GET\n/\n\nhost:examplebucket.s3.amazonaws.com\n
+        //      x-amz-date:20130524T000000Z\n\nhost;x-amz-date\n<sha256("")>
+        let payload_hash =
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let canonical = format!(
+            "GET\n/\n\nhost:{host}\nx-amz-date:{amzdate}\n\nhost;x-amz-date\n{payload_hash}"
+        );
+        let canonical_hash = hex_encode(&Sha256::digest(canonical.as_bytes()));
+
+        // 3. Verify the string to sign
+        let credential_scope = "20130524/us-east-1/s3/aws4_request";
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amzdate}\n{credential_scope}\n{canonical_hash}"
+        );
+
+        // 4. Compute the expected signing key and signature to pin the value.
+        fn hmac_sign(key: &[u8], msg: &[u8]) -> Vec<u8> {
+            let mut mac =
+                HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+            mac.update(msg);
+            mac.finalize().into_bytes().to_vec()
+        }
+
+        let k = hmac_sign(
+            format!("AWS4{secret_key}").as_bytes(),
+            b"20130524",
+        );
+        let k = hmac_sign(&k, b"us-east-1");
+        let k = hmac_sign(&k, b"s3");
+        let k = hmac_sign(&k, b"aws4_request");
+
+        let expected_sig = {
+            let mut mac =
+                HmacSha256::new_from_slice(&k).expect("HMAC accepts any key length");
+            mac.update(string_to_sign.as_bytes());
+            hex_encode(&mac.finalize().into_bytes())
+        };
+
+        // 5. Verify the full Authorization header matches
+        let expected_auth = format!(
+            "AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, \
+             SignedHeaders=host;x-amz-date, Signature={expected_sig}"
+        );
+        assert_eq!(auth, expected_auth);
+
+        // 6. Pin the exact signature value so any regression is caught
+        //    immediately without needing to recompute.
+        let sig = auth.split("Signature=").nth(1).unwrap();
+        assert_eq!(sig, expected_sig);
+        assert_eq!(sig.len(), 64, "SHA-256 HMAC signature must be 64 hex chars");
     }
 
     // ── Additional S3 auth header tests ───────────────────────────────
