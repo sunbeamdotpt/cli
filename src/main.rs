@@ -22,6 +22,11 @@ mod users;
 
 #[tokio::main]
 async fn main() {
+    // Install rustls crypto provider (ring) before any TLS operations.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Initialize tracing subscriber.
     // Respects RUST_LOG env var (e.g. RUST_LOG=debug, RUST_LOG=sunbeam=trace).
     // Default: warn for dependencies, info for sunbeam.
