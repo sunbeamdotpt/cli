@@ -476,7 +476,7 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         discovery.authorization_endpoint,
         urlencoding(&client_id),
         urlencoding(&redirect_uri),
-        "openid+email+profile+offline_access",
+        "openid%20email%20profile%20offline_access",
         code_challenge,
         state,
     );
