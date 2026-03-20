@@ -168,7 +168,11 @@ pub enum Verb {
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via browser (OAuth2 authorization code flow).
-    Login,
+    Login {
+        /// Domain to authenticate against (e.g. sunbeam.pt).
+        #[arg(long)]
+        domain: Option<String>,
+    },
     /// Log out (remove cached tokens).
     Logout,
     /// Show current authentication status.
@@ -1002,7 +1006,9 @@ pub async fn dispatch() -> Result<()> {
             None => {
                 crate::auth::cmd_auth_status().await
             }
-            Some(AuthAction::Login) => crate::auth::cmd_auth_login().await,
+            Some(AuthAction::Login { domain }) => {
+                crate::auth::cmd_auth_login(domain.as_deref()).await
+            }
             Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
             Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
         },
