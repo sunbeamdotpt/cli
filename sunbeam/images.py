@@ -259,6 +259,7 @@ def _buildctl_build_and_push(
     *,
     target: str | None = None,
     build_args: dict[str, str] | None = None,
+    no_cache: bool = False,
 ) -> None:
     """Build and push an image via buildkitd running in k3s.
 
@@ -320,6 +321,8 @@ def _buildctl_build_and_push(
             ]
             if target:
                 cmd += ["--opt", f"target={target}"]
+            if no_cache:
+                cmd += ["--no-cache"]
             if build_args:
                 for k, v in build_args.items():
                     cmd += ["--opt", f"build-arg:{k}={v}"]
@@ -343,6 +346,7 @@ def _build_image(
     target: str | None = None,
     build_args: dict[str, str] | None = None,
     push: bool = False,
+    no_cache: bool = False,
     cleanup_paths: list[Path] | None = None,
 ) -> None:
     """Build a container image via buildkitd and push to the Gitea registry.
@@ -364,6 +368,7 @@ def _build_image(
             context_dir=context_dir,
             target=target,
             build_args=build_args,
+            no_cache=no_cache,
         )
     finally:
         for p in (cleanup_paths or []):
@@ -514,16 +519,16 @@ def cmd_mirror(domain: str = "", gitea_admin_pass: str = ""):
 # Build dispatch
 # ---------------------------------------------------------------------------
 
-def cmd_build(what: str, push: bool = False, deploy: bool = False):
+def cmd_build(what: str, push: bool = False, deploy: bool = False, no_cache: bool = False):
     """Build an image. Pass push=True to push, deploy=True to also apply + rollout."""
     try:
-        _cmd_build(what, push=push, deploy=deploy)
+        _cmd_build(what, push=push, deploy=deploy, no_cache=no_cache)
     except subprocess.CalledProcessError as exc:
         cmd_str = " ".join(str(a) for a in exc.cmd)
         die(f"Build step failed (exit {exc.returncode}): {cmd_str}")
 
 
-def _cmd_build(what: str, push: bool = False, deploy: bool = False):
+def _cmd_build(what: str, push: bool = False, deploy: bool = False, no_cache: bool = False):
     if what == "proxy":
         _build_proxy(push=push, deploy=deploy)
     elif what == "integration":
@@ -553,6 +558,12 @@ def _cmd_build(what: str, push: bool = False, deploy: bool = False):
         _build_messages(what, push=push, deploy=deploy)
     elif what == "tuwunel":
         _build_tuwunel(push=push, deploy=deploy)
+    elif what == "calendars":
+        _build_calendars(push=push, deploy=deploy)
+    elif what == "projects":
+        _build_projects(push=push, deploy=deploy)
+    elif what == "sol":
+        _build_sol(push=push, deploy=deploy)
     else:
         die(f"Unknown build target: {what}")
 
@@ -923,3 +934,105 @@ def _patch_dockerfile_uv(
     except Exception as exc:
         warn(f"Failed to stage uv binaries: {exc}")
         return (dockerfile_path, cleanup)
+
+
+def _build_projects(push: bool = False, deploy: bool = False):
+    """Build projects (Planka Kanban) image from source."""
+    env = _get_build_env()
+
+    projects_dir = _get_repo_root() / "projects"
+    if not projects_dir.is_dir():
+        die(f"projects source not found at {projects_dir}")
+
+    image = f"{env.registry}/studio/projects:latest"
+    step(f"Building projects -> {image} ...")
+
+    _build_image(env, image, projects_dir / "Dockerfile", projects_dir, push=push)
+
+    if deploy:
+        _deploy_rollout(env, ["projects"], "lasuite", timeout="180s",
+                        images=[image])
+
+
+def _build_sol(push: bool = False, deploy: bool = False):
+    """Build Sol virtual librarian image from source."""
+    env = _get_build_env()
+
+    sol_dir = _get_repo_root() / "sol"
+    if not sol_dir.is_dir():
+        die(f"Sol source not found at {sol_dir}")
+
+    image = f"{env.registry}/studio/sol:latest"
+    step(f"Building sol -> {image} ...")
+
+    _build_image(env, image, sol_dir / "Dockerfile", sol_dir, push=push)
+
+    if deploy:
+        _deploy_rollout(env, ["sol"], "matrix", timeout="120s")
+
+
+def _build_calendars(push: bool = False, deploy: bool = False):
+    env = _get_build_env()
+    cal_dir = _get_repo_root() / "calendars"
+    if not cal_dir.is_dir():
+        die(f"calendars source not found at {cal_dir}")
+
+    backend_dir = cal_dir / "src" / "backend"
+    backend_image = f"{env.registry}/studio/calendars-backend:latest"
+    step(f"Building calendars-backend -> {backend_image} ...")
+
+    # Stage translations.json into the build context so the production image
+    # has it at /data/translations.json (Docker Compose mounts it; we bake it in).
+    translations_src = (cal_dir / "src" / "frontend" / "apps" / "calendars"
+                        / "src" / "features" / "i18n" / "translations.json")
+    translations_dst = backend_dir / "_translations.json"
+    cleanup: list[Path] = []
+    dockerfile = backend_dir / "Dockerfile"
+    if translations_src.exists():
+        shutil.copy(str(translations_src), str(translations_dst))
+        cleanup.append(translations_dst)
+        # Patch Dockerfile to COPY translations into production image
+        patched = dockerfile.read_text() + (
+            "\n# Sunbeam: bake translations.json for default calendar names\n"
+            "COPY _translations.json /data/translations.json\n"
+        )
+        patched_df = backend_dir / "Dockerfile._sunbeam_patched"
+        patched_df.write_text(patched)
+        cleanup.append(patched_df)
+        dockerfile = patched_df
+
+    _build_image(env, backend_image,
+                 dockerfile,
+                 backend_dir,
+                 target="backend-production",
+                 push=push,
+                 cleanup_paths=cleanup)
+
+    caldav_image = f"{env.registry}/studio/calendars-caldav:latest"
+    step(f"Building calendars-caldav -> {caldav_image} ...")
+    _build_image(env, caldav_image,
+                 cal_dir / "src" / "caldav" / "Dockerfile",
+                 cal_dir / "src" / "caldav",
+                 push=push)
+
+    frontend_image = f"{env.registry}/studio/calendars-frontend:latest"
+    step(f"Building calendars-frontend -> {frontend_image} ...")
+    integration_base = f"https://integration.{env.domain}"
+    _build_image(env, frontend_image,
+                 cal_dir / "src" / "frontend" / "Dockerfile",
+                 cal_dir / "src" / "frontend",
+                 target="frontend-production",
+                 build_args={
+                     "VISIO_BASE_URL": f"https://meet.{env.domain}",
+                     "GAUFRE_WIDGET_PATH": f"{integration_base}/api/v2/lagaufre.js",
+                     "GAUFRE_API_URL": f"{integration_base}/api/v2/services.json",
+                     "THEME_CSS_URL": f"{integration_base}/api/v2/theme.css",
+                 },
+                 push=push)
+
+    if deploy:
+        _deploy_rollout(env,
+                        ["calendars-backend", "calendars-worker",
+                         "calendars-caldav", "calendars-frontend"],
+                        "lasuite", timeout="180s",
+                        images=[backend_image, caldav_image, frontend_image])

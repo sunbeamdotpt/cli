@@ -63,7 +63,20 @@ class TestArgParsing(unittest.TestCase):
         p_user_set_pw = user_sub.add_parser("set-password")
         p_user_set_pw.add_argument("target")
         p_user_set_pw.add_argument("password")
-        
+        p_user_onboard = user_sub.add_parser("onboard")
+        p_user_onboard.add_argument("email")
+        p_user_onboard.add_argument("--name", default="")
+        p_user_onboard.add_argument("--schema", default="employee")
+        p_user_onboard.add_argument("--no-email", action="store_true")
+        p_user_onboard.add_argument("--notify", default="")
+        p_user_onboard.add_argument("--job-title", default="")
+        p_user_onboard.add_argument("--department", default="")
+        p_user_onboard.add_argument("--office-location", default="")
+        p_user_onboard.add_argument("--hire-date", default="")
+        p_user_onboard.add_argument("--manager", default="")
+        p_user_offboard = user_sub.add_parser("offboard")
+        p_user_offboard.add_argument("target")
+
         # Add config subcommand for testing
         p_config = sub.add_parser("config")
         config_sub = p_config.add_subparsers(dest="config_action")
@@ -154,6 +167,42 @@ class TestArgParsing(unittest.TestCase):
         self.assertEqual(args.user_action, "create")
         self.assertEqual(args.email, "x@example.com")
         self.assertEqual(args.name, "X Y")
+
+    def test_user_onboard_basic(self):
+        args = self._parse(["user", "onboard", "a@b.com"])
+        self.assertEqual(args.user_action, "onboard")
+        self.assertEqual(args.email, "a@b.com")
+        self.assertEqual(args.name, "")
+        self.assertEqual(args.schema, "employee")
+        self.assertFalse(args.no_email)
+        self.assertEqual(args.notify, "")
+
+    def test_user_onboard_full(self):
+        args = self._parse(["user", "onboard", "a@b.com", "--name", "A B", "--schema", "default",
+                            "--no-email", "--job-title", "Engineer", "--department", "Dev",
+                            "--office-location", "Paris", "--hire-date", "2026-01-15",
+                            "--manager", "boss@b.com"])
+        self.assertEqual(args.user_action, "onboard")
+        self.assertEqual(args.email, "a@b.com")
+        self.assertEqual(args.name, "A B")
+        self.assertEqual(args.schema, "default")
+        self.assertTrue(args.no_email)
+        self.assertEqual(args.job_title, "Engineer")
+        self.assertEqual(args.department, "Dev")
+        self.assertEqual(args.office_location, "Paris")
+        self.assertEqual(args.hire_date, "2026-01-15")
+        self.assertEqual(args.manager, "boss@b.com")
+
+    def test_user_onboard_notify(self):
+        args = self._parse(["user", "onboard", "a@work.com", "--notify", "a@personal.com"])
+        self.assertEqual(args.email, "a@work.com")
+        self.assertEqual(args.notify, "a@personal.com")
+        self.assertFalse(args.no_email)
+
+    def test_user_offboard(self):
+        args = self._parse(["user", "offboard", "a@b.com"])
+        self.assertEqual(args.user_action, "offboard")
+        self.assertEqual(args.target, "a@b.com")
 
     def test_get_with_target(self):
         args = self._parse(["get", "ory/kratos-abc"])
@@ -259,6 +308,16 @@ class TestArgParsing(unittest.TestCase):
 class TestCliDispatch(unittest.TestCase):
     """Test that main() dispatches to the correct command function."""
 
+    @staticmethod
+    def _mock_users(**overrides):
+        defaults = {f: MagicMock() for f in [
+            "cmd_user_list", "cmd_user_get", "cmd_user_create", "cmd_user_delete",
+            "cmd_user_recover", "cmd_user_disable", "cmd_user_enable",
+            "cmd_user_set_password", "cmd_user_onboard", "cmd_user_offboard",
+        ]}
+        defaults.update(overrides)
+        return MagicMock(**defaults)
+
     def test_no_verb_exits_0(self):
         with patch.object(sys, "argv", ["sunbeam"]):
             from sunbeam import cli
@@ -356,7 +415,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("proxy", push=False, deploy=False)
+        mock_build.assert_called_once_with("proxy", push=False, deploy=False, no_cache=False)
 
     def test_build_with_push_flag(self):
         mock_build = MagicMock()
@@ -368,7 +427,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("integration", push=True, deploy=False)
+        mock_build.assert_called_once_with("integration", push=True, deploy=False, no_cache=False)
 
     def test_build_with_deploy_flag_implies_push(self):
         mock_build = MagicMock()
@@ -380,16 +439,11 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("proxy", push=True, deploy=True)
+        mock_build.assert_called_once_with("proxy", push=True, deploy=True, no_cache=False)
 
     def test_user_set_password_dispatches(self):
         mock_set_pw = MagicMock()
-        mock_users = MagicMock(
-            cmd_user_list=MagicMock(), cmd_user_get=MagicMock(),
-            cmd_user_create=MagicMock(), cmd_user_delete=MagicMock(),
-            cmd_user_recover=MagicMock(), cmd_user_disable=MagicMock(),
-            cmd_user_enable=MagicMock(), cmd_user_set_password=mock_set_pw,
-        )
+        mock_users = self._mock_users(cmd_user_set_password=mock_set_pw)
         with patch.object(sys, "argv", ["sunbeam", "user", "set-password",
                                         "admin@sunbeam.pt", "s3cr3t"]):
             with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
@@ -403,12 +457,7 @@ class TestCliDispatch(unittest.TestCase):
 
     def test_user_disable_dispatches(self):
         mock_disable = MagicMock()
-        mock_users = MagicMock(
-            cmd_user_list=MagicMock(), cmd_user_get=MagicMock(),
-            cmd_user_create=MagicMock(), cmd_user_delete=MagicMock(),
-            cmd_user_recover=MagicMock(), cmd_user_disable=mock_disable,
-            cmd_user_enable=MagicMock(), cmd_user_set_password=MagicMock(),
-        )
+        mock_users = self._mock_users(cmd_user_disable=mock_disable)
         with patch.object(sys, "argv", ["sunbeam", "user", "disable", "x@sunbeam.pt"]):
             with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
                 import importlib, sunbeam.cli as cli_mod
@@ -421,12 +470,7 @@ class TestCliDispatch(unittest.TestCase):
 
     def test_user_enable_dispatches(self):
         mock_enable = MagicMock()
-        mock_users = MagicMock(
-            cmd_user_list=MagicMock(), cmd_user_get=MagicMock(),
-            cmd_user_create=MagicMock(), cmd_user_delete=MagicMock(),
-            cmd_user_recover=MagicMock(), cmd_user_disable=MagicMock(),
-            cmd_user_enable=mock_enable, cmd_user_set_password=MagicMock(),
-        )
+        mock_users = self._mock_users(cmd_user_enable=mock_enable)
         with patch.object(sys, "argv", ["sunbeam", "user", "enable", "x@sunbeam.pt"]):
             with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
                 import importlib, sunbeam.cli as cli_mod
@@ -471,7 +515,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("people", push=False, deploy=False)
+        mock_build.assert_called_once_with("people", push=False, deploy=False, no_cache=False)
 
     def test_build_people_push_dispatches(self):
         mock_build = MagicMock()
@@ -483,7 +527,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("people", push=True, deploy=False)
+        mock_build.assert_called_once_with("people", push=True, deploy=False, no_cache=False)
 
     def test_build_people_deploy_implies_push(self):
         mock_build = MagicMock()
@@ -495,7 +539,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("people", push=True, deploy=True)
+        mock_build.assert_called_once_with("people", push=True, deploy=True, no_cache=False)
 
     def test_build_meet_dispatches(self):
         mock_build = MagicMock()
@@ -507,7 +551,7 @@ class TestCliDispatch(unittest.TestCase):
                     cli_mod.main()
                 except SystemExit:
                     pass
-        mock_build.assert_called_once_with("meet", push=False, deploy=False)
+        mock_build.assert_called_once_with("meet", push=False, deploy=False, no_cache=False)
 
     def test_check_no_target(self):
         mock_check = MagicMock()
@@ -532,6 +576,56 @@ class TestCliDispatch(unittest.TestCase):
                 except SystemExit:
                     pass
         mock_check.assert_called_once_with("lasuite/people")
+
+
+    def test_user_onboard_dispatches(self):
+        mock_onboard = MagicMock()
+        mock_users = self._mock_users(cmd_user_onboard=mock_onboard)
+        with patch.object(sys, "argv", ["sunbeam", "user", "onboard",
+                                        "new@sunbeam.pt", "--name", "New User"]):
+            with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_onboard.assert_called_once_with("new@sunbeam.pt", name="New User",
+                                             schema_id="employee", send_email=True,
+                                             notify="", job_title="", department="",
+                                             office_location="", hire_date="",
+                                             manager="")
+
+    def test_user_onboard_no_email_dispatches(self):
+        mock_onboard = MagicMock()
+        mock_users = self._mock_users(cmd_user_onboard=mock_onboard)
+        with patch.object(sys, "argv", ["sunbeam", "user", "onboard",
+                                        "new@sunbeam.pt", "--no-email"]):
+            with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_onboard.assert_called_once_with("new@sunbeam.pt", name="",
+                                             schema_id="employee", send_email=False,
+                                             notify="", job_title="", department="",
+                                             office_location="", hire_date="",
+                                             manager="")
+
+    def test_user_offboard_dispatches(self):
+        mock_offboard = MagicMock()
+        mock_users = self._mock_users(cmd_user_offboard=mock_offboard)
+        with patch.object(sys, "argv", ["sunbeam", "user", "offboard", "x@sunbeam.pt"]):
+            with patch.dict("sys.modules", {"sunbeam.users": mock_users}):
+                import importlib, sunbeam.cli as cli_mod
+                importlib.reload(cli_mod)
+                try:
+                    cli_mod.main()
+                except SystemExit:
+                    pass
+        mock_offboard.assert_called_once_with("x@sunbeam.pt")
 
 
 class TestConfigCli(unittest.TestCase):

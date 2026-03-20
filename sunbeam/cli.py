@@ -1,6 +1,18 @@
 """CLI entry point — argparse dispatch table for all sunbeam verbs."""
 import argparse
+import datetime
 import sys
+
+
+def _date_type(value):
+    """Validate YYYY-MM-DD date format for argparse."""
+    if not value:
+        return value
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid date: {value!r} (expected YYYY-MM-DD)")
+    return value
 
 
 ENV_CONTEXTS = {
@@ -48,6 +60,8 @@ def main() -> None:
     p_apply = sub.add_parser("apply", help="kustomize build + domain subst + kubectl apply")
     p_apply.add_argument("namespace", nargs="?", default="",
                          help="Limit apply to one namespace (e.g. lasuite, ingress, ory)")
+    p_apply.add_argument("--all", action="store_true", dest="apply_all",
+                         help="Apply all namespaces without confirmation")
     p_apply.add_argument("--domain", default="", help="Domain suffix (e.g. sunbeam.pt)")
     p_apply.add_argument("--email", default="", help="ACME email for cert-manager")
 
@@ -83,12 +97,14 @@ def main() -> None:
                                   "messages", "messages-backend", "messages-frontend",
                                   "messages-mta-in", "messages-mta-out",
                                   "messages-mpa", "messages-socks-proxy",
-                                  "tuwunel"],
+                                  "tuwunel", "calendars", "projects", "sol"],
                          help="What to build")
     p_build.add_argument("--push", action="store_true",
                          help="Push image to registry after building")
     p_build.add_argument("--deploy", action="store_true",
                          help="Apply manifests and rollout restart after pushing (implies --push)")
+    p_build.add_argument("--no-cache", action="store_true",
+                         help="Disable buildkitd layer cache")
 
     # sunbeam check [ns[/name]]
     p_check = sub.add_parser("check", help="Functional service health checks")
@@ -161,6 +177,21 @@ def main() -> None:
     p_user_set_pw.add_argument("target", help="Email or identity ID")
     p_user_set_pw.add_argument("password", help="New password")
 
+    p_user_onboard = user_sub.add_parser("onboard", help="Onboard new user (create + welcome email)")
+    p_user_onboard.add_argument("email", help="Email address")
+    p_user_onboard.add_argument("--name", default="", help="Display name (First Last)")
+    p_user_onboard.add_argument("--schema", default="employee", help="Schema ID (default: employee)")
+    p_user_onboard.add_argument("--no-email", action="store_true", help="Skip sending welcome email")
+    p_user_onboard.add_argument("--notify", default="", help="Send welcome email to this address instead of identity email")
+    p_user_onboard.add_argument("--job-title", default="", help="Job title")
+    p_user_onboard.add_argument("--department", default="", help="Department")
+    p_user_onboard.add_argument("--office-location", default="", help="Office location")
+    p_user_onboard.add_argument("--hire-date", default="", type=_date_type, help="Hire date (YYYY-MM-DD)")
+    p_user_onboard.add_argument("--manager", default="", help="Manager name or email")
+
+    p_user_offboard = user_sub.add_parser("offboard", help="Offboard user (disable + revoke all)")
+    p_user_offboard.add_argument("target", help="Email or identity ID")
+
     args = parser.parse_args()
 
 
@@ -199,11 +230,25 @@ def main() -> None:
         cmd_status(args.target)
 
     elif args.verb == "apply":
-        from sunbeam.manifests import cmd_apply
+        from sunbeam.manifests import cmd_apply, MANAGED_NS
         # --domain/--email can appear before OR after the verb; subparser wins if both set.
         domain    = getattr(args, "domain",    "") or ""
         email     = getattr(args, "email",     "") or ""
         namespace = getattr(args, "namespace", "") or ""
+        apply_all = getattr(args, "apply_all", False)
+
+        # Full apply on production requires --all or interactive confirmation
+        if args.env == "production" and not namespace and not apply_all:
+            from sunbeam.output import warn
+            warn(f"This will apply ALL namespaces ({', '.join(MANAGED_NS)}) to production.")
+            try:
+                answer = input("  Continue? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer not in ("y", "yes"):
+                print("Aborted.")
+                sys.exit(0)
+
         cmd_apply(env=args.env, domain=domain, email=email, namespace=namespace)
 
     elif args.verb == "seed":
@@ -229,7 +274,7 @@ def main() -> None:
     elif args.verb == "build":
         from sunbeam.images import cmd_build
         push = args.push or args.deploy
-        cmd_build(args.what, push=push, deploy=args.deploy)
+        cmd_build(args.what, push=push, deploy=args.deploy, no_cache=args.no_cache)
 
     elif args.verb == "check":
         from sunbeam.checks import cmd_check
@@ -294,7 +339,8 @@ def main() -> None:
         from sunbeam.users import (cmd_user_list, cmd_user_get, cmd_user_create,
                                    cmd_user_delete, cmd_user_recover,
                                    cmd_user_disable, cmd_user_enable,
-                                   cmd_user_set_password)
+                                   cmd_user_set_password,
+                                   cmd_user_onboard, cmd_user_offboard)
         action = getattr(args, "user_action", None)
         if action is None:
             p_user.print_help()
@@ -315,6 +361,14 @@ def main() -> None:
             cmd_user_enable(args.target)
         elif action == "set-password":
             cmd_user_set_password(args.target, args.password)
+        elif action == "onboard":
+            cmd_user_onboard(args.email, name=args.name, schema_id=args.schema,
+                             send_email=not args.no_email, notify=args.notify,
+                             job_title=args.job_title, department=args.department,
+                             office_location=args.office_location,
+                             hire_date=args.hire_date, manager=args.manager)
+        elif action == "offboard":
+            cmd_user_offboard(args.target)
 
     else:
         parser.print_help()

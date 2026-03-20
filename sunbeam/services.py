@@ -22,6 +22,7 @@ SERVICES_TO_RESTART = [
     ("lasuite",  "people-frontend"),
     ("lasuite",  "people-celery-worker"),
     ("lasuite",  "people-celery-beat"),
+    ("lasuite",  "projects"),
     ("matrix",   "tuwunel"),
     ("media",    "livekit-server"),
 ]
