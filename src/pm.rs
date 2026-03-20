@@ -1000,7 +1000,8 @@ fn display_ticket_detail(t: &Ticket) {
 /// When `source` is `None`, both Planka and Gitea are queried in parallel.
 #[allow(dead_code)]
 pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
 
     let fetch_planka = source.is_none() || matches!(source, Some("planka" | "p"));
     let fetch_gitea = source.is_none() || matches!(source, Some("gitea" | "g"));
@@ -1052,7 +1053,8 @@ pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
 /// Show details for a single ticket by ID.
 #[allow(dead_code)]
 pub async fn cmd_pm_show(id: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
     let ticket_ref = parse_ticket_id(id)?;
 
     let ticket = match ticket_ref {
@@ -1077,7 +1079,8 @@ pub async fn cmd_pm_show(id: &str) -> Result<()> {
 /// for Gitea it is `"org/repo"`.
 #[allow(dead_code)]
 pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
 
     let ticket = match source {
         "planka" | "p" => {
@@ -1120,7 +1123,8 @@ pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) 
 /// Add a comment to a ticket.
 #[allow(dead_code)]
 pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {
@@ -1141,7 +1145,8 @@ pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
 /// Close a ticket.
 #[allow(dead_code)]
 pub async fn cmd_pm_close(id: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {
@@ -1175,7 +1180,8 @@ pub async fn cmd_pm_close(id: &str) -> Result<()> {
 /// Assign a user to a ticket.
 #[allow(dead_code)]
 pub async fn cmd_pm_assign(id: &str, user: &str) -> Result<()> {
-    let domain = crate::kube::get_domain().await?;
+    let domain = crate::config::domain();
+    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {

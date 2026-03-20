@@ -29,15 +29,28 @@ const DEFAULT_CLIENT_ID: &str = "sunbeam-cli";
 // Cache file helpers
 // ---------------------------------------------------------------------------
 
-fn cache_path() -> PathBuf {
-    dirs::data_dir()
+/// Cache path for auth tokens — per-domain so multiple environments work.
+fn cache_path_for_domain(domain: &str) -> PathBuf {
+    let dir = dirs::data_dir()
         .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".local/share")
         })
         .join("sunbeam")
-        .join("auth.json")
+        .join("auth");
+    if domain.is_empty() {
+        dir.join("default.json")
+    } else {
+        // Sanitize domain for filename
+        let safe = domain.replace(['/', '\\', ':'], "_");
+        dir.join(format!("{safe}.json"))
+    }
+}
+
+fn cache_path() -> PathBuf {
+    let domain = crate::config::domain();
+    cache_path_for_domain(domain)
 }
 
 fn read_cache() -> Result<AuthTokens> {
@@ -112,7 +125,13 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
         }
     }
 
-    // 2. Cached token domain (already logged in to a domain)
+    // 2. Active context domain (set by cli::dispatch from config)
+    let ctx_domain = crate::config::domain();
+    if !ctx_domain.is_empty() {
+        return Ok(ctx_domain.to_string());
+    }
+
+    // 3. Cached token domain (already logged in)
     if let Ok(tokens) = read_cache() {
         if !tokens.domain.is_empty() {
             crate::output::ok(&format!("Using cached domain: {}", tokens.domain));
@@ -120,29 +139,15 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
         }
     }
 
-    // 3. Config: derive from production_host
-    let config = crate::config::load_config();
-    if !config.production_host.is_empty() {
-        let host = &config.production_host;
-        let raw = host.split('@').last().unwrap_or(host);
-        let raw = raw.split(':').next().unwrap_or(raw);
-        // Take the last 2+ segments as the domain (e.g. admin.sunbeam.pt -> sunbeam.pt)
-        let parts: Vec<&str> = raw.split('.').collect();
-        if parts.len() >= 2 {
-            let domain = format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
-            return Ok(domain);
-        }
-    }
-
     // 4. Try cluster discovery (may fail if not connected)
     match crate::kube::get_domain().await {
-        Ok(d) if !d.is_empty() && !d.starts_with(".") => return Ok(d),
+        Ok(d) if !d.is_empty() && !d.starts_with('.') => return Ok(d),
         _ => {}
     }
 
     Err(SunbeamError::config(
         "Could not determine domain. Use --domain flag, or configure with:\n  \
-         sunbeam config set --host user@your-server.example.com"
+         sunbeam config set --host user@your-server.example.com",
     ))
 }
 
@@ -803,9 +808,16 @@ mod tests {
 
     #[test]
     fn test_cache_path_is_under_sunbeam() {
-        let path = cache_path();
+        let path = cache_path_for_domain("sunbeam.pt");
         let path_str = path.to_string_lossy();
         assert!(path_str.contains("sunbeam"));
-        assert!(path_str.ends_with("auth.json"));
+        assert!(path_str.contains("auth"));
+        assert!(path_str.ends_with("sunbeam.pt.json"));
+    }
+
+    #[test]
+    fn test_cache_path_default_domain() {
+        let path = cache_path_for_domain("");
+        assert!(path.to_string_lossy().ends_with("default.json"));
     }
 }
