@@ -278,8 +278,11 @@ impl std::fmt::Display for BuildTarget {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
-    /// Set configuration values.
+    /// Set configuration values for the current context.
     Set {
+        /// Domain suffix (e.g. sunbeam.pt).
+        #[arg(long, default_value = "")]
+        domain: String,
         /// Production SSH host (e.g. user@server.example.com).
         #[arg(long, default_value = "")]
         host: String,
@@ -289,11 +292,19 @@ pub enum ConfigAction {
         /// ACME email for Let's Encrypt certificates.
         #[arg(long, default_value = "")]
         acme_email: String,
+        /// Context name to configure (default: current context).
+        #[arg(long, default_value = "")]
+        context_name: String,
     },
     /// Get current configuration.
     Get,
     /// Clear configuration.
     Clear,
+    /// Switch the active context.
+    UseContext {
+        /// Context name to switch to.
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -751,28 +762,25 @@ mod tests {
 pub async fn dispatch() -> Result<()> {
     let cli = Cli::parse();
 
-    let ctx = cli
-        .context
-        .as_deref()
-        .unwrap_or_else(|| default_context(&cli.env));
+    // Resolve the active context from config + CLI flags
+    let config = crate::config::load_config();
+    let active = crate::config::resolve_context(
+        &config,
+        &cli.env.to_string(),
+        cli.context.as_deref(),
+        &cli.domain,
+    );
 
-    // For production, resolve SSH host
-    let ssh_host = match cli.env {
-        Env::Production => {
-            let host = crate::config::get_production_host();
-            if host.is_empty() {
-                return Err(SunbeamError::config(
-                    "Production host not configured. \
-                     Use `sunbeam config set --host` or set SUNBEAM_SSH_HOST.",
-                ));
-            }
-            Some(host)
-        }
-        Env::Local => None,
+    // Initialize kube context from the resolved context
+    let kube_ctx = if active.kube_context.is_empty() {
+        default_context(&cli.env)
+    } else {
+        &active.kube_context
     };
+    crate::kube::set_context(kube_ctx, &active.ssh_host);
 
-    // Initialize kube context
-    crate::kube::set_context(ctx, ssh_host.as_deref().unwrap_or(""));
+    // Store active context globally for other modules to read
+    crate::config::set_active_context(active);
 
     match cli.verb {
         None => {
@@ -867,50 +875,84 @@ pub async fn dispatch() -> Result<()> {
                 Ok(())
             }
             Some(ConfigAction::Set {
+                domain: set_domain,
                 host,
                 infra_dir,
                 acme_email,
+                context_name,
             }) => {
                 let mut config = crate::config::load_config();
+                // Determine which context to modify
+                let ctx_name = if context_name.is_empty() {
+                    if !config.current_context.is_empty() {
+                        config.current_context.clone()
+                    } else {
+                        "production".to_string()
+                    }
+                } else {
+                    context_name
+                };
+
+                let ctx = config.contexts.entry(ctx_name.clone()).or_default();
+                if !set_domain.is_empty() {
+                    ctx.domain = set_domain;
+                }
                 if !host.is_empty() {
-                    config.production_host = host;
+                    ctx.ssh_host = host.clone();
+                    config.production_host = host; // keep legacy field in sync
                 }
                 if !infra_dir.is_empty() {
+                    ctx.infra_dir = infra_dir.clone();
                     config.infra_directory = infra_dir;
                 }
                 if !acme_email.is_empty() {
+                    ctx.acme_email = acme_email.clone();
                     config.acme_email = acme_email;
+                }
+                if config.current_context.is_empty() {
+                    config.current_context = ctx_name;
                 }
                 crate::config::save_config(&config)
             }
+            Some(ConfigAction::UseContext { name }) => {
+                let mut config = crate::config::load_config();
+                if !config.contexts.contains_key(&name) {
+                    crate::output::warn(&format!("Context '{name}' does not exist. Creating empty context."));
+                    config.contexts.insert(name.clone(), crate::config::Context::default());
+                }
+                config.current_context = name.clone();
+                crate::config::save_config(&config)?;
+                crate::output::ok(&format!("Switched to context '{name}'."));
+                Ok(())
+            }
             Some(ConfigAction::Get) => {
                 let config = crate::config::load_config();
-                let host_display = if config.production_host.is_empty() {
-                    "(not set)"
+                let current = if config.current_context.is_empty() {
+                    "(none)"
                 } else {
-                    &config.production_host
+                    &config.current_context
                 };
-                let infra_display = if config.infra_directory.is_empty() {
-                    "(not set)"
-                } else {
-                    &config.infra_directory
-                };
-                let email_display = if config.acme_email.is_empty() {
-                    "(not set)"
-                } else {
-                    &config.acme_email
-                };
-                crate::output::ok(&format!("Production host: {host_display}"));
-                crate::output::ok(&format!(
-                    "Infrastructure directory: {infra_display}"
-                ));
-                crate::output::ok(&format!("ACME email: {email_display}"));
-
-                let effective = crate::config::get_production_host();
-                if !effective.is_empty() {
-                    crate::output::ok(&format!(
-                        "Effective production host: {effective}"
-                    ));
+                crate::output::ok(&format!("Current context: {current}"));
+                println!();
+                for (name, ctx) in &config.contexts {
+                    let marker = if name == current { " *" } else { "" };
+                    crate::output::ok(&format!("Context: {name}{marker}"));
+                    if !ctx.domain.is_empty() {
+                        crate::output::ok(&format!("  domain:       {}", ctx.domain));
+                    }
+                    if !ctx.kube_context.is_empty() {
+                        crate::output::ok(&format!("  kube-context: {}", ctx.kube_context));
+                    }
+                    if !ctx.ssh_host.is_empty() {
+                        crate::output::ok(&format!("  ssh-host:     {}", ctx.ssh_host));
+                    }
+                    if !ctx.infra_dir.is_empty() {
+                        crate::output::ok(&format!("  infra-dir:    {}", ctx.infra_dir));
+                    }
+                    if !ctx.acme_email.is_empty() {
+                        crate::output::ok(&format!("  acme-email:   {}", ctx.acme_email));
+                    }
+                    println!();
                 }
                 Ok(())
             }
