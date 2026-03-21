@@ -1,12 +1,595 @@
-//! Gitea bootstrap -- admin setup, org creation, OIDC auth source configuration.
+//! Gitea API client and bootstrap operations.
 
+pub mod types;
+
+use crate::client::{AuthMethod, HttpTransport, ServiceClient};
 use crate::error::Result;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams};
+use reqwest::Method;
 use serde_json::Value;
 
 use crate::kube::{get_client, get_domain, kube_exec, kube_get_secret_field};
 use crate::output::{ok, step, warn};
+
+// ---------------------------------------------------------------------------
+// Gitea API Client (ServiceClient trait)
+// ---------------------------------------------------------------------------
+
+/// Full Gitea REST API client using PAT authentication.
+pub struct GiteaClient {
+    pub(crate) transport: HttpTransport,
+}
+
+impl ServiceClient for GiteaClient {
+    fn service_name(&self) -> &'static str {
+        "gitea"
+    }
+
+    fn base_url(&self) -> &str {
+        &self.transport.base_url
+    }
+
+    fn from_parts(base_url: String, auth: AuthMethod) -> Self {
+        Self {
+            transport: HttpTransport::new(&base_url, auth),
+        }
+    }
+}
+
+impl GiteaClient {
+    /// Build a GiteaClient from domain, using the cached Gitea PAT.
+    pub fn connect(domain: &str) -> Self {
+        let base_url = format!("https://src.{domain}/api/v1");
+        let auth = match crate::auth::get_gitea_token() {
+            Ok(token) => AuthMethod::Token(token),
+            Err(_) => AuthMethod::None,
+        };
+        Self::from_parts(base_url, auth)
+    }
+
+    /// Build a GiteaClient from domain and explicit token.
+    pub fn with_token(domain: &str, token: String) -> Self {
+        let base_url = format!("https://src.{domain}/api/v1");
+        Self::from_parts(base_url, AuthMethod::Token(token))
+    }
+
+    // -- Repos --------------------------------------------------------------
+
+    /// Search repositories.
+    pub async fn search_repos(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<types::SearchResult<types::Repository>> {
+        let limit = limit.unwrap_or(20);
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/search?q={query}&limit={limit}"),
+                Option::<&()>::None,
+                "gitea search repos",
+            )
+            .await
+    }
+
+    /// Get a repository.
+    pub async fn get_repo(&self, owner: &str, repo: &str) -> Result<types::Repository> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}"),
+                Option::<&()>::None,
+                "gitea get repo",
+            )
+            .await
+    }
+
+    /// Create a repository for a user.
+    pub async fn create_user_repo(&self, body: &types::CreateRepoBody) -> Result<types::Repository> {
+        self.transport
+            .json(Method::POST, "user/repos", Some(body), "gitea create user repo")
+            .await
+    }
+
+    /// Create a repository for an organization.
+    pub async fn create_org_repo(
+        &self,
+        org: &str,
+        body: &types::CreateRepoBody,
+    ) -> Result<types::Repository> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("orgs/{org}/repos"),
+                Some(body),
+                "gitea create org repo",
+            )
+            .await
+    }
+
+    /// Edit a repository.
+    pub async fn edit_repo(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::EditRepoBody,
+    ) -> Result<types::Repository> {
+        self.transport
+            .json(
+                Method::PATCH,
+                &format!("repos/{owner}/{repo}"),
+                Some(body),
+                "gitea edit repo",
+            )
+            .await
+    }
+
+    /// Delete a repository.
+    pub async fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
+        self.transport
+            .send(
+                Method::DELETE,
+                &format!("repos/{owner}/{repo}"),
+                Option::<&()>::None,
+                "gitea delete repo",
+            )
+            .await
+    }
+
+    /// Fork a repository.
+    pub async fn fork_repo(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::ForkRepoBody,
+    ) -> Result<types::Repository> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/forks"),
+                Some(body),
+                "gitea fork repo",
+            )
+            .await
+    }
+
+    /// Trigger mirror sync.
+    pub async fn mirror_sync(&self, owner: &str, repo: &str) -> Result<()> {
+        self.transport
+            .send(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/mirror-sync"),
+                Option::<&()>::None,
+                "gitea mirror sync",
+            )
+            .await
+    }
+
+    /// Transfer a repository to another owner.
+    pub async fn transfer_repo(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::TransferRepoBody,
+    ) -> Result<types::Repository> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/transfer"),
+                Some(body),
+                "gitea transfer repo",
+            )
+            .await
+    }
+
+    // -- Issues -------------------------------------------------------------
+
+    /// List issues for a repo.
+    pub async fn list_issues(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<types::Issue>> {
+        let limit = limit.unwrap_or(50);
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/issues?state={state}&type=issues&limit={limit}"),
+                Option::<&()>::None,
+                "gitea list issues",
+            )
+            .await
+    }
+
+    /// Get a single issue.
+    pub async fn get_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+    ) -> Result<types::Issue> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/issues/{index}"),
+                Option::<&()>::None,
+                "gitea get issue",
+            )
+            .await
+    }
+
+    /// Create an issue.
+    pub async fn create_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::CreateIssueBody,
+    ) -> Result<types::Issue> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/issues"),
+                Some(body),
+                "gitea create issue",
+            )
+            .await
+    }
+
+    /// Edit an issue.
+    pub async fn edit_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        body: &types::EditIssueBody,
+    ) -> Result<types::Issue> {
+        self.transport
+            .json(
+                Method::PATCH,
+                &format!("repos/{owner}/{repo}/issues/{index}"),
+                Some(body),
+                "gitea edit issue",
+            )
+            .await
+    }
+
+    /// List issue comments.
+    pub async fn list_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+    ) -> Result<Vec<types::Comment>> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/issues/{index}/comments"),
+                Option::<&()>::None,
+                "gitea list comments",
+            )
+            .await
+    }
+
+    /// Create an issue comment.
+    pub async fn create_issue_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        body: &str,
+    ) -> Result<types::Comment> {
+        let payload = serde_json::json!({"body": body});
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/issues/{index}/comments"),
+                Some(&payload),
+                "gitea create comment",
+            )
+            .await
+    }
+
+    // -- Pull Requests ------------------------------------------------------
+
+    /// List pull requests.
+    pub async fn list_pulls(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: &str,
+    ) -> Result<Vec<types::PullRequest>> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/pulls?state={state}&limit=50"),
+                Option::<&()>::None,
+                "gitea list pulls",
+            )
+            .await
+    }
+
+    /// Get a pull request.
+    pub async fn get_pull(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+    ) -> Result<types::PullRequest> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/pulls/{index}"),
+                Option::<&()>::None,
+                "gitea get pull",
+            )
+            .await
+    }
+
+    /// Create a pull request.
+    pub async fn create_pull(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::CreatePullBody,
+    ) -> Result<types::PullRequest> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/pulls"),
+                Some(body),
+                "gitea create pull",
+            )
+            .await
+    }
+
+    /// Merge a pull request.
+    pub async fn merge_pull(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        body: &types::MergePullBody,
+    ) -> Result<()> {
+        self.transport
+            .send(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/pulls/{index}/merge"),
+                Some(body),
+                "gitea merge pull",
+            )
+            .await
+    }
+
+    // -- Branches -----------------------------------------------------------
+
+    /// List branches.
+    pub async fn list_branches(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<types::Branch>> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("repos/{owner}/{repo}/branches"),
+                Option::<&()>::None,
+                "gitea list branches",
+            )
+            .await
+    }
+
+    /// Create a branch.
+    pub async fn create_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        body: &types::CreateBranchBody,
+    ) -> Result<types::Branch> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("repos/{owner}/{repo}/branches"),
+                Some(body),
+                "gitea create branch",
+            )
+            .await
+    }
+
+    /// Delete a branch.
+    pub async fn delete_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<()> {
+        self.transport
+            .send(
+                Method::DELETE,
+                &format!("repos/{owner}/{repo}/branches/{branch}"),
+                Option::<&()>::None,
+                "gitea delete branch",
+            )
+            .await
+    }
+
+    // -- Orgs ---------------------------------------------------------------
+
+    /// List user's organizations.
+    pub async fn list_user_orgs(&self, username: &str) -> Result<Vec<types::Organization>> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("users/{username}/orgs"),
+                Option::<&()>::None,
+                "gitea list user orgs",
+            )
+            .await
+    }
+
+    /// Get an organization.
+    pub async fn get_org(&self, org: &str) -> Result<types::Organization> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("orgs/{org}"),
+                Option::<&()>::None,
+                "gitea get org",
+            )
+            .await
+    }
+
+    /// Create an organization.
+    pub async fn create_org(&self, body: &types::CreateOrgBody) -> Result<types::Organization> {
+        self.transport
+            .json(Method::POST, "orgs", Some(body), "gitea create org")
+            .await
+    }
+
+    /// List organization repos.
+    pub async fn list_org_repos(
+        &self,
+        org: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<types::Repository>> {
+        let limit = limit.unwrap_or(50);
+        self.transport
+            .json(
+                Method::GET,
+                &format!("orgs/{org}/repos?limit={limit}"),
+                Option::<&()>::None,
+                "gitea list org repos",
+            )
+            .await
+    }
+
+    // -- Users --------------------------------------------------------------
+
+    /// Search users.
+    pub async fn search_users(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<types::SearchResult<types::User>> {
+        let limit = limit.unwrap_or(20);
+        self.transport
+            .json(
+                Method::GET,
+                &format!("users/search?q={query}&limit={limit}"),
+                Option::<&()>::None,
+                "gitea search users",
+            )
+            .await
+    }
+
+    /// Get the authenticated user.
+    pub async fn get_authenticated_user(&self) -> Result<types::User> {
+        self.transport
+            .json(
+                Method::GET,
+                "user",
+                Option::<&()>::None,
+                "gitea get authenticated user",
+            )
+            .await
+    }
+
+    /// Get a user.
+    pub async fn get_user(&self, username: &str) -> Result<types::User> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("users/{username}"),
+                Option::<&()>::None,
+                "gitea get user",
+            )
+            .await
+    }
+
+    // -- File content -------------------------------------------------------
+
+    /// Get file content.
+    pub async fn get_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        filepath: &str,
+        r#ref: Option<&str>,
+    ) -> Result<types::FileContent> {
+        let mut path = format!("repos/{owner}/{repo}/contents/{filepath}");
+        if let Some(r) = r#ref {
+            path.push_str(&format!("?ref={r}"));
+        }
+        self.transport
+            .json(Method::GET, &path, Option::<&()>::None, "gitea get file")
+            .await
+    }
+
+    /// Get raw file content.
+    pub async fn get_raw_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        filepath: &str,
+        r#ref: Option<&str>,
+    ) -> Result<bytes::Bytes> {
+        let mut path = format!("repos/{owner}/{repo}/raw/{filepath}");
+        if let Some(r) = r#ref {
+            path.push_str(&format!("?ref={r}"));
+        }
+        self.transport
+            .bytes(Method::GET, &path, "gitea get raw file")
+            .await
+    }
+
+    // -- Notifications ------------------------------------------------------
+
+    /// List notifications.
+    pub async fn list_notifications(&self) -> Result<Vec<types::Notification>> {
+        self.transport
+            .json(
+                Method::GET,
+                "notifications",
+                Option::<&()>::None,
+                "gitea list notifications",
+            )
+            .await
+    }
+
+    /// Mark all notifications as read.
+    pub async fn mark_notifications_read(&self) -> Result<()> {
+        self.transport
+            .send(
+                Method::PUT,
+                "notifications",
+                Option::<&()>::None,
+                "gitea mark notifications read",
+            )
+            .await
+    }
+}
+
+#[cfg(test)]
+mod gitea_client_tests {
+    use super::*;
+
+    #[test]
+    fn test_gitea_client_connect_url() {
+        // connect() may fail to get token, but URL should be correct
+        let c = GiteaClient::from_parts(
+            "https://src.sunbeam.pt/api/v1".into(),
+            AuthMethod::Token("test".into()),
+        );
+        assert_eq!(c.base_url(), "https://src.sunbeam.pt/api/v1");
+        assert_eq!(c.service_name(), "gitea");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap operations (existing code below)
+// ---------------------------------------------------------------------------
 
 const GITEA_ADMIN_USER: &str = "gitea_admin";
 const GITEA_ADMIN_EMAIL: &str = "gitea@local.domain";
