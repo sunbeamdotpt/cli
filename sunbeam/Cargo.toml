@@ -1,0 +1,18 @@
+[package]
+name = "sunbeam"
+version = "0.1.0"
+edition = "2024"
+description = "Sunbeam local dev stack manager"
+
+[[bin]]
+name = "sunbeam"
+path = "src/main.rs"
+
+[dependencies]
+sunbeam-sdk = { path = "../sunbeam-sdk", features = ["cli"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustls = { version = "0.23", features = ["ring"] }
