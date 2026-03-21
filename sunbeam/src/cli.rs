@@ -1,6 +1,7 @@
-use sunbeam_sdk::error::{Result, SunbeamError};
+use sunbeam_sdk::error::Result;
 use sunbeam_sdk::images::BuildTarget;
-use clap::{Parser, Subcommand, ValueEnum};
+use sunbeam_sdk::output::OutputFormat;
+use clap::{Parser, Subcommand};
 
 /// Sunbeam local dev stack manager.
 #[derive(Parser, Debug)]
@@ -18,6 +19,10 @@ pub struct Cli {
     #[arg(long, default_value = "")]
     pub email: String,
 
+    /// Output format (json, yaml, table). Default: table.
+    #[arg(short = 'o', long = "output", global = true, default_value = "table")]
+    pub output_format: OutputFormat,
+
     #[command(subcommand)]
     pub verb: Option<Verb>,
 }
@@ -25,6 +30,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Verb {
+    // -- Infrastructure commands (preserved) ----------------------------------
+
     /// Full cluster bring-up.
     Up,
 
@@ -68,8 +75,8 @@ pub enum Verb {
     Get {
         /// namespace/name
         target: String,
-        /// Output format.
-        #[arg(short, long, default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
+        /// kubectl output format (yaml, json, wide).
+        #[arg(long = "kubectl-output", default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
         output: String,
     },
 
@@ -126,18 +133,6 @@ pub enum Verb {
         bao_args: Vec<String>,
     },
 
-    /// User/identity management.
-    User {
-        #[command(subcommand)]
-        action: Option<UserAction>,
-    },
-
-    /// Authenticate with Sunbeam (OAuth2 login via browser).
-    Auth {
-        #[command(subcommand)]
-        action: Option<AuthAction>,
-    },
-
     /// Project management across Planka and Gitea.
     Pm {
         #[command(subcommand)]
@@ -149,32 +144,98 @@ pub enum Verb {
 
     /// Print version info.
     Version,
-}
 
-#[derive(Subcommand, Debug)]
-pub enum AuthAction {
-    /// Log in to both SSO and Gitea.
-    Login {
-        /// Domain to authenticate against (e.g. sunbeam.pt).
-        #[arg(long)]
-        domain: Option<String>,
+    // -- Service commands (new) -----------------------------------------------
+
+    /// Authentication, identity & OAuth2 management.
+    Auth {
+        #[command(subcommand)]
+        action: sunbeam_sdk::identity::cli::AuthCommand,
     },
-    /// Log in to SSO only (Hydra OIDC — for Planka, identity management).
-    Sso {
-        /// Domain to authenticate against.
-        #[arg(long)]
-        domain: Option<String>,
+
+    /// Version control (Gitea).
+    Vcs {
+        #[command(subcommand)]
+        action: sunbeam_sdk::gitea::cli::VcsCommand,
     },
-    /// Log in to Gitea only (personal access token).
-    Git {
-        /// Domain to authenticate against.
-        #[arg(long)]
-        domain: Option<String>,
+
+    /// Chat / messaging (Matrix).
+    Chat {
+        #[command(subcommand)]
+        action: sunbeam_sdk::matrix::cli::ChatCommand,
     },
-    /// Log out (remove all cached tokens).
-    Logout,
-    /// Show current authentication status.
-    Status,
+
+    /// Search engine (OpenSearch).
+    Search {
+        #[command(subcommand)]
+        action: sunbeam_sdk::search::cli::SearchCommand,
+    },
+
+    /// Object storage (S3).
+    Storage {
+        #[command(subcommand)]
+        action: sunbeam_sdk::storage::cli::StorageCommand,
+    },
+
+    /// Media / video (LiveKit).
+    Media {
+        #[command(subcommand)]
+        action: sunbeam_sdk::media::cli::MediaCommand,
+    },
+
+    /// Monitoring (Prometheus, Loki, Grafana).
+    Mon {
+        #[command(subcommand)]
+        action: sunbeam_sdk::monitoring::cli::MonCommand,
+    },
+
+    /// Secrets management (OpenBao/Vault).
+    Vault {
+        #[command(subcommand)]
+        action: sunbeam_sdk::openbao::cli::VaultCommand,
+    },
+
+    /// People / contacts (La Suite).
+    People {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::PeopleCommand,
+    },
+
+    /// Documents (La Suite).
+    Docs {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::DocsCommand,
+    },
+
+    /// Video meetings (La Suite).
+    Meet {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::MeetCommand,
+    },
+
+    /// File storage (La Suite).
+    Drive {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::DriveCommand,
+    },
+
+    /// Email (La Suite).
+    Mail {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::MailCommand,
+    },
+
+    /// Calendar (La Suite).
+    Cal {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::CalCommand,
+    },
+
+    /// Search across La Suite services.
+    Find {
+        #[command(subcommand)]
+        action: sunbeam_sdk::lasuite::cli::FindCommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -258,106 +319,6 @@ pub enum ConfigAction {
         name: String,
     },
 }
-
-#[derive(Subcommand, Debug)]
-pub enum UserAction {
-    /// List identities.
-    List {
-        /// Filter by email.
-        #[arg(long, default_value = "")]
-        search: String,
-    },
-    /// Get identity by email or ID.
-    Get {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Create identity.
-    Create {
-        /// Email address.
-        email: String,
-        /// Display name.
-        #[arg(long, default_value = "")]
-        name: String,
-        /// Schema ID.
-        #[arg(long, default_value = "default")]
-        schema: String,
-    },
-    /// Delete identity.
-    Delete {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Generate recovery link.
-    Recover {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Disable identity + revoke sessions (lockout).
-    Disable {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Re-enable a disabled identity.
-    Enable {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Set password for an identity.
-    SetPassword {
-        /// Email or identity ID.
-        target: String,
-        /// New password. If omitted, reads from stdin.
-        password: Option<String>,
-    },
-    /// Onboard new user (create + welcome email).
-    Onboard {
-        /// Email address.
-        email: String,
-        /// Display name (First Last).
-        #[arg(long, default_value = "")]
-        name: String,
-        /// Schema ID.
-        #[arg(long, default_value = "employee")]
-        schema: String,
-        /// Skip sending welcome email.
-        #[arg(long)]
-        no_email: bool,
-        /// Send welcome email to this address instead.
-        #[arg(long, default_value = "")]
-        notify: String,
-        /// Job title.
-        #[arg(long, default_value = "")]
-        job_title: String,
-        /// Department.
-        #[arg(long, default_value = "")]
-        department: String,
-        /// Office location.
-        #[arg(long, default_value = "")]
-        office_location: String,
-        /// Hire date (YYYY-MM-DD).
-        #[arg(long, default_value = "", value_parser = validate_date)]
-        hire_date: String,
-        /// Manager name or email.
-        #[arg(long, default_value = "")]
-        manager: String,
-    },
-    /// Offboard user (disable + revoke all).
-    Offboard {
-        /// Email or identity ID.
-        target: String,
-    },
-}
-
-fn validate_date(s: &str) -> std::result::Result<String, String> {
-    if s.is_empty() {
-        return Ok(s.to_string());
-    }
-    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .map(|_| s.to_string())
-        .map_err(|_| format!("Invalid date: '{s}' (expected YYYY-MM-DD)"))
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -455,78 +416,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // 9. test_user_set_password
-    #[test]
-    fn test_user_set_password() {
-        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com", "hunter2"]);
-        match cli.verb {
-            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
-                assert_eq!(target, "admin@example.com");
-                assert_eq!(password, Some("hunter2".to_string()));
-            }
-            _ => panic!("expected User SetPassword"),
-        }
-    }
-
-    #[test]
-    fn test_user_set_password_no_password() {
-        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com"]);
-        match cli.verb {
-            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
-                assert_eq!(target, "admin@example.com");
-                assert!(password.is_none());
-            }
-            _ => panic!("expected User SetPassword"),
-        }
-    }
-
-    // 10. test_user_onboard_basic
-    #[test]
-    fn test_user_onboard_basic() {
-        let cli = parse(&["sunbeam", "user", "onboard", "a@b.com"]);
-        match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard {
-                email, name, schema, no_email, notify, ..
-            }) }) => {
-                assert_eq!(email, "a@b.com");
-                assert_eq!(name, "");
-                assert_eq!(schema, "employee");
-                assert!(!no_email);
-                assert_eq!(notify, "");
-            }
-            _ => panic!("expected User Onboard"),
-        }
-    }
-
-    // 11. test_user_onboard_full
-    #[test]
-    fn test_user_onboard_full() {
-        let cli = parse(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--name", "A B", "--schema", "default", "--no-email",
-            "--job-title", "Engineer", "--department", "Dev",
-            "--office-location", "Paris", "--hire-date", "2026-01-15",
-            "--manager", "boss@b.com",
-        ]);
-        match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard {
-                email, name, schema, no_email, job_title,
-                department, office_location, hire_date, manager, ..
-            }) }) => {
-                assert_eq!(email, "a@b.com");
-                assert_eq!(name, "A B");
-                assert_eq!(schema, "default");
-                assert!(no_email);
-                assert_eq!(job_title, "Engineer");
-                assert_eq!(department, "Dev");
-                assert_eq!(office_location, "Paris");
-                assert_eq!(hire_date, "2026-01-15");
-                assert_eq!(manager, "boss@b.com");
-            }
-            _ => panic!("expected User Onboard"),
-        }
-    }
-
     // 12. test_apply_no_namespace
     #[test]
     fn test_apply_no_namespace() {
@@ -593,7 +482,7 @@ mod tests {
     // 17. test_get_json_output
     #[test]
     fn test_get_json_output() {
-        let cli = parse(&["sunbeam", "get", "ory/kratos-abc", "-o", "json"]);
+        let cli = parse(&["sunbeam", "get", "ory/kratos-abc", "--kubectl-output", "json"]);
         match cli.verb {
             Some(Verb::Get { target, output }) => {
                 assert_eq!(target, "ory/kratos-abc");
@@ -680,28 +569,139 @@ mod tests {
         }
     }
 
-    // 20. test_hire_date_validation
+    // -- New service subcommand tests -----------------------------------------
+
     #[test]
-    fn test_hire_date_valid() {
-        let cli = parse(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--hire-date", "2026-01-15",
-        ]);
-        match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard { hire_date, .. }) }) => {
-                assert_eq!(hire_date, "2026-01-15");
-            }
-            _ => panic!("expected User Onboard"),
-        }
+    fn test_auth_identity_list() {
+        let cli = parse(&["sunbeam", "auth", "identity", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Auth { .. })));
     }
 
     #[test]
-    fn test_hire_date_invalid() {
-        let result = Cli::try_parse_from(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--hire-date", "not-a-date",
-        ]);
-        assert!(result.is_err());
+    fn test_auth_login() {
+        let cli = parse(&["sunbeam", "auth", "login"]);
+        assert!(matches!(cli.verb, Some(Verb::Auth { .. })));
+    }
+
+    #[test]
+    fn test_vcs_repo_search() {
+        let cli = parse(&["sunbeam", "vcs", "repo", "search", "-q", "cli"]);
+        assert!(matches!(cli.verb, Some(Verb::Vcs { .. })));
+    }
+
+    #[test]
+    fn test_vcs_issue_list() {
+        let cli = parse(&["sunbeam", "vcs", "issue", "list", "-r", "studio/cli"]);
+        assert!(matches!(cli.verb, Some(Verb::Vcs { .. })));
+    }
+
+    #[test]
+    fn test_chat_whoami() {
+        let cli = parse(&["sunbeam", "chat", "whoami"]);
+        assert!(matches!(cli.verb, Some(Verb::Chat { .. })));
+    }
+
+    #[test]
+    fn test_chat_room_list() {
+        let cli = parse(&["sunbeam", "chat", "room", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Chat { .. })));
+    }
+
+    #[test]
+    fn test_search_cluster_health() {
+        let cli = parse(&["sunbeam", "search", "cluster", "health"]);
+        assert!(matches!(cli.verb, Some(Verb::Search { .. })));
+    }
+
+    #[test]
+    fn test_storage_bucket_list() {
+        let cli = parse(&["sunbeam", "storage", "bucket", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Storage { .. })));
+    }
+
+    #[test]
+    fn test_media_room_list() {
+        let cli = parse(&["sunbeam", "media", "room", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Media { .. })));
+    }
+
+    #[test]
+    fn test_mon_prometheus_query() {
+        let cli = parse(&["sunbeam", "mon", "prometheus", "query", "-q", "up"]);
+        assert!(matches!(cli.verb, Some(Verb::Mon { .. })));
+    }
+
+    #[test]
+    fn test_mon_grafana_dashboard_list() {
+        let cli = parse(&["sunbeam", "mon", "grafana", "dashboard", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Mon { .. })));
+    }
+
+    #[test]
+    fn test_vault_status() {
+        let cli = parse(&["sunbeam", "vault", "status"]);
+        assert!(matches!(cli.verb, Some(Verb::Vault { .. })));
+    }
+
+    #[test]
+    fn test_people_contact_list() {
+        let cli = parse(&["sunbeam", "people", "contact", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::People { .. })));
+    }
+
+    #[test]
+    fn test_docs_document_list() {
+        let cli = parse(&["sunbeam", "docs", "document", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Docs { .. })));
+    }
+
+    #[test]
+    fn test_meet_room_list() {
+        let cli = parse(&["sunbeam", "meet", "room", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Meet { .. })));
+    }
+
+    #[test]
+    fn test_drive_file_list() {
+        let cli = parse(&["sunbeam", "drive", "file", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Drive { .. })));
+    }
+
+    #[test]
+    fn test_mail_mailbox_list() {
+        let cli = parse(&["sunbeam", "mail", "mailbox", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Mail { .. })));
+    }
+
+    #[test]
+    fn test_cal_calendar_list() {
+        let cli = parse(&["sunbeam", "cal", "calendar", "list"]);
+        assert!(matches!(cli.verb, Some(Verb::Cal { .. })));
+    }
+
+    #[test]
+    fn test_find_search() {
+        let cli = parse(&["sunbeam", "find", "search", "-q", "hello"]);
+        assert!(matches!(cli.verb, Some(Verb::Find { .. })));
+    }
+
+    #[test]
+    fn test_global_output_format() {
+        let cli = parse(&["sunbeam", "-o", "json", "vault", "status"]);
+        assert!(matches!(cli.output_format, OutputFormat::Json));
+        assert!(matches!(cli.verb, Some(Verb::Vault { .. })));
+    }
+
+    #[test]
+    fn test_infra_commands_preserved() {
+        // Verify all old infra commands still parse
+        assert!(matches!(parse(&["sunbeam", "up"]).verb, Some(Verb::Up)));
+        assert!(matches!(parse(&["sunbeam", "seed"]).verb, Some(Verb::Seed)));
+        assert!(matches!(parse(&["sunbeam", "verify"]).verb, Some(Verb::Verify)));
+        assert!(matches!(parse(&["sunbeam", "mirror"]).verb, Some(Verb::Mirror)));
+        assert!(matches!(parse(&["sunbeam", "bootstrap"]).verb, Some(Verb::Bootstrap)));
+        assert!(matches!(parse(&["sunbeam", "update"]).verb, Some(Verb::Update)));
+        assert!(matches!(parse(&["sunbeam", "version"]).verb, Some(Verb::Version)));
     }
 }
 
@@ -916,97 +916,106 @@ pub async fn dispatch() -> Result<()> {
             sunbeam_sdk::kube::cmd_bao(&bao_args).await
         }
 
-        Some(Verb::User { action }) => match action {
-            None => {
-                use clap::CommandFactory;
-                let mut cmd = Cli::command();
-                let sub = cmd
-                    .find_subcommand_mut("user")
-                    .expect("user subcommand");
-                sub.print_help()?;
-                println!();
-                Ok(())
-            }
-            Some(UserAction::List { search }) => {
-                sunbeam_sdk::users::cmd_user_list(&search).await
-            }
-            Some(UserAction::Get { target }) => {
-                sunbeam_sdk::users::cmd_user_get(&target).await
-            }
-            Some(UserAction::Create {
-                email,
-                name,
-                schema,
-            }) => sunbeam_sdk::users::cmd_user_create(&email, &name, &schema).await,
-            Some(UserAction::Delete { target }) => {
-                sunbeam_sdk::users::cmd_user_delete(&target).await
-            }
-            Some(UserAction::Recover { target }) => {
-                sunbeam_sdk::users::cmd_user_recover(&target).await
-            }
-            Some(UserAction::Disable { target }) => {
-                sunbeam_sdk::users::cmd_user_disable(&target).await
-            }
-            Some(UserAction::Enable { target }) => {
-                sunbeam_sdk::users::cmd_user_enable(&target).await
-            }
-            Some(UserAction::SetPassword { target, password }) => {
-                let pw = match password {
-                    Some(p) => p,
-                    None => {
-                        eprint!("Password: ");
-                        let mut pw = String::new();
-                        std::io::stdin().read_line(&mut pw)?;
-                        pw.trim().to_string()
-                    }
-                };
-                sunbeam_sdk::users::cmd_user_set_password(&target, &pw).await
-            }
-            Some(UserAction::Onboard {
-                email,
-                name,
-                schema,
-                no_email,
-                notify,
-                job_title,
-                department,
-                office_location,
-                hire_date,
-                manager,
-            }) => {
-                sunbeam_sdk::users::cmd_user_onboard(
-                    &email,
-                    &name,
-                    &schema,
-                    !no_email,
-                    &notify,
-                    &job_title,
-                    &department,
-                    &office_location,
-                    &hire_date,
-                    &manager,
-                )
-                .await
-            }
-            Some(UserAction::Offboard { target }) => {
-                sunbeam_sdk::users::cmd_user_offboard(&target).await
-            }
-        },
+        Some(Verb::Auth { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::identity::cli::dispatch(action, &sc, cli.output_format).await
+        }
 
-        Some(Verb::Auth { action }) => match action {
-            None => sunbeam_sdk::auth::cmd_auth_status().await,
-            Some(AuthAction::Login { domain }) => {
-                sunbeam_sdk::auth::cmd_auth_login_all(domain.as_deref()).await
-            }
-            Some(AuthAction::Sso { domain }) => {
-                sunbeam_sdk::auth::cmd_auth_sso_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Git { domain }) => {
-                sunbeam_sdk::auth::cmd_auth_git_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Logout) => sunbeam_sdk::auth::cmd_auth_logout().await,
-            Some(AuthAction::Status) => sunbeam_sdk::auth::cmd_auth_status().await,
-        },
+        Some(Verb::Vcs { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::gitea::cli::dispatch(action, sc.gitea(), cli.output_format).await
+        }
+
+        Some(Verb::Chat { action }) => {
+            let domain = sunbeam_sdk::config::active_context().domain.clone();
+            sunbeam_sdk::matrix::cli::dispatch(&domain, cli.output_format, action).await
+        }
+
+        Some(Verb::Search { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::search::cli::dispatch(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Storage { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::storage::cli::dispatch(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Media { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::media::cli::dispatch(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Mon { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::monitoring::cli::dispatch(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Vault { action }) => {
+            let bao = sunbeam_sdk::openbao::BaoClient::new("http://127.0.0.1:8200");
+            sunbeam_sdk::openbao::cli::dispatch(action, &bao, cli.output_format).await
+        }
+
+        Some(Verb::People { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_people(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Docs { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_docs(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Meet { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_meet(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Drive { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_drive(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Mail { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_mail(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Cal { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_cal(action, &sc, cli.output_format).await
+        }
+
+        Some(Verb::Find { action }) => {
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::lasuite::cli::dispatch_find(action, &sc, cli.output_format).await
+        }
 
         Some(Verb::Pm { action }) => match action {
             None => {
