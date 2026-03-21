@@ -1,3 +1,79 @@
+use crate::error::{Result, SunbeamError};
+use serde::Serialize;
+
+// ---------------------------------------------------------------------------
+// OutputFormat
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum OutputFormat {
+    #[default]
+    Table,
+    Json,
+    Yaml,
+}
+
+/// Render a single serialisable value in the requested format.
+pub fn render<T: Serialize>(val: &T, format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(val)?);
+        }
+        OutputFormat::Yaml => {
+            print!("{}", serde_yaml::to_string(val)?);
+        }
+        OutputFormat::Table => {
+            // Fallback: pretty JSON when no table renderer is provided
+            println!("{}", serde_json::to_string_pretty(val)?);
+        }
+    }
+    Ok(())
+}
+
+/// Render a list of items as table / json / yaml.
+///
+/// `to_row` converts each item into a `Vec<String>` of column values matching
+/// the order of `headers`.
+pub fn render_list<T: Serialize>(
+    rows: &[T],
+    headers: &[&str],
+    to_row: fn(&T) -> Vec<String>,
+    format: OutputFormat,
+) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(rows)?);
+        }
+        OutputFormat::Yaml => {
+            print!("{}", serde_yaml::to_string(rows)?);
+        }
+        OutputFormat::Table => {
+            let table_rows: Vec<Vec<String>> = rows.iter().map(to_row).collect();
+            println!("{}", table(table_rows.as_slice(), headers));
+        }
+    }
+    Ok(())
+}
+
+/// Read JSON input from a `--data` flag value or stdin when the value is `"-"`.
+pub fn read_json_input(flag: Option<&str>) -> Result<serde_json::Value> {
+    let raw = match flag {
+        Some("-") | None => {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
+            buf
+        }
+        Some(v) => v.to_string(),
+    };
+    serde_json::from_str(&raw)
+        .map_err(|e| SunbeamError::Other(format!("invalid JSON input: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// Existing helpers
+// ---------------------------------------------------------------------------
+
 /// Print a step header.
 pub fn step(msg: &str) {
     println!("\n==> {msg}");
@@ -83,10 +159,35 @@ mod tests {
     fn test_table_column_widths() {
         let rows = vec![vec!["short".to_string(), "x".to_string()]];
         let result = table(&rows, &["LongHeader", "H2"]);
-        // Header should set minimum width
         for line in result.lines().skip(2) {
-            // Data row: "short" should be padded to "LongHeader" width
             assert!(line.starts_with("short     "));
         }
+    }
+
+    #[test]
+    fn test_render_json() {
+        let val = serde_json::json!({"key": "value"});
+        // Just ensure it doesn't panic
+        render(&val, OutputFormat::Json).unwrap();
+    }
+
+    #[test]
+    fn test_render_yaml() {
+        let val = serde_json::json!({"key": "value"});
+        render(&val, OutputFormat::Yaml).unwrap();
+    }
+
+    #[test]
+    fn test_render_list_table() {
+        #[derive(Serialize)]
+        struct Item { name: String }
+        let items = vec![Item { name: "test".into() }];
+        render_list(&items, &["NAME"], |i| vec![i.name.clone()], OutputFormat::Table).unwrap();
+    }
+
+    #[test]
+    fn test_read_json_input_inline() {
+        let val = read_json_input(Some(r#"{"a":1}"#)).unwrap();
+        assert_eq!(val["a"], 1);
     }
 }
