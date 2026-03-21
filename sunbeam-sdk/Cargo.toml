@@ -3,6 +3,9 @@ name = "sunbeam-sdk"
 version = "0.1.0"
 edition = "2024"
 description = "Sunbeam SDK — reusable library for cluster management"
+repository = "https://src.sunbeam.pt/studio/cli"
+license = "MIT"
+publish = ["sunbeam"]
 
 [features]
 default = []
