@@ -3551,6 +3551,19 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "sunbeam"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "clap",
+ "rustls",
+ "sunbeam-sdk",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sunbeam-sdk"
+version = "0.1.0"
+dependencies = [
  "base64",
  "chrono",
  "clap",
@@ -3569,7 +3582,6 @@ dependencies = [
  "rsa",
  "russh",
  "russh-keys",
- "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3580,7 +3592,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
