@@ -1,0 +1,157 @@
+# Lightweight integration test stack for sunbeam-sdk service clients.
+# All services use in-memory/SQLite storage — fully ephemeral.
+#
+# Usage:
+#   docker compose -f sunbeam-sdk/tests/docker-compose.yml up -d
+#   cargo test -p sunbeam-sdk --features integration --test integration
+#   docker compose -f sunbeam-sdk/tests/docker-compose.yml down
+
+services:
+  # ── Identity (Ory Kratos) ────────────────────────────────────────────
+  kratos:
+    image: oryd/kratos:v1.3.1
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    ports:
+      - "4434:4434"   # admin API
+      - "4433:4433"   # public API
+    volumes:
+      - ./config/kratos.yml:/etc/config/kratos/kratos.yml:ro
+      - ./config/identity.schema.json:/etc/config/kratos/identity.schema.json:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4434/health/alive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Auth / OAuth2 (Ory Hydra) ───────────────────────────────────────
+  hydra:
+    image: oryd/hydra:v2.3.0
+    command: serve all --dev
+    ports:
+      - "4444:4444"   # public (OIDC)
+      - "4445:4445"   # admin API
+    environment:
+      DSN: memory
+      URLS_SELF_ISSUER: http://localhost:4444
+      URLS_LOGIN: http://localhost:3000/login
+      URLS_CONSENT: http://localhost:3000/consent
+      SECRETS_SYSTEM: integration-test-secret-32bytes!
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4445/health/alive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Git Forge (Gitea) ───────────────────────────────────────────────
+  gitea:
+    image: gitea/gitea:1.23-rootless
+    ports:
+      - "3000:3000"
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__database__PATH: /tmp/gitea.db
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__ROOT_URL: http://localhost:3000
+      GITEA__server__DISABLE_SSH: "true"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "false"
+      GITEA__log__LEVEL: Warn
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/version"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # ── Search (OpenSearch) ─────────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    ports:
+      - "9200:9200"
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9200/_cluster/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ── S3-compatible Storage (MinIO) ───────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Metrics (Prometheus) ────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/api/v1/status/buildinfo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Logs (Loki) ─────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.4.3
+    command: -config.file=/etc/loki/loki.yml
+    user: "0"
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki.yml:/etc/loki/loki.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # ── Dashboards (Grafana) ────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.5.2
+    ports:
+      - "3001:3001"
+    environment:
+      GF_SERVER_HTTP_PORT: "3001"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DATABASE_TYPE: sqlite3
+      GF_LOG_LEVEL: warn
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Media (LiveKit) ─────────────────────────────────────────────────
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    command: --config /etc/livekit.yaml --dev
+    ports:
+      - "7880:7880"
+    volumes:
+      - ./config/livekit.yaml:/etc/livekit.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
