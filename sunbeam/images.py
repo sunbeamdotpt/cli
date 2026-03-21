@@ -955,7 +955,18 @@ def _build_projects(push: bool = False, deploy: bool = False):
 
 
 def _build_sol(push: bool = False, deploy: bool = False):
-    """Build Sol virtual librarian image from source."""
+    """Build Sol virtual librarian image from source.
+
+    # TODO: first deploy requires registration enabled on tuwunel to create
+    # the @sol:sunbeam.pt bot account. Flow:
+    #   1. Set allow_registration = true in tuwunel-config.yaml
+    #   2. Apply + restart tuwunel
+    #   3. Register bot via POST /_matrix/client/v3/register with registration token
+    #   4. Store access_token + device_id in OpenBao at secret/sol
+    #   5. Set allow_registration = false, re-apply
+    #   6. Then build + deploy sol
+    # This should be automated as `sunbeam user create-bot <name>`.
+    """
     env = _get_build_env()
 
     sol_dir = _get_repo_root() / "sol"
