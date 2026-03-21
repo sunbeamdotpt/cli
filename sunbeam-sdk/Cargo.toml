@@ -1,6 +1,6 @@
 [package]
 name = "sunbeam-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Sunbeam SDK — reusable library for cluster management"
 repository = "https://src.sunbeam.pt/studio/cli"
@@ -8,8 +8,20 @@ license = "MIT"
 publish = ["sunbeam"]
 
 [features]
-default = []
-cli = ["clap"]
+default = ["identity", "gitea"]
+identity = []
+gitea = []
+pm = ["gitea"]
+matrix = []
+opensearch = []
+s3 = []
+livekit = []
+monitoring = []
+lasuite = []
+build = []
+cli = ["dep:clap"]
+all = ["identity", "gitea", "pm", "matrix", "opensearch", "s3", "livekit", "monitoring", "lasuite", "build"]
+integration = ["all"]
 
 [dependencies]
 # Core
@@ -27,6 +39,7 @@ k8s-openapi = { version = "0.24", features = ["v1_32"] }
 
 # HTTP + TLS
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
+bytes = "1"
 
 # SSH
 russh = "0.46"
@@ -59,6 +72,9 @@ tokio-stream = "0.1"
 tempfile = "3"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+wiremock = "0.6"
 
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
