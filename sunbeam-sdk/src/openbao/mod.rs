@@ -3,6 +3,9 @@
 //! Replaces all `kubectl exec openbao-0 -- sh -c "bao ..."` calls from the
 //! Python version with direct HTTP API calls via port-forward to openbao:8200.
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 use crate::error::{Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,13 +20,13 @@ pub struct BaoClient {
 
 // ── API response types ──────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct InitResponse {
     pub unseal_keys_b64: Vec<String>,
     pub root_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SealStatusResponse {
     #[serde(default)]
     pub initialized: bool,
@@ -37,7 +40,7 @@ pub struct SealStatusResponse {
     pub n: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UnsealResponse {
     #[serde(default)]
     pub sealed: bool,

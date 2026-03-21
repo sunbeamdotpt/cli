@@ -2,6 +2,9 @@
 
 pub mod types;
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 use crate::client::{AuthMethod, HttpTransport, ServiceClient};
 use crate::error::{Result, ResultExt, SunbeamError};
 use bytes::Bytes;

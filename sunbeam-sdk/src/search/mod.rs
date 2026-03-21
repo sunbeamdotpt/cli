@@ -1,5 +1,7 @@
 //! OpenSearch client.
 
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod types;
 
 use crate::client::{AuthMethod, HttpTransport, ServiceClient};
