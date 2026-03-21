@@ -1,6 +1,6 @@
 [package]
 name = "sunbeam-sdk"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "Sunbeam SDK — reusable library for cluster management"
 repository = "https://src.sunbeam.pt/studio/cli"
