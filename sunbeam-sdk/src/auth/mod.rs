@@ -1,5 +1,8 @@
 //! OAuth2 Authorization Code flow with PKCE for CLI authentication against Hydra.
 
+#[cfg(feature = "identity")]
+pub mod hydra;
+
 use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use chrono::{DateTime, Utc};
