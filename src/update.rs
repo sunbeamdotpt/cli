@@ -29,20 +29,22 @@ fn forge_url() -> String {
         return url.trim_end_matches('/').to_string();
     }
 
-    // Derive from production_host domain in config
+    // Derive from active context domain or production_host
+    let domain = crate::config::domain();
+    if !domain.is_empty() {
+        return format!("https://src.{domain}");
+    }
+
     let config = crate::config::load_config();
     if !config.production_host.is_empty() {
-        // production_host is like "user@server.example.com" — extract domain
         let host = config
             .production_host
             .split('@')
             .last()
             .unwrap_or(&config.production_host);
-        // Strip any leading subdomain segments that look like a hostname to get the base domain.
-        // For a host like "admin.sunbeam.pt", the forge is "src.sunbeam.pt".
-        // Heuristic: use the last two segments as the domain.
+        // For "admin.sunbeam.pt" → "sunbeam.pt". Skip bare IPs.
         let parts: Vec<&str> = host.split('.').collect();
-        if parts.len() >= 2 {
+        if parts.len() >= 2 && parts.iter().any(|p| p.parse::<u8>().is_err()) {
             let domain = format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
             return format!("https://src.{domain}");
         }

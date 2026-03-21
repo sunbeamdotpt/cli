@@ -8,3 +8,6 @@ build/
 
 # Rust
 /target/
+
+# Environment
+.envrc
