@@ -9,6 +9,9 @@ pub mod calendars;
 pub mod find;
 pub mod types;
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 pub use people::PeopleClient;
 pub use docs::DocsClient;
 pub use meet::MeetClient;
