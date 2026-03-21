@@ -1,16 +1,15 @@
 # Sunbeam CLI
 
-**Sunbeam CLI** is a powerful local development stack manager for Kubernetes-based applications. It simplifies cluster management, service operations, secret handling, and manifest deployment for development environments.
+**Sunbeam CLI** is a local development stack manager for Kubernetes-based applications. It simplifies cluster management, service operations, secret handling, and manifest deployment.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Documentation](https://img.shields.io/badge/docs-comprehensive-brightgreen.svg)](docs/)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 ## Quick Start
 
 ```bash
-# Install Sunbeam CLI
-pip install .
+# Install from source
+cargo install --path sunbeam
 
 # Start your local cluster
 sunbeam up
@@ -24,41 +23,68 @@ sunbeam status
 
 ## Features
 
-- **Cluster Management**: Bring up and tear down local Kubernetes clusters with Lima VM
-- **Service Operations**: Manage services, view logs, and perform health checks
-- **Secret Management**: Secure credential handling with OpenBao integration
-- **Manifest Management**: Kustomize-based manifest application with domain substitution
-- **User Management**: Identity management for development environments
-- **Tool Bundling**: Automatic download and management of required binaries
-- **Multi-environment Support**: Local development and production deployment
+- **Cluster Management**: Bring up local Kubernetes clusters with cert-manager, Linkerd, TLS
+- **Service Operations**: Status, logs, restart, health checks across namespaces
+- **Secret Management**: OpenBao KV seeding, DB engine config, VSO verification
+- **Manifest Management**: Kustomize + Helm builds with domain/email substitution
+- **User Management**: Kratos identity CRUD, onboarding/offboarding with mailbox and project provisioning
+- **Image Building**: Buildkit-based builds with registry push and rollout deploy
+- **Project Management**: Unified ticket management across Planka and Gitea
+- **Self-Update**: Binary update from the latest mainline commit
+- **Tool Bundling**: kustomize and helm binaries embedded at compile time
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.11+
+- Rust (2024 edition)
 - Docker
 - Lima (for local VM management)
-- kubectl, kustomize, helm (automatically managed by Sunbeam)
+- A running Kubernetes cluster (kubectl context `sunbeam` for local dev)
 
 ### Install from Source
 
 ```bash
-# Clone the repository
 git clone https://src.sunbeam.pt/studio/cli.git
 cd cli
-
-# Install dependencies
-pip install .
-
-# Verify installation
+cargo install --path sunbeam
 sunbeam --help
 ```
 
-### Install in Development Mode
+### Self-Update
+
+Once installed, sunbeam can update itself:
 
 ```bash
-pip install -e .
+sunbeam update
+```
+
+## Workspace Layout
+
+```
+cli/
+  Cargo.toml                    # [workspace] — sunbeam-sdk + sunbeam
+  sunbeam-sdk/                  # Library crate — all logic
+    src/
+      lib.rs
+      error.rs, config.rs, output.rs, constants.rs
+      kube/       # client, apply, exec, secrets, kustomize_build, tools
+      openbao/    # BaoClient HTTP API
+      auth/       # OAuth2 PKCE, token cache
+      services/   # status, logs, get, restart
+      images/     # build, mirror, per-service builders
+      secrets/    # seed, verify, KV seeding, DB engine
+      users/      # identity CRUD, provisioning (mailbox, projects, email)
+      checks/     # functional health probes, S3 auth
+      pm/         # Planka + Gitea ticket management
+      cluster/    # cert-manager, Linkerd, TLS
+      manifests/  # kustomize apply, namespace filtering
+      gitea/      # bootstrap (orgs, repos, OIDC)
+      update/     # self-update, version
+  sunbeam/                      # Binary crate — thin CLI wrapper
+    src/
+      main.rs                   # tokio, rustls, tracing init
+      cli.rs                    # Clap structs + dispatch
 ```
 
 ## Usage
@@ -66,227 +92,102 @@ pip install -e .
 ### Basic Commands
 
 ```bash
-# Start local cluster
-sunbeam up
-
-# Check cluster status
-sunbeam status
-
-# Apply all manifests
-sunbeam apply
-
-# Apply specific namespace
-sunbeam apply lasuite
-
-# View service logs
-sunbeam logs ory/kratos
-
-# Restart services
-sunbeam restart ory/kratos
-
-# Stop cluster
-sunbeam down
+sunbeam up                      # Full cluster bring-up
+sunbeam status                  # Pod health across all namespaces
+sunbeam status ory              # Scoped to namespace
+sunbeam apply                   # Build + apply all manifests
+sunbeam apply lasuite           # Apply single namespace
+sunbeam logs ory/kratos         # Stream logs
+sunbeam logs ory/kratos -f      # Follow mode
+sunbeam restart                 # Rolling restart all services
+sunbeam restart ory/kratos      # Restart specific deployment
 ```
 
-### Production Deployment
+### Configuration
 
 ```bash
-# Set SSH host for production
-export SUNBEAM_SSH_HOST=user@your-server.example.com
-
-# Apply production manifests
-sunbeam apply --env production --domain sunbeam.pt --email ops@sunbeam.pt
-
-# Check production status
-sunbeam status --env production
+sunbeam config set --domain sunbeam.pt --host user@server.example.com
+sunbeam config get
+sunbeam config use-context production
 ```
-
-## Documentation
-
-Comprehensive documentation is available in the [`docs/`](docs/) directory:
-
-- **[CLI Reference](docs/cli-reference.md)** - Complete command reference
-- **[Core Modules](docs/core-modules.md)** - Detailed module documentation
-- **[API Reference](docs/api-reference.md)** - Full API documentation
-- **[Usage Examples](docs/usage-examples.md)** - Practical usage patterns
-- **[Utility Modules](docs/utility-modules.md)** - Helper function documentation
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `SUNBEAM_SSH_HOST` | SSH host for production access | Production only |
-| `SUNBEAM_ACME_EMAIL` | ACME email for cert-manager | Optional |
-
-### Configuration Files
-
-Sunbeam uses kustomize overlays for environment-specific configuration:
-
-```
-infrastructure/
-├── base/              # Base manifests
-└── overlays/         # Environment overlays
-    ├── local/        # Local development
-    └── production/   # Production deployment
-```
-
-## Architecture
-
-```mermaid
-graph TD
-    A[Sunbeam CLI] --> B[Kubernetes Interface]
-    A --> C[Manifest Management]
-    A --> D[Service Operations]
-    A --> E[Secret Management]
-    A --> F[User Management]
-    A --> G[Image Building]
-    A --> H[Tool Management]
-
-    B --> B1[kubectl wrapper]
-    B --> B2[SSH tunnel management]
-    B --> B3[Domain discovery]
-
-    C --> C1[Kustomize integration]
-    C --> C2[Webhook handling]
-    C --> C3[ConfigMap tracking]
-
-    D --> D1[Health monitoring]
-    D --> D2[Log streaming]
-    D --> D3[Service restart]
-```
-
-## Development Workflow
 
 ### Building and Deploying
 
 ```bash
-# Build a component
-sunbeam build proxy
-
-# Build and push to registry
-sunbeam build proxy --push
-
-# Build, push, and deploy
-sunbeam build proxy --deploy
+sunbeam build proxy             # Build image
+sunbeam build proxy --push      # Build + push to registry
+sunbeam build proxy --deploy    # Build + push + apply + restart
+sunbeam build proxy --no-cache  # Disable buildkit cache
+sunbeam mirror                  # Mirror amd64-only images
 ```
 
 ### User Management
 
 ```bash
-# Create user
-sunbeam user create user@example.com --name "User Name"
-
-# Set password
-sunbeam user set-password user@example.com "password123"
-
-# List users
 sunbeam user list
+sunbeam user create user@example.com --name "User Name"
+sunbeam user set-password user@example.com
+sunbeam user onboard new@example.com --name "New User" --department Engineering
+sunbeam user offboard departed@example.com
+sunbeam user recover user@example.com
 ```
 
 ### Secret Management
 
 ```bash
-# Seed all credentials
-sunbeam seed
-
-# Verify VSO + OpenBao integration
-sunbeam verify
+sunbeam seed                    # Generate + store all credentials in OpenBao
+sunbeam verify                  # E2E VSO + OpenBao integration test
 ```
 
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork the repository** and create your branch
-2. **Follow conventional commits** for commit messages
-3. **Add tests** for new features
-4. **Update documentation** for changes
-5. **Submit a pull request**
-
-### Development Setup
+### Project Management
 
 ```bash
-# Clone repository
-git clone https://src.sunbeam.pt/studio/cli.git
-cd cli
-
-# Install development dependencies
-pip install -e .[dev]
-
-# Run tests
-python -m pytest sunbeam/tests/
+sunbeam pm list                 # List tickets (Planka + Gitea)
+sunbeam pm show p:42            # Show Planka card
+sunbeam pm show g:studio/cli#7  # Show Gitea issue
+sunbeam pm create "Title" --source gitea --target studio/cli
+sunbeam pm assign p:42 user@example.com
+sunbeam pm close g:studio/cli#7
 ```
 
-### Commit Message Format
-
-```
-<type>(<scope>): <description>
-
-<body>
-
-<footer>
-```
-
-**Types:**
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes
-- `refactor`: Code refactoring
-- `test`: Adding or modifying tests
-- `chore`: Maintenance tasks
-
-## Troubleshooting
-
-### Common Issues
-
-**Cluster not starting:**
-```bash
-limactl list
-limactl start sunbeam
-```
-
-**Manifest apply failures:**
-```bash
-sunbeam k8s get events -A
-sunbeam logs cert-manager/cert-manager
-```
-
-**Secret sync problems:**
-```bash
-sunbeam verify
-sunbeam bao status
-```
-
-### Debugging
+### Health Checks
 
 ```bash
-# Direct kubectl access
-sunbeam k8s get pods -A
+sunbeam check                   # Run all functional probes
+sunbeam check devtools          # Scoped to namespace
+```
 
-# Describe resources
-sunbeam k8s describe pod ory/kratos-abc123
+### Passthrough
 
-# View events
-sunbeam k8s get events --sort-by=.metadata.creationTimestamp
+```bash
+sunbeam k8s get pods -A         # kubectl passthrough
+sunbeam bao status              # bao CLI inside OpenBao pod
+```
+
+### Production
+
+```bash
+sunbeam config set --domain sunbeam.pt --host user@62.210.145.138
+sunbeam config use-context production
+sunbeam apply                   # Opens SSH tunnel automatically
+```
+
+## Running Tests
+
+```bash
+cargo nextest run --workspace   # 232 tests
+cargo test --workspace          # Alternative
+```
+
+## Python CLI (Legacy)
+
+The original Python implementation is in the `sunbeam/` package and remains functional:
+
+```bash
+pip install -e .
+python -m sunbeam --help
 ```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Kubernetes community for the excellent ecosystem
-- Kustomize team for manifest management
-- OpenBao for secret management
-- Lima for VM management
-
-## Contact
-
-For questions, issues, or contributions:
-
-- **Git Issues**: [https://src.sunbeam.pt/studio/cli/issues](https://src.sunbeam.pt/studio/cli/issues)
-- **Documentation**: [https://src.sunbeam.pt/studio/cli](https://src.sunbeam.pt/studio/cli)
+MIT — see [LICENSE](LICENSE).
