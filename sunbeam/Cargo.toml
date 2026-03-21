@@ -9,7 +9,7 @@ name = "sunbeam"
 path = "src/main.rs"
 
 [dependencies]
-sunbeam-sdk = { path = "../sunbeam-sdk", features = ["cli"] }
+sunbeam-sdk = { path = "../sunbeam-sdk", features = ["all", "cli"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
