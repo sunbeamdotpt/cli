@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use clap::Subcommand;
 
+use crate::client::SunbeamClient;
 use crate::error::Result;
 use crate::output::{self, OutputFormat};
 
@@ -226,9 +227,10 @@ fn read_text_input(flag: Option<&str>) -> Result<String> {
 
 pub async fn dispatch(
     cmd: VaultCommand,
-    bao: &super::BaoClient,
+    client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
+    let bao = client.bao().await?;
     match cmd {
         // -- Status ---------------------------------------------------------
         VaultCommand::Status => {

@@ -7,7 +7,7 @@
 use crate::error::{Result, ResultExt, SunbeamError};
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Serialize};
-use std::sync::OnceLock;
+use tokio::sync::OnceCell;
 
 // ---------------------------------------------------------------------------
 // AuthMethod
@@ -222,51 +222,51 @@ impl HttpTransport {
 /// Unified entry point for all service clients.
 ///
 /// Lazily constructs and caches per-service clients from the active config
-/// context. Each accessor returns a `&Client` reference, constructing on
-/// first call via [`OnceLock`].
+/// context. Each accessor resolves auth and returns a `&Client` reference,
+/// constructing on first call via [`OnceCell`] (async-aware).
+///
+/// Auth is resolved per-client:
+/// - SSO bearer (`get_token()`) — admin APIs, Matrix, La Suite, OpenSearch
+/// - Gitea PAT (`get_gitea_token()`) — Gitea
+/// - None — Prometheus, Loki, S3, LiveKit
 pub struct SunbeamClient {
     ctx: crate::config::Context,
     domain: String,
-    // Phase 1
     #[cfg(feature = "identity")]
-    kratos: OnceLock<crate::identity::KratosClient>,
+    kratos: OnceCell<crate::identity::KratosClient>,
     #[cfg(feature = "identity")]
-    hydra: OnceLock<crate::auth::hydra::HydraClient>,
-    // Phase 2
+    hydra: OnceCell<crate::auth::hydra::HydraClient>,
     #[cfg(feature = "gitea")]
-    gitea: OnceLock<crate::gitea::GiteaClient>,
-    // Phase 3
+    gitea: OnceCell<crate::gitea::GiteaClient>,
     #[cfg(feature = "matrix")]
-    matrix: OnceLock<crate::matrix::MatrixClient>,
+    matrix: OnceCell<crate::matrix::MatrixClient>,
     #[cfg(feature = "opensearch")]
-    opensearch: OnceLock<crate::search::OpenSearchClient>,
+    opensearch: OnceCell<crate::search::OpenSearchClient>,
     #[cfg(feature = "s3")]
-    s3: OnceLock<crate::storage::S3Client>,
+    s3: OnceCell<crate::storage::S3Client>,
     #[cfg(feature = "livekit")]
-    livekit: OnceLock<crate::media::LiveKitClient>,
+    livekit: OnceCell<crate::media::LiveKitClient>,
     #[cfg(feature = "monitoring")]
-    prometheus: OnceLock<crate::monitoring::PrometheusClient>,
+    prometheus: OnceCell<crate::monitoring::PrometheusClient>,
     #[cfg(feature = "monitoring")]
-    loki: OnceLock<crate::monitoring::LokiClient>,
+    loki: OnceCell<crate::monitoring::LokiClient>,
     #[cfg(feature = "monitoring")]
-    grafana: OnceLock<crate::monitoring::GrafanaClient>,
-    // Phase 4
+    grafana: OnceCell<crate::monitoring::GrafanaClient>,
     #[cfg(feature = "lasuite")]
-    people: OnceLock<crate::lasuite::PeopleClient>,
+    people: OnceCell<crate::lasuite::PeopleClient>,
     #[cfg(feature = "lasuite")]
-    docs: OnceLock<crate::lasuite::DocsClient>,
+    docs: OnceCell<crate::lasuite::DocsClient>,
     #[cfg(feature = "lasuite")]
-    meet: OnceLock<crate::lasuite::MeetClient>,
+    meet: OnceCell<crate::lasuite::MeetClient>,
     #[cfg(feature = "lasuite")]
-    drive: OnceLock<crate::lasuite::DriveClient>,
+    drive: OnceCell<crate::lasuite::DriveClient>,
     #[cfg(feature = "lasuite")]
-    messages: OnceLock<crate::lasuite::MessagesClient>,
+    messages: OnceCell<crate::lasuite::MessagesClient>,
     #[cfg(feature = "lasuite")]
-    calendars: OnceLock<crate::lasuite::CalendarsClient>,
+    calendars: OnceCell<crate::lasuite::CalendarsClient>,
     #[cfg(feature = "lasuite")]
-    find: OnceLock<crate::lasuite::FindClient>,
-    // Bao/Planka stay in their existing modules
-    bao: OnceLock<crate::openbao::BaoClient>,
+    find: OnceCell<crate::lasuite::FindClient>,
+    bao: OnceCell<crate::openbao::BaoClient>,
 }
 
 impl SunbeamClient {
@@ -276,40 +276,40 @@ impl SunbeamClient {
             domain: ctx.domain.clone(),
             ctx: ctx.clone(),
             #[cfg(feature = "identity")]
-            kratos: OnceLock::new(),
+            kratos: OnceCell::new(),
             #[cfg(feature = "identity")]
-            hydra: OnceLock::new(),
+            hydra: OnceCell::new(),
             #[cfg(feature = "gitea")]
-            gitea: OnceLock::new(),
+            gitea: OnceCell::new(),
             #[cfg(feature = "matrix")]
-            matrix: OnceLock::new(),
+            matrix: OnceCell::new(),
             #[cfg(feature = "opensearch")]
-            opensearch: OnceLock::new(),
+            opensearch: OnceCell::new(),
             #[cfg(feature = "s3")]
-            s3: OnceLock::new(),
+            s3: OnceCell::new(),
             #[cfg(feature = "livekit")]
-            livekit: OnceLock::new(),
+            livekit: OnceCell::new(),
             #[cfg(feature = "monitoring")]
-            prometheus: OnceLock::new(),
+            prometheus: OnceCell::new(),
             #[cfg(feature = "monitoring")]
-            loki: OnceLock::new(),
+            loki: OnceCell::new(),
             #[cfg(feature = "monitoring")]
-            grafana: OnceLock::new(),
+            grafana: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            people: OnceLock::new(),
+            people: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            docs: OnceLock::new(),
+            docs: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            meet: OnceLock::new(),
+            meet: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            drive: OnceLock::new(),
+            drive: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            messages: OnceLock::new(),
+            messages: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            calendars: OnceLock::new(),
+            calendars: OnceCell::new(),
             #[cfg(feature = "lasuite")]
-            find: OnceLock::new(),
-            bao: OnceLock::new(),
+            find: OnceCell::new(),
+            bao: OnceCell::new(),
         }
     }
 
@@ -323,131 +323,172 @@ impl SunbeamClient {
         &self.ctx
     }
 
-    // -- Lazy accessors (each feature-gated) --------------------------------
+    // -- Auth helpers --------------------------------------------------------
+
+    /// Get cached SSO bearer token (from `sunbeam auth sso`).
+    async fn sso_token(&self) -> Result<String> {
+        crate::auth::get_token().await
+    }
+
+    /// Get cached Gitea PAT (from `sunbeam auth git`).
+    fn gitea_token(&self) -> Result<String> {
+        crate::auth::get_gitea_token()
+    }
+
+    // -- Lazy async accessors (each feature-gated) ---------------------------
+    //
+    // Each accessor resolves the appropriate auth and constructs the client
+    // with from_parts(url, auth). Cached after first call.
 
     #[cfg(feature = "identity")]
-    pub fn kratos(&self) -> &crate::identity::KratosClient {
-        self.kratos.get_or_init(|| {
-            crate::identity::KratosClient::connect(&self.domain)
-        })
+    pub async fn kratos(&self) -> Result<&crate::identity::KratosClient> {
+        self.kratos.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://id.{}", self.domain);
+            Ok(crate::identity::KratosClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "identity")]
-    pub fn hydra(&self) -> &crate::auth::hydra::HydraClient {
-        self.hydra.get_or_init(|| {
-            crate::auth::hydra::HydraClient::connect(&self.domain)
-        })
+    pub async fn hydra(&self) -> Result<&crate::auth::hydra::HydraClient> {
+        self.hydra.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://hydra.{}", self.domain);
+            Ok(crate::auth::hydra::HydraClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "gitea")]
-    pub fn gitea(&self) -> &crate::gitea::GiteaClient {
-        self.gitea.get_or_init(|| {
-            crate::gitea::GiteaClient::connect(&self.domain)
-        })
+    pub async fn gitea(&self) -> Result<&crate::gitea::GiteaClient> {
+        self.gitea.get_or_try_init(|| async {
+            let token = self.gitea_token()?;
+            let url = format!("https://src.{}/api/v1", self.domain);
+            Ok(crate::gitea::GiteaClient::from_parts(url, AuthMethod::Token(token)))
+        }).await
     }
 
     #[cfg(feature = "matrix")]
-    pub fn matrix(&self) -> &crate::matrix::MatrixClient {
-        self.matrix.get_or_init(|| {
-            crate::matrix::MatrixClient::connect(&self.domain)
-        })
+    pub async fn matrix(&self) -> Result<&crate::matrix::MatrixClient> {
+        self.matrix.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://messages.{}/_matrix", self.domain);
+            Ok(crate::matrix::MatrixClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "opensearch")]
-    pub fn opensearch(&self) -> &crate::search::OpenSearchClient {
-        self.opensearch.get_or_init(|| {
-            crate::search::OpenSearchClient::connect(&self.domain)
-        })
+    pub async fn opensearch(&self) -> Result<&crate::search::OpenSearchClient> {
+        self.opensearch.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://search.{}", self.domain);
+            Ok(crate::search::OpenSearchClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "s3")]
-    pub fn s3(&self) -> &crate::storage::S3Client {
-        self.s3.get_or_init(|| {
-            crate::storage::S3Client::connect(&self.domain)
-        })
+    pub async fn s3(&self) -> Result<&crate::storage::S3Client> {
+        self.s3.get_or_try_init(|| async {
+            Ok(crate::storage::S3Client::connect(&self.domain))
+        }).await
     }
 
     #[cfg(feature = "livekit")]
-    pub fn livekit(&self) -> &crate::media::LiveKitClient {
-        self.livekit.get_or_init(|| {
-            crate::media::LiveKitClient::connect(&self.domain)
-        })
+    pub async fn livekit(&self) -> Result<&crate::media::LiveKitClient> {
+        self.livekit.get_or_try_init(|| async {
+            Ok(crate::media::LiveKitClient::connect(&self.domain))
+        }).await
     }
 
     #[cfg(feature = "monitoring")]
-    pub fn prometheus(&self) -> &crate::monitoring::PrometheusClient {
-        self.prometheus.get_or_init(|| {
-            crate::monitoring::PrometheusClient::connect(&self.domain)
-        })
+    pub async fn prometheus(&self) -> Result<&crate::monitoring::PrometheusClient> {
+        self.prometheus.get_or_try_init(|| async {
+            Ok(crate::monitoring::PrometheusClient::connect(&self.domain))
+        }).await
     }
 
     #[cfg(feature = "monitoring")]
-    pub fn loki(&self) -> &crate::monitoring::LokiClient {
-        self.loki.get_or_init(|| {
-            crate::monitoring::LokiClient::connect(&self.domain)
-        })
+    pub async fn loki(&self) -> Result<&crate::monitoring::LokiClient> {
+        self.loki.get_or_try_init(|| async {
+            Ok(crate::monitoring::LokiClient::connect(&self.domain))
+        }).await
     }
 
     #[cfg(feature = "monitoring")]
-    pub fn grafana(&self) -> &crate::monitoring::GrafanaClient {
-        self.grafana.get_or_init(|| {
-            crate::monitoring::GrafanaClient::connect(&self.domain)
-        })
+    pub async fn grafana(&self) -> Result<&crate::monitoring::GrafanaClient> {
+        self.grafana.get_or_try_init(|| async {
+            Ok(crate::monitoring::GrafanaClient::connect(&self.domain))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn people(&self) -> &crate::lasuite::PeopleClient {
-        self.people.get_or_init(|| {
-            crate::lasuite::PeopleClient::connect(&self.domain)
-        })
+    pub async fn people(&self) -> Result<&crate::lasuite::PeopleClient> {
+        self.people.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://people.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::PeopleClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn docs(&self) -> &crate::lasuite::DocsClient {
-        self.docs.get_or_init(|| {
-            crate::lasuite::DocsClient::connect(&self.domain)
-        })
+    pub async fn docs(&self) -> Result<&crate::lasuite::DocsClient> {
+        self.docs.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://docs.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::DocsClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn meet(&self) -> &crate::lasuite::MeetClient {
-        self.meet.get_or_init(|| {
-            crate::lasuite::MeetClient::connect(&self.domain)
-        })
+    pub async fn meet(&self) -> Result<&crate::lasuite::MeetClient> {
+        self.meet.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://meet.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn drive(&self) -> &crate::lasuite::DriveClient {
-        self.drive.get_or_init(|| {
-            crate::lasuite::DriveClient::connect(&self.domain)
-        })
+    pub async fn drive(&self) -> Result<&crate::lasuite::DriveClient> {
+        self.drive.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://drive.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::DriveClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn messages(&self) -> &crate::lasuite::MessagesClient {
-        self.messages.get_or_init(|| {
-            crate::lasuite::MessagesClient::connect(&self.domain)
-        })
+    pub async fn messages(&self) -> Result<&crate::lasuite::MessagesClient> {
+        self.messages.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://mail.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::MessagesClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn calendars(&self) -> &crate::lasuite::CalendarsClient {
-        self.calendars.get_or_init(|| {
-            crate::lasuite::CalendarsClient::connect(&self.domain)
-        })
+    pub async fn calendars(&self) -> Result<&crate::lasuite::CalendarsClient> {
+        self.calendars.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://calendar.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::CalendarsClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
     #[cfg(feature = "lasuite")]
-    pub fn find(&self) -> &crate::lasuite::FindClient {
-        self.find.get_or_init(|| {
-            crate::lasuite::FindClient::connect(&self.domain)
-        })
+    pub async fn find(&self) -> Result<&crate::lasuite::FindClient> {
+        self.find.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://find.{}/api/v1.0", self.domain);
+            Ok(crate::lasuite::FindClient::from_parts(url, AuthMethod::Bearer(token)))
+        }).await
     }
 
-    pub fn bao(&self, base_url: &str) -> &crate::openbao::BaoClient {
-        self.bao.get_or_init(|| {
-            crate::openbao::BaoClient::new(base_url)
-        })
+    pub async fn bao(&self) -> Result<&crate::openbao::BaoClient> {
+        self.bao.get_or_try_init(|| async {
+            let token = self.sso_token().await?;
+            let url = format!("https://vault.{}", self.domain);
+            Ok(crate::openbao::BaoClient::with_token(&url, &token))
+        }).await
     }
 }
 

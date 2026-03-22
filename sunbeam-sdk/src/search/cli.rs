@@ -7,17 +7,6 @@ use crate::error::Result;
 use crate::output::{self, OutputFormat};
 
 // ---------------------------------------------------------------------------
-// Client helper
-// ---------------------------------------------------------------------------
-
-async fn os_client(domain: &str) -> Result<super::OpenSearchClient> {
-    let token = crate::auth::get_token().await?;
-    let mut c = super::OpenSearchClient::connect(domain);
-    c.set_token(token);
-    Ok(c)
-}
-
-// ---------------------------------------------------------------------------
 // Top-level command enum
 // ---------------------------------------------------------------------------
 
@@ -413,7 +402,7 @@ pub async fn dispatch(
     client: &crate::client::SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let c = os_client(client.domain()).await?;
+    let c = client.opensearch().await?;
 
     match cmd {
         // -----------------------------------------------------------------

@@ -349,7 +349,7 @@ pub async fn dispatch(
         AuthCommand::Courier { action } => dispatch_courier(action, client, output).await,
         // -- Kratos: Health -----------------------------------------------------
         AuthCommand::Health => {
-            let status = client.kratos().alive().await?;
+            let status = client.kratos().await?.alive().await?;
             output::render(&status, output)
         }
         // -- Hydra: Client ------------------------------------------------------
@@ -384,7 +384,7 @@ async fn dispatch_identity(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let kratos = client.kratos();
+    let kratos = client.kratos().await?;
     match action {
         IdentityAction::List { page, page_size } => {
             let items = kratos.list_identities(page, page_size).await?;
@@ -437,7 +437,7 @@ async fn dispatch_session(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let kratos = client.kratos();
+    let kratos = client.kratos().await?;
     match action {
         SessionAction::List {
             page_size,
@@ -486,7 +486,7 @@ async fn dispatch_recovery(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let kratos = client.kratos();
+    let kratos = client.kratos().await?;
     match action {
         RecoveryAction::CreateCode { id, expires_in } => {
             let item = kratos
@@ -512,7 +512,7 @@ async fn dispatch_schema(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let kratos = client.kratos();
+    let kratos = client.kratos().await?;
     match action {
         SchemaAction::List => {
             let items = kratos.list_schemas().await?;
@@ -539,7 +539,7 @@ async fn dispatch_courier(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let kratos = client.kratos();
+    let kratos = client.kratos().await?;
     match action {
         CourierAction::List {
             page_size,
@@ -579,7 +579,7 @@ async fn dispatch_client(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let hydra = client.hydra();
+    let hydra = client.hydra().await?;
     match action {
         ClientAction::List { limit, offset } => {
             let items = hydra.list_clients(limit, offset).await?;
@@ -631,7 +631,7 @@ async fn dispatch_jwk(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let hydra = client.hydra();
+    let hydra = client.hydra().await?;
     match action {
         JwkAction::List { set_name } => {
             let item = hydra.get_jwk_set(&set_name).await?;
@@ -665,7 +665,7 @@ async fn dispatch_issuer(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let hydra = client.hydra();
+    let hydra = client.hydra().await?;
     match action {
         IssuerAction::List => {
             let items = hydra.list_trusted_issuers().await?;
@@ -711,7 +711,7 @@ async fn dispatch_token(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let hydra = client.hydra();
+    let hydra = client.hydra().await?;
     match action {
         TokenAction::Introspect { token } => {
             let item = hydra.introspect_token(&token).await?;

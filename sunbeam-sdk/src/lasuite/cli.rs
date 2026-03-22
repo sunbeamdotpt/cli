@@ -6,44 +6,6 @@ use crate::client::SunbeamClient;
 use crate::error::Result;
 use crate::output::{self, OutputFormat};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Helper: build an authenticated La Suite client
-// ═══════════════════════════════════════════════════════════════════════════
-
-async fn people_client(domain: &str) -> Result<super::PeopleClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::PeopleClient::connect(domain).with_token(&token))
-}
-
-async fn docs_client(domain: &str) -> Result<super::DocsClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::DocsClient::connect(domain).with_token(&token))
-}
-
-async fn meet_client(domain: &str) -> Result<super::MeetClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::MeetClient::connect(domain).with_token(&token))
-}
-
-async fn drive_client(domain: &str) -> Result<super::DriveClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::DriveClient::connect(domain).with_token(&token))
-}
-
-async fn messages_client(domain: &str) -> Result<super::MessagesClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::MessagesClient::connect(domain).with_token(&token))
-}
-
-async fn calendars_client(domain: &str) -> Result<super::CalendarsClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::CalendarsClient::connect(domain).with_token(&token))
-}
-
-async fn find_client(domain: &str) -> Result<super::FindClient> {
-    let token = crate::auth::get_token().await?;
-    Ok(super::FindClient::connect(domain).with_token(&token))
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // People
@@ -143,7 +105,7 @@ pub async fn dispatch_people(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let people = people_client(client.domain()).await?;
+    let people = client.people().await?;
     match cmd {
         PeopleCommand::Contact { action } => match action {
             ContactAction::List { page } => {
@@ -346,7 +308,7 @@ pub async fn dispatch_docs(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let docs = docs_client(client.domain()).await?;
+    let docs = client.docs().await?;
     match cmd {
         DocsCommand::Document { action } => match action {
             DocumentAction::List { page } => {
@@ -498,7 +460,7 @@ pub async fn dispatch_meet(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let meet = meet_client(client.domain()).await?;
+    let meet = client.meet().await?;
     match cmd {
         MeetCommand::Room { action } => match action {
             RoomAction::List { page } => {
@@ -645,7 +607,7 @@ pub async fn dispatch_drive(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let drive = drive_client(client.domain()).await?;
+    let drive = client.drive().await?;
     match cmd {
         DriveCommand::File { action } => match action {
             FileAction::List { page } => {
@@ -823,7 +785,7 @@ pub async fn dispatch_mail(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let mail = messages_client(client.domain()).await?;
+    let mail = client.messages().await?;
     match cmd {
         MailCommand::Mailbox { action } => match action {
             MailboxAction::List => {
@@ -1013,7 +975,7 @@ pub async fn dispatch_cal(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let cal = calendars_client(client.domain()).await?;
+    let cal = client.calendars().await?;
     match cmd {
         CalCommand::Calendar { action } => match action {
             CalendarAction::List => {
@@ -1124,7 +1086,7 @@ pub async fn dispatch_find(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let find = find_client(client.domain()).await?;
+    let find = client.find().await?;
     match cmd {
         FindCommand::Search { query, page } => {
             let page_data = find.search(&query, page).await?;

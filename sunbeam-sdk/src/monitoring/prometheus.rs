@@ -27,9 +27,9 @@ impl ServiceClient for PrometheusClient {
 }
 
 impl PrometheusClient {
-    /// Build a PrometheusClient from domain (e.g. `https://prometheus.{domain}/api/v1`).
+    /// Build a PrometheusClient from domain (e.g. `https://systemmetrics.{domain}/api/v1`).
     pub fn connect(domain: &str) -> Self {
-        let base_url = format!("https://prometheus.{domain}/api/v1");
+        let base_url = format!("https://systemmetrics.{domain}/api/v1");
         Self::from_parts(base_url, AuthMethod::None)
     }
 
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_connect_url() {
         let c = PrometheusClient::connect("sunbeam.pt");
-        assert_eq!(c.base_url(), "https://prometheus.sunbeam.pt/api/v1");
+        assert_eq!(c.base_url(), "https://systemmetrics.sunbeam.pt/api/v1");
         assert_eq!(c.service_name(), "prometheus");
     }
 

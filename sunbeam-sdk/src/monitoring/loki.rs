@@ -27,9 +27,9 @@ impl ServiceClient for LokiClient {
 }
 
 impl LokiClient {
-    /// Build a LokiClient from domain (e.g. `https://loki.{domain}/loki/api/v1`).
+    /// Build a LokiClient from domain (e.g. `https://systemlogs.{domain}/loki/api/v1`).
     pub fn connect(domain: &str) -> Self {
-        let base_url = format!("https://loki.{domain}/loki/api/v1");
+        let base_url = format!("https://systemlogs.{domain}/loki/api/v1");
         Self::from_parts(base_url, AuthMethod::None)
     }
 
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn test_connect_url() {
         let c = LokiClient::connect("sunbeam.pt");
-        assert_eq!(c.base_url(), "https://loki.sunbeam.pt/loki/api/v1");
+        assert_eq!(c.base_url(), "https://systemlogs.sunbeam.pt/loki/api/v1");
         assert_eq!(c.service_name(), "loki");
     }
 

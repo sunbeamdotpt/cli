@@ -32,9 +32,9 @@ impl ServiceClient for MatrixClient {
 }
 
 impl MatrixClient {
-    /// Build a MatrixClient from domain (e.g. `https://matrix.{domain}/_matrix`).
+    /// Build a MatrixClient from domain (e.g. `https://messages.{domain}/_matrix`).
     pub fn connect(domain: &str) -> Self {
-        let base_url = format!("https://matrix.{domain}/_matrix");
+        let base_url = format!("https://messages.{domain}/_matrix");
         Self::from_parts(base_url, AuthMethod::Bearer(String::new()))
     }
 
@@ -1204,7 +1204,7 @@ mod tests {
     #[test]
     fn test_connect_url() {
         let c = MatrixClient::connect("sunbeam.pt");
-        assert_eq!(c.base_url(), "https://matrix.sunbeam.pt/_matrix");
+        assert_eq!(c.base_url(), "https://messages.sunbeam.pt/_matrix");
         assert_eq!(c.service_name(), "matrix");
     }
 

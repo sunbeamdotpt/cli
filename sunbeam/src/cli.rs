@@ -927,12 +927,14 @@ pub async fn dispatch() -> Result<()> {
             let sc = sunbeam_sdk::client::SunbeamClient::from_context(
                 &sunbeam_sdk::config::active_context(),
             );
-            sunbeam_sdk::gitea::cli::dispatch(action, sc.gitea(), cli.output_format).await
+            sunbeam_sdk::gitea::cli::dispatch(action, &sc, cli.output_format).await
         }
 
         Some(Verb::Chat { action }) => {
-            let domain = sunbeam_sdk::config::active_context().domain.clone();
-            sunbeam_sdk::matrix::cli::dispatch(&domain, cli.output_format, action).await
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::matrix::cli::dispatch(&sc, cli.output_format, action).await
         }
 
         Some(Verb::Search { action }) => {
@@ -964,8 +966,10 @@ pub async fn dispatch() -> Result<()> {
         }
 
         Some(Verb::Vault { action }) => {
-            let bao = sunbeam_sdk::openbao::BaoClient::new("http://127.0.0.1:8200");
-            sunbeam_sdk::openbao::cli::dispatch(action, &bao, cli.output_format).await
+            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
+                &sunbeam_sdk::config::active_context(),
+            );
+            sunbeam_sdk::openbao::cli::dispatch(action, &sc, cli.output_format).await
         }
 
         Some(Verb::People { action }) => {
