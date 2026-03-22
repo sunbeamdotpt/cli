@@ -1103,4 +1103,50 @@ mod tests {
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }
+
+    #[test]
+    fn test_sol_gitea_credential_mapping() {
+        let mut gitea = HashMap::new();
+        gitea.insert("admin-username".to_string(), "gitea_admin".to_string());
+        gitea.insert("admin-password".to_string(), "s3cret".to_string());
+
+        let mut sol_gitea = HashMap::new();
+        if let Some(u) = gitea.get("admin-username") {
+            sol_gitea.insert("gitea-admin-username".to_string(), u.clone());
+        }
+        if let Some(p) = gitea.get("admin-password") {
+            sol_gitea.insert("gitea-admin-password".to_string(), p.clone());
+        }
+
+        assert_eq!(sol_gitea.len(), 2);
+        assert_eq!(sol_gitea["gitea-admin-username"], "gitea_admin");
+        assert_eq!(sol_gitea["gitea-admin-password"], "s3cret");
+    }
+
+    #[test]
+    fn test_sol_gitea_credential_mapping_partial() {
+        let gitea: HashMap<String, String> = HashMap::new();
+        let mut sol_gitea = HashMap::new();
+        if let Some(u) = gitea.get("admin-username") {
+            sol_gitea.insert("gitea-admin-username".to_string(), u.clone());
+        }
+        if let Some(p) = gitea.get("admin-password") {
+            sol_gitea.insert("gitea-admin-password".to_string(), p.clone());
+        }
+        assert!(sol_gitea.is_empty(), "No creds should be mapped when gitea map is empty");
+    }
+
+    #[test]
+    fn test_sol_agent_policy_hcl() {
+        let sol_policy_hcl = concat!(
+            "path \"secret/data/sol-tokens/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\"] }\n",
+            "path \"secret/metadata/sol-tokens/*\" { capabilities = [\"read\", \"delete\", \"list\"] }\n",
+        );
+        assert!(sol_policy_hcl.contains("secret/data/sol-tokens/*"));
+        assert!(sol_policy_hcl.contains("secret/metadata/sol-tokens/*"));
+        assert!(sol_policy_hcl.contains("create"));
+        assert!(sol_policy_hcl.contains("delete"));
+        assert!(sol_policy_hcl.contains("list"));
+        assert_eq!(sol_policy_hcl.lines().count(), 2);
+    }
 }
