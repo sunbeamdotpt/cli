@@ -177,7 +177,7 @@ async fn dispatch_room(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let lk = client.livekit();
+    let lk = client.livekit().await?;
     match action {
         RoomAction::List => {
             let resp = lk.list_rooms().await?;
@@ -227,7 +227,7 @@ async fn dispatch_participant(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let lk = client.livekit();
+    let lk = client.livekit().await?;
     match action {
         ParticipantAction::List { room } => {
             let resp = lk
@@ -278,7 +278,7 @@ async fn dispatch_egress(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let lk = client.livekit();
+    let lk = client.livekit().await?;
     match action {
         EgressAction::List { room } => {
             let resp = lk

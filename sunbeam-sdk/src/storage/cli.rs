@@ -152,7 +152,7 @@ async fn dispatch_bucket(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let s3 = client.s3();
+    let s3 = client.s3().await?;
     match action {
         BucketAction::List => {
             let resp = s3.list_buckets().await?;
@@ -194,7 +194,7 @@ async fn dispatch_object(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let s3 = client.s3();
+    let s3 = client.s3().await?;
     match action {
         ObjectAction::List {
             bucket,

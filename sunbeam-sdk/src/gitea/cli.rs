@@ -2,9 +2,9 @@
 
 use clap::Subcommand;
 
+use crate::client::SunbeamClient;
 use crate::error::{Result, SunbeamError};
 use crate::gitea::types::*;
-use crate::gitea::GiteaClient;
 use crate::output::{render, render_list, read_json_input, OutputFormat};
 
 // ---------------------------------------------------------------------------
@@ -435,7 +435,8 @@ fn notification_row(n: &Notification) -> Vec<String> {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: VcsCommand, client: &GiteaClient, fmt: OutputFormat) -> Result<()> {
+pub async fn dispatch(cmd: VcsCommand, client: &SunbeamClient, fmt: OutputFormat) -> Result<()> {
+    let client = client.gitea().await?;
     match cmd {
         // -- Repo -----------------------------------------------------------
         VcsCommand::Repo { action } => match action {

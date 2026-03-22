@@ -27,9 +27,9 @@ impl ServiceClient for GrafanaClient {
 }
 
 impl GrafanaClient {
-    /// Build a GrafanaClient from domain (e.g. `https://grafana.{domain}/api`).
+    /// Build a GrafanaClient from domain (e.g. `https://metrics.{domain}/api`).
     pub fn connect(domain: &str) -> Self {
-        let base_url = format!("https://grafana.{domain}/api");
+        let base_url = format!("https://metrics.{domain}/api");
         Self::from_parts(base_url, AuthMethod::None)
     }
 
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn test_connect_url() {
         let c = GrafanaClient::connect("sunbeam.pt");
-        assert_eq!(c.base_url(), "https://grafana.sunbeam.pt/api");
+        assert_eq!(c.base_url(), "https://metrics.sunbeam.pt/api");
         assert_eq!(c.service_name(), "grafana");
     }
 

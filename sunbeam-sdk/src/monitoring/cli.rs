@@ -425,7 +425,7 @@ async fn dispatch_prometheus(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let prom = client.prometheus();
+    let prom = client.prometheus().await?;
     match action {
         PrometheusAction::Query { query, time } => {
             let res = prom.query(&query, time.as_deref()).await?;
@@ -511,7 +511,7 @@ async fn dispatch_loki(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let loki = client.loki();
+    let loki = client.loki().await?;
     match action {
         LokiAction::Query { query, limit, time } => {
             let res = loki.query(&query, limit, time.as_deref()).await?;
@@ -631,7 +631,7 @@ async fn dispatch_grafana_dashboard(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaDashboardAction::List => {
             let items = grafana.list_dashboards().await?;
@@ -696,7 +696,7 @@ async fn dispatch_grafana_datasource(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaDatasourceAction::List => {
             let items = grafana.list_datasources().await?;
@@ -746,7 +746,7 @@ async fn dispatch_grafana_folder(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaFolderAction::List => {
             let items = grafana.list_folders().await?;
@@ -794,7 +794,7 @@ async fn dispatch_grafana_annotation(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaAnnotationAction::List { params } => {
             let items = grafana.list_annotations(params.as_deref()).await?;
@@ -833,7 +833,7 @@ async fn dispatch_grafana_alert(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaAlertAction::List => {
             let items = grafana.get_alert_rules().await?;
@@ -879,7 +879,7 @@ async fn dispatch_grafana_org(
     client: &SunbeamClient,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let grafana = client.grafana();
+    let grafana = client.grafana().await?;
     match action {
         GrafanaOrgAction::Get => {
             let item = grafana.get_current_org().await?;

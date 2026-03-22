@@ -1,21 +1,9 @@
 //! CLI dispatch for Matrix chat commands.
 
+use crate::client::SunbeamClient;
 use crate::error::Result;
 use crate::output::{self, OutputFormat};
 use clap::Subcommand;
-
-// ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
-
-/// Construct a [`MatrixClient`] with a valid access token from the credential
-/// cache. Fails if the user is not logged in.
-async fn matrix_with_token(domain: &str) -> Result<super::MatrixClient> {
-    let token = crate::auth::get_token().await?;
-    let mut m = super::MatrixClient::connect(domain);
-    m.set_token(&token);
-    Ok(m)
-}
 
 // ---------------------------------------------------------------------------
 // Command tree
@@ -343,8 +331,8 @@ pub enum UserAction {
 // ---------------------------------------------------------------------------
 
 /// Dispatch a parsed [`ChatCommand`] against the Matrix homeserver.
-pub async fn dispatch(domain: &str, format: OutputFormat, cmd: ChatCommand) -> Result<()> {
-    let m = matrix_with_token(domain).await?;
+pub async fn dispatch(client: &SunbeamClient, format: OutputFormat, cmd: ChatCommand) -> Result<()> {
+    let m = client.matrix().await?;
 
     match cmd {
         // -- Whoami ---------------------------------------------------------

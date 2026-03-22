@@ -29,9 +29,9 @@ impl ServiceClient for HydraClient {
 }
 
 impl HydraClient {
-    /// Build a HydraClient from domain (e.g. `https://auth.{domain}`).
+    /// Build a HydraClient from domain (e.g. `https://hydra.{domain}`).
     pub fn connect(domain: &str) -> Self {
-        let base_url = format!("https://auth.{domain}");
+        let base_url = format!("https://hydra.{domain}");
         Self::from_parts(base_url, AuthMethod::None)
     }
 
@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn test_connect_url() {
         let c = HydraClient::connect("sunbeam.pt");
-        assert_eq!(c.base_url(), "https://auth.sunbeam.pt");
+        assert_eq!(c.base_url(), "https://hydra.sunbeam.pt");
         assert_eq!(c.service_name(), "hydra");
     }
 
