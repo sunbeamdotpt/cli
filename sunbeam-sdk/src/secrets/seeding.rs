@@ -473,6 +473,21 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
         }
     }
 
+    // Patch gitea admin credentials into secret/sol for Sol's Gitea integration.
+    // Uses kv_patch to preserve manually-set keys (matrix-access-token etc.).
+    {
+        let mut sol_gitea = HashMap::new();
+        if let Some(u) = gitea.get("admin-username") {
+            sol_gitea.insert("gitea-admin-username".to_string(), u.clone());
+        }
+        if let Some(p) = gitea.get("admin-password") {
+            sol_gitea.insert("gitea-admin-password".to_string(), p.clone());
+        }
+        if !sol_gitea.is_empty() {
+            bao.kv_patch("secret", "sol", &sol_gitea).await?;
+        }
+    }
+
     // ── Kubernetes auth for VSO ─────────────────────────────────────────
     ok("Configuring Kubernetes auth for VSO...");
     let _ = bao.auth_enable("kubernetes", "kubernetes").await;
@@ -498,6 +513,25 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
             "bound_service_account_names": "default",
             "bound_service_account_namespaces": "ory,devtools,storage,lasuite,matrix,media,data,monitoring",
             "policies": "vso-reader",
+            "ttl": "1h"
+        }),
+    )
+    .await?;
+
+    // Sol agent policy — read/write access to sol-tokens/* for user impersonation PATs
+    ok("Configuring Kubernetes auth for Sol agent...");
+    let sol_policy_hcl = concat!(
+        "path \"secret/data/sol-tokens/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\"] }\n",
+        "path \"secret/metadata/sol-tokens/*\" { capabilities = [\"read\", \"delete\", \"list\"] }\n",
+    );
+    bao.write_policy("sol-agent", sol_policy_hcl).await?;
+
+    bao.write(
+        "auth/kubernetes/role/sol-agent",
+        &serde_json::json!({
+            "bound_service_account_names": "default",
+            "bound_service_account_namespaces": "matrix",
+            "policies": "sol-agent",
             "ttl": "1h"
         }),
     )
