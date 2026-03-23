@@ -305,6 +305,25 @@ pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) 
     Ok(())
 }
 
+/// Find the first Running pod matching a label selector in a namespace.
+pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
+    let client = get_client().await.ok()?;
+    let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
+        kube::Api::namespaced(client, ns);
+    let lp = kube::api::ListParams::default().labels(label);
+    let pod_list = pods.list(&lp).await.ok()?;
+    pod_list
+        .items
+        .iter()
+        .find(|p| {
+            p.status
+                .as_ref()
+                .and_then(|s| s.phase.as_deref())
+                == Some("Running")
+        })
+        .and_then(|p| p.metadata.name.clone())
+}
+
 /// Execute a command in a pod and return (exit_code, stdout).
 #[allow(dead_code)]
 pub async fn kube_exec(

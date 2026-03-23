@@ -475,10 +475,16 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
         curl_args.extend_from_slice(&["-H", "Content-Type: application/json", "-d", &body_string]);
     }
 
-    // Build the full exec command: exec deploy/opensearch -n data -c opensearch -- curl ...
-    let exec_cmd = curl_args;
+    // Resolve the actual pod name from the app=opensearch label
+    let pod_name = match crate::kube::find_pod_by_label("data", "app=opensearch").await {
+        Some(name) => name,
+        None => {
+            crate::output::warn("No OpenSearch pod found in data namespace");
+            return None;
+        }
+    };
 
-    match crate::kube::kube_exec("data", "opensearch-0", &exec_cmd, Some("opensearch")).await {
+    match crate::kube::kube_exec("data", &pod_name, &curl_args, Some("opensearch")).await {
         Ok((0, out)) if !out.is_empty() => Some(out),
         _ => None,
     }
