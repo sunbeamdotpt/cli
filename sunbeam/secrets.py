@@ -383,6 +383,14 @@ def _seed_openbao() -> dict:
                                   "turn-secret": tuwunel["turn-secret"],
                                   "registration-token": tuwunel["registration-token"]})
 
+    # Patch gitea admin credentials into secret/sol for Sol's Gitea integration.
+    # Uses kv patch (not put) to preserve manually-set keys (matrix-access-token etc.).
+    ok("Patching Gitea admin credentials into secret/sol...")
+    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
+        f"bao kv patch secret/sol "
+        f"gitea-admin-username='{gitea['admin-username']}' "
+        f"gitea-admin-password='{gitea['admin-password']}'")
+
     # Configure Kubernetes auth method so VSO can authenticate with OpenBao
     ok("Configuring Kubernetes auth for VSO...")
     bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
@@ -405,6 +413,23 @@ def _seed_openbao() -> dict:
         f"bound_service_account_names=default "
         f"bound_service_account_namespaces=ory,devtools,storage,lasuite,matrix,media,data,monitoring "
         f"policies=vso-reader "
+        f"ttl=1h")
+
+    # Sol agent policy — read/write access to sol-tokens/* for user impersonation PATs
+    ok("Configuring Kubernetes auth for Sol agent...")
+    sol_policy_hcl = (
+        'path "secret/data/sol-tokens/*" { capabilities = ["create", "read", "update", "delete"] }\n'
+        'path "secret/metadata/sol-tokens/*" { capabilities = ["read", "delete", "list"] }\n'
+    )
+    sol_policy_b64 = base64.b64encode(sol_policy_hcl.encode()).decode()
+    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
+        f"sh -c 'echo {sol_policy_b64} | base64 -d | bao policy write sol-agent -'")
+
+    bao(f"BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='{root_token}' "
+        f"bao write auth/kubernetes/role/sol-agent "
+        f"bound_service_account_names=default "
+        f"bound_service_account_namespaces=matrix "
+        f"policies=sol-agent "
         f"ttl=1h")
 
     return {
