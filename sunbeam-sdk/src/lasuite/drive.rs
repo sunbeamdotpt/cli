@@ -162,21 +162,38 @@ impl DriveClient {
 
     /// Upload file bytes directly to a presigned S3 URL.
     /// The presigned URL's SigV4 signature covers host + x-amz-acl headers.
+    /// Retries up to 3 times on 502/503/connection errors.
     pub async fn upload_to_s3(&self, presigned_url: &str, data: bytes::Bytes) -> Result<()> {
-        let resp = reqwest::Client::new()
-            .put(presigned_url)
-            .header("x-amz-acl", "private")
-            .body(data)
-            .send()
-            .await
-            .map_err(|e| crate::error::SunbeamError::network(format!("S3 upload: {e}")))?;
+        let max_retries = 3;
+        for attempt in 0..=max_retries {
+            let resp = self.transport.http
+                .put(presigned_url)
+                .header("x-amz-acl", "private")
+                .body(data.clone())
+                .send()
+                .await;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(crate::error::SunbeamError::network(format!(
-                "S3 upload: HTTP {status}: {body}"
-            )));
+            match resp {
+                Ok(r) if r.status().is_success() => return Ok(()),
+                Ok(r) if (r.status() == 502 || r.status() == 503) && attempt < max_retries => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                    continue;
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    let body = r.text().await.unwrap_or_default();
+                    return Err(crate::error::SunbeamError::network(format!(
+                        "S3 upload: HTTP {status}: {body}"
+                    )));
+                }
+                Err(_) if attempt < max_retries => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(crate::error::SunbeamError::network(format!("S3 upload: {e}")));
+                }
+            }
         }
         Ok(())
     }
