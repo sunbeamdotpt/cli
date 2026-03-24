@@ -1,0 +1,94 @@
+# Changelog
+
+## v1.1.0
+
+- 477006e chore: bump to v1.1.0, update package description
+- ca0748b feat: encrypted vault keystore, JWT auth, Drive upload
+- 13e3f5d fix opensearch pod resolution + sol-agent vault policy
+- faf5255 feat: async SunbeamClient factory with unified auth resolution
+
+## v1.0.1
+
+- 34647e6 feat: seed Sol agent vault policy + gitea creds, bump v1.0.1
+
+## v1.0.0
+
+- 051e17d chore: bump to v1.0.0, drop native-tls for pure rustls
+- 7ebf900 feat: wire 15 service subcommands into CLI, remove old user command
+- f867805 feat: CLI modules for all 25+ service clients
+- 3d7a2d5 feat: OutputFormat enum + render/render_list/read_json_input helpers
+- 756fbc5 chore: update Cargo.lock
+- 97976e0 fix: include build module (was gitignored)
+- f06a167 feat: BuildKit client + integration test suite (651 tests)
+- b60e22e feat: La Suite clients — 7 DRF services (75 endpoints)
+- 915f0b2 feat: monitoring clients — Prometheus, Loki, Grafana (57 endpoints)
+- 21f9e18 feat: LiveKitClient — real-time media API (15 endpoints + JWT)
+- a33697c feat: S3Client — object storage API (21 endpoints)
+- 329c18b feat: OpenSearchClient — search and analytics API (60 endpoints)
+- 2888d59 feat: MatrixClient — chat and collaboration API (80 endpoints)
+- 890d7b8 feat: GiteaClient — unified git forge API (50+ endpoints)
+- c597234 feat: HydraClient — OAuth2/OIDC admin API (35 endpoints)
+- f0bc363 feat: KratosClient — identity management (30 endpoints)
+- 6823772 feat: ServiceClient trait, HttpTransport, and SunbeamClient factory
+- 31fde1a fix: forge URL derivation for bare IP hosts, add Cargo registry config
+- 46d2133 docs: update README for Rust workspace layout
+- 3ef3fc0 feat: Python upstream — Sol bot registration TODO
+- e0961cc refactor: binary crate — thin main.rs + cli.rs dispatch
+- 8e5d295 refactor: SDK small command modules — services, cluster, manifests, gitea, update, auth
+- 6c7e1cd refactor: SDK users, pm, and checks modules with submodule splits
+- bc65b91 refactor: SDK images and secrets modules with submodule splits
+- 8e51e0b refactor: SDK kube, openbao, and tools modules
+- b92700d refactor: SDK core modules — error, config, output, constants
+- 2ffedb9 refactor: workspace scaffolding — sunbeam-sdk + sunbeam binary crate
+- b6daf60 chore: suppress dead_code warning on exit code constants
+- b92c6ad feat: Python upstream — onboard/offboard, mailbox, Projects, --no-cache
+- 8d6e815 feat: --no-cache build flag and Sol build target
+- f75f61f feat: user provisioning — mailbox, Projects, welcome email
+- c6aa1bd feat: complete pm subcommands with board discovery and user resolution
+- ffc0fe9 feat: split auth into sso/git, Planka token exchange, board discovery
+- ded0ab4 refactor: remove --env flag, use --context like kubectl
+- 88b02ac feat: kubectl-style contexts with per-domain auth tokens
+- 3a5e1c6 fix: use predictable client_id via pre-seeded K8s secret
+- 1029ff0 fix: auth login UX — timeout, Ctrl+C, suppress K8s error, center HTML
+- 43b5a4e fix: URL-encode scope parameter with %20 instead of +
+- 7fab2a7 fix: auth login domain resolution with --domain flag
+- 184ad85 fix: install rustls ring crypto provider at startup
+- 5bdb789 feat: unified project management across Planka and Gitea
+- d4421d3 feat: OAuth2 CLI authentication with PKCE and token caching
+- aad469e fix: stdin password, port-forward retry, seed advisory lock
+- dff4588 fix: employee ID pagination, add async tests
+- 019c73e fix: S3 auth signature tested against AWS reference vector
+- e95ee4f fix: rewrite users.rs to fully async (was blocking tokio runtime)
+- 24e98b4 fix: CNPG readiness, DKIM SPKI format, kv_patch, container name
+- 6ec0666 fix: SSH tunnel leak, cmd_bao injection, discovery cache, DNS async
+- bcfb443 refactor: deduplicate constants, fix secret key mismatch, add VSS pruning
+- 503e407 feat: implement OpenSearch ML setup and model_id injection
+- bc5eeaa feat: implement secrets.rs with OpenBao HTTP API
+- 7fd8874 refactor: migrate all modules from anyhow to SunbeamError
+- cc0b6a8 refactor: add thiserror error tree and tracing logging
+- ec23568 feat: Phase 2 feature modules + comprehensive test suite (142 tests)
+- 42c2a74 feat: Phase 1 foundations — kube-rs client, OpenBao HTTP client, self-update
+- 80c67d3 feat: Rust rewrite scaffolding with embedded kustomize+helm
+- d5b9632 refactor: cross-platform tool downloads, configurable infra dir and ACME email
+- c82f15b feat: add tuwunel/matrix support with OpenSearch ML post-apply hooks
+- 928323e fix(cli): unify proxy build path, fix Gitea password sync
+- 956a883 chore: added AGENTS.md file for various models.
+- 507b4d3 feat(config): add production host and infrastructure directory configuration
+- cbf5c12 docs: update repository URLs to use HTTPS remotes for src.sunbeam.pt
+- 133fc98 docs: add comprehensive README with professional documentation
+- 33d7774 chore: added license
+- 1a97781 docs: add comprehensive documentation for sunbeam CLI
+- 28c266e feat(cli): partial apply with namespace filter
+- 2569978 feat(cli): meet build/seed support, production kube tunnel, gitea OIDC bootstrap
+- c759f2c feat(users): add disable/enable lockout commands; fix table output
+- cb5a290 feat: auto-restart deployments on ConfigMap change after sunbeam apply
+- 1a3df1f feat: add sunbeam build integration target
+- de12847 feat: add impress image mirroring and docs secret seeding
+- 14dd685 feat: add kratos-admin-ui build target and user management commands
+- b917aa3 fix: specify -c openbao container in cmd_bao kubectl exec
+- 352f0b6 feat: add sunbeam k8s kubectl passthrough; fix kube_exec container arg
+- fb3fd93 fix: sunbeam apply and bootstrap reliability
+- 0acbf66 check: rewrite seaweedfs probe with S3 SigV4 auth
+- 6bd59ab sunbeam check: parallel execution, 5s timeout, external S3 check
+- 39a2f70 Fix sunbeam check: group by namespace, never crash on network errors
+- 1573faa Add sunbeam check verb with service-level health probes
