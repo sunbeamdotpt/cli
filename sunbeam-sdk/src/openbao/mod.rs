@@ -15,6 +15,8 @@ use std::collections::HashMap;
 pub struct BaoClient {
     pub base_url: String,
     pub token: Option<String>,
+    /// Optional bearer token for proxy auth_request (separate from vault token).
+    pub bearer_token: Option<String>,
     http: reqwest::Client,
 }
 
@@ -67,14 +69,23 @@ impl BaoClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: None,
+            bearer_token: None,
             http: reqwest::Client::new(),
         }
     }
 
-    /// Create a client with an authentication token.
+    /// Create a client with a vault authentication token.
     pub fn with_token(base_url: &str, token: &str) -> Self {
         let mut client = Self::new(base_url);
         client.token = Some(token.to_string());
+        client
+    }
+
+    /// Create a client with both a vault token and a bearer token for proxy auth.
+    pub fn with_proxy_auth(base_url: &str, vault_token: &str, bearer_token: &str) -> Self {
+        let mut client = Self::new(base_url);
+        client.token = Some(vault_token.to_string());
+        client.bearer_token = Some(bearer_token.to_string());
         client
     }
 
@@ -87,6 +98,9 @@ impl BaoClient {
         if let Some(ref token) = self.token {
             req = req.header("X-Vault-Token", token);
         }
+        if let Some(ref bearer) = self.bearer_token {
+            req = req.header("Authorization", format!("Bearer {bearer}"));
+        }
         req
     }
 
@@ -95,8 +109,7 @@ impl BaoClient {
     /// Get the seal status of the OpenBao instance.
     pub async fn seal_status(&self) -> Result<SealStatusResponse> {
         let resp = self
-            .http
-            .get(format!("{}/v1/sys/seal-status", self.base_url))
+            .request(reqwest::Method::GET, "sys/seal-status")
             .send()
             .await
             .ctx("Failed to connect to OpenBao")?;

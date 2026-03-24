@@ -296,6 +296,9 @@ pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) 
         "metadata": {
             "name": name,
             "namespace": ns,
+            "labels": {
+                "sunbeam.dev/managed-by": "sunbeam"
+            },
         },
         "type": "Opaque",
         "data": encoded,

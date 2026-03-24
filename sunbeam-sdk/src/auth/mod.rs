@@ -674,6 +674,18 @@ pub fn get_gitea_token() -> Result<String> {
     })
 }
 
+/// Get cached OIDC id_token (JWT).
+pub fn get_id_token() -> Result<String> {
+    let tokens = read_cache().map_err(|_| {
+        SunbeamError::identity("Not logged in. Run `sunbeam auth login` first.")
+    })?;
+    tokens.id_token.ok_or_else(|| {
+        SunbeamError::identity(
+            "No id_token cached. Run `sunbeam auth sso` to get one.",
+        )
+    })
+}
+
 /// Remove cached auth tokens.
 pub async fn cmd_auth_logout() -> Result<()> {
     let path = cache_path();
