@@ -335,6 +335,11 @@ impl SunbeamClient {
         crate::auth::get_gitea_token()
     }
 
+    /// Get cached OIDC id_token (JWT with claims including admin flag).
+    fn id_token(&self) -> Result<String> {
+        crate::auth::get_id_token()
+    }
+
     // -- Lazy async accessors (each feature-gated) ---------------------------
     //
     // Each accessor resolves the appropriate auth and constructs the client
@@ -424,7 +429,7 @@ impl SunbeamClient {
     pub async fn people(&self) -> Result<&crate::lasuite::PeopleClient> {
         self.people.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://people.{}/api/v1.0", self.domain);
+            let url = format!("https://people.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::PeopleClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -433,7 +438,7 @@ impl SunbeamClient {
     pub async fn docs(&self) -> Result<&crate::lasuite::DocsClient> {
         self.docs.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://docs.{}/api/v1.0", self.domain);
+            let url = format!("https://docs.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::DocsClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -442,7 +447,7 @@ impl SunbeamClient {
     pub async fn meet(&self) -> Result<&crate::lasuite::MeetClient> {
         self.meet.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://meet.{}/api/v1.0", self.domain);
+            let url = format!("https://meet.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -451,7 +456,7 @@ impl SunbeamClient {
     pub async fn drive(&self) -> Result<&crate::lasuite::DriveClient> {
         self.drive.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://drive.{}/api/v1.0", self.domain);
+            let url = format!("https://drive.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::DriveClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -460,7 +465,7 @@ impl SunbeamClient {
     pub async fn messages(&self) -> Result<&crate::lasuite::MessagesClient> {
         self.messages.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://mail.{}/api/v1.0", self.domain);
+            let url = format!("https://mail.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::MessagesClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -469,7 +474,7 @@ impl SunbeamClient {
     pub async fn calendars(&self) -> Result<&crate::lasuite::CalendarsClient> {
         self.calendars.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://calendar.{}/api/v1.0", self.domain);
+            let url = format!("https://calendar.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::CalendarsClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
@@ -478,16 +483,65 @@ impl SunbeamClient {
     pub async fn find(&self) -> Result<&crate::lasuite::FindClient> {
         self.find.get_or_try_init(|| async {
             let token = self.sso_token().await?;
-            let url = format!("https://find.{}/api/v1.0", self.domain);
+            let url = format!("https://find.{}/external_api/v1.0", self.domain);
             Ok(crate::lasuite::FindClient::from_parts(url, AuthMethod::Bearer(token)))
         }).await
     }
 
     pub async fn bao(&self) -> Result<&crate::openbao::BaoClient> {
         self.bao.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://vault.{}", self.domain);
-            Ok(crate::openbao::BaoClient::with_token(&url, &token))
+            let id_token = self.id_token()?;
+            let bearer = self.sso_token().await?;
+
+            // Authenticate to OpenBao via JWT auth method using the OIDC id_token.
+            // Try admin role first (for users with admin: true), fall back to reader.
+            let http = reqwest::Client::new();
+            let vault_token = {
+                let mut token = None;
+                for role in &["cli-admin", "cli-reader"] {
+                    let resp = http
+                        .post(format!("{url}/v1/auth/jwt/login"))
+                        .bearer_auth(&bearer)
+                        .json(&serde_json::json!({ "jwt": id_token, "role": role }))
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) => {
+                            let status = r.status();
+                            if status.is_success() {
+                                if let Ok(body) = r.json::<serde_json::Value>().await {
+                                    if let Some(t) = body["auth"]["client_token"].as_str() {
+                                        tracing::debug!("vault JWT login ok (role={role})");
+                                        token = Some(t.to_string());
+                                        break;
+                                    }
+                                }
+                            } else {
+                                let body = r.text().await.unwrap_or_default();
+                                tracing::debug!("vault JWT login {status} (role={role}): {body}");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("vault JWT login request failed (role={role}): {e}");
+                        }
+                    }
+                }
+                match token {
+                    Some(t) => t,
+                    None => {
+                        tracing::debug!("vault JWT auth failed, falling back to local keystore");
+                        match crate::vault_keystore::load_keystore(&self.domain) {
+                            Ok(ks) => ks.root_token,
+                            Err(_) => return Err(SunbeamError::secrets(
+                                "Vault auth failed: no valid JWT role and no local keystore. Run `sunbeam auth sso` and retry."
+                            )),
+                        }
+                    }
+                }
+            };
+
+            Ok(crate::openbao::BaoClient::with_proxy_auth(&url, &vault_token, &bearer))
         }).await
     }
 }

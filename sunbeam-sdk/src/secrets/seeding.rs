@@ -101,6 +101,21 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
                 data.insert("root-token".to_string(), root_token.clone());
                 k::create_secret("data", "openbao-keys", data).await?;
                 ok("Initialized -- keys stored in secret/openbao-keys.");
+
+                // Save to local keystore
+                let domain = crate::config::domain();
+                let ks = crate::vault_keystore::VaultKeystore {
+                    version: 1,
+                    domain: domain.to_string(),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    root_token: root_token.clone(),
+                    unseal_keys_b64: vec![unseal_key.clone()],
+                    key_shares: 1,
+                    key_threshold: 1,
+                };
+                crate::vault_keystore::save_keystore(&ks)?;
+                ok(&format!("Keys backed up to local keystore at {}", crate::vault_keystore::keystore_path(domain).display()));
             }
             Err(e) => {
                 warn(&format!(
@@ -114,11 +129,65 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
         }
     } else {
         ok("Already initialized.");
-        if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await {
-            unseal_key = key;
-        }
-        if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await {
-            root_token = token;
+        let domain = crate::config::domain();
+
+        // Try local keystore first (survives K8s Secret overwrites)
+        if crate::vault_keystore::keystore_exists(domain) {
+            match crate::vault_keystore::load_keystore(domain) {
+                Ok(ks) => {
+                    unseal_key = ks.unseal_keys_b64.first().cloned().unwrap_or_default();
+                    root_token = ks.root_token.clone();
+                    ok("Loaded keys from local keystore.");
+
+                    // Restore K8s Secret if it was wiped
+                    let k8s_token = k::kube_get_secret_field("data", "openbao-keys", "root-token").await.unwrap_or_default();
+                    if k8s_token.is_empty() && !root_token.is_empty() {
+                        warn("K8s Secret openbao-keys is empty — restoring from local keystore.");
+                        let mut data = HashMap::new();
+                        data.insert("key".to_string(), unseal_key.clone());
+                        data.insert("root-token".to_string(), root_token.clone());
+                        k::create_secret("data", "openbao-keys", data).await?;
+                        ok("Restored openbao-keys from local keystore.");
+                    }
+                }
+                Err(e) => {
+                    warn(&format!("Failed to load local keystore: {e}"));
+                    // Fall back to K8s Secret
+                    if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await {
+                        unseal_key = key;
+                    }
+                    if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await {
+                        root_token = token;
+                    }
+                }
+            }
+        } else {
+            // No local keystore — read from K8s Secret and backfill
+            if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await {
+                unseal_key = key;
+            }
+            if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await {
+                root_token = token;
+            }
+
+            // Backfill local keystore if we got keys from the cluster
+            if !root_token.is_empty() && !unseal_key.is_empty() {
+                let ks = crate::vault_keystore::VaultKeystore {
+                    version: 1,
+                    domain: domain.to_string(),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    root_token: root_token.clone(),
+                    unseal_keys_b64: vec![unseal_key.clone()],
+                    key_shares: 1,
+                    key_threshold: 1,
+                };
+                if let Err(e) = crate::vault_keystore::save_keystore(&ks) {
+                    warn(&format!("Failed to backfill local keystore: {e}"));
+                } else {
+                    ok(&format!("Backfilled local keystore at {}", crate::vault_keystore::keystore_path(domain).display()));
+                }
+            }
         }
     }
 
@@ -468,9 +537,31 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
 
         for (path, data) in all_paths {
             if dirty_paths.contains(*path) {
-                bao.kv_patch("secret", path, data).await?;
+                // Use kv_put for new paths (patch fails with 404 on nonexistent keys).
+                // Try patch first (preserves manually-set fields), fall back to put.
+                if bao.kv_patch("secret", path, data).await.is_err() {
+                    bao.kv_put("secret", path, data).await?;
+                }
             }
         }
+    }
+
+    // Seed resource server allowed audiences for La Suite external APIs.
+    // Combines the static sunbeam-cli client ID with dynamic service client IDs.
+    ok("Configuring La Suite resource server audiences...");
+    {
+        let mut rs_audiences = HashMap::new();
+        // sunbeam-cli is always static (OAuth2Client CRD name)
+        let mut audiences = vec!["sunbeam-cli".to_string()];
+        // Read the messages client ID from the oidc-messages secret if available
+        if let Ok(client_id) = crate::kube::kube_get_secret_field("lasuite", "oidc-messages", "CLIENT_ID").await {
+            audiences.push(client_id);
+        }
+        rs_audiences.insert(
+            "OIDC_RS_ALLOWED_AUDIENCES".to_string(),
+            audiences.join(","),
+        );
+        bao.kv_put("secret", "drive-rs-audiences", &rs_audiences).await?;
     }
 
     // Patch gitea admin credentials into secret/sol for Sol's Gitea integration.
@@ -484,7 +575,9 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
             sol_gitea.insert("gitea-admin-password".to_string(), p.clone());
         }
         if !sol_gitea.is_empty() {
-            bao.kv_patch("secret", "sol", &sol_gitea).await?;
+            if bao.kv_patch("secret", "sol", &sol_gitea).await.is_err() {
+                bao.kv_put("secret", "sol", &sol_gitea).await?;
+            }
         }
     }
 
@@ -532,6 +625,63 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
             "bound_service_account_names": "default",
             "bound_service_account_namespaces": "matrix",
             "policies": "sol-agent",
+            "ttl": "1h"
+        }),
+    )
+    .await?;
+
+    // ── JWT auth for CLI (OIDC via Hydra) ─────────────────────────────
+    // Enables `sunbeam vault` commands to authenticate with SSO tokens
+    // instead of the root token. Users with `admin: true` in their
+    // Kratos metadata_admin get full vault access.
+    ok("Configuring JWT/OIDC auth for CLI...");
+    let _ = bao.auth_enable("jwt", "jwt").await;
+
+    let domain = crate::config::domain();
+    bao.write(
+        "auth/jwt/config",
+        &serde_json::json!({
+            "oidc_discovery_url": format!("https://auth.{domain}/"),
+            "default_role": "cli-reader"
+        }),
+    )
+    .await?;
+
+    // Admin role — full access for users with admin: true in JWT
+    let admin_policy_hcl = concat!(
+        "path \"*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\", \"sudo\"] }\n",
+    );
+    bao.write_policy("cli-admin", admin_policy_hcl).await?;
+
+    bao.write(
+        "auth/jwt/role/cli-admin",
+        &serde_json::json!({
+            "role_type": "jwt",
+            "bound_audiences": ["sunbeam-cli"],
+            "user_claim": "sub",
+            "bound_claims": { "admin": true },
+            "policies": ["cli-admin"],
+            "ttl": "1h"
+        }),
+    )
+    .await?;
+
+    // Reader role — read-only access for non-admin SSO users
+    let cli_reader_hcl = concat!(
+        "path \"secret/data/*\" { capabilities = [\"read\"] }\n",
+        "path \"secret/metadata/*\" { capabilities = [\"read\", \"list\"] }\n",
+        "path \"sys/health\" { capabilities = [\"read\", \"sudo\"] }\n",
+        "path \"sys/seal-status\" { capabilities = [\"read\"] }\n",
+    );
+    bao.write_policy("cli-reader", cli_reader_hcl).await?;
+
+    bao.write(
+        "auth/jwt/role/cli-reader",
+        &serde_json::json!({
+            "role_type": "jwt",
+            "bound_audiences": ["sunbeam-cli"],
+            "user_claim": "sub",
+            "policies": ["cli-reader"],
             "ttl": "1h"
         }),
     )

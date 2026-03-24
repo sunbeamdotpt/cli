@@ -39,68 +39,144 @@ impl DriveClient {
         self
     }
 
-    // -- Files --------------------------------------------------------------
+    // -- Items --------------------------------------------------------------
 
-    /// List files with optional pagination.
+    /// List items with optional pagination and type filter.
+    pub async fn list_items(
+        &self,
+        page: Option<u32>,
+        item_type: Option<&str>,
+    ) -> Result<DRFPage<DriveFile>> {
+        let mut path = String::from("items/?");
+        if let Some(p) = page {
+            path.push_str(&format!("page={p}&"));
+        }
+        if let Some(t) = item_type {
+            path.push_str(&format!("type={t}&"));
+        }
+        self.transport
+            .json(Method::GET, &path, Option::<&()>::None, "drive list items")
+            .await
+    }
+
+    /// List files (items with type=file).
     pub async fn list_files(&self, page: Option<u32>) -> Result<DRFPage<DriveFile>> {
-        let path = match page {
-            Some(p) => format!("files/?page={p}"),
-            None => "files/".to_string(),
-        };
-        self.transport
-            .json(Method::GET, &path, Option::<&()>::None, "drive list files")
-            .await
+        self.list_items(page, Some("file")).await
     }
 
-    /// Get a single file by ID.
-    pub async fn get_file(&self, id: &str) -> Result<DriveFile> {
-        self.transport
-            .json(
-                Method::GET,
-                &format!("files/{id}/"),
-                Option::<&()>::None,
-                "drive get file",
-            )
-            .await
-    }
-
-    /// Upload a new file.
-    pub async fn upload_file(&self, body: &serde_json::Value) -> Result<DriveFile> {
-        self.transport
-            .json(Method::POST, "files/", Some(body), "drive upload file")
-            .await
-    }
-
-    /// Delete a file.
-    pub async fn delete_file(&self, id: &str) -> Result<()> {
-        self.transport
-            .send(
-                Method::DELETE,
-                &format!("files/{id}/"),
-                Option::<&()>::None,
-                "drive delete file",
-            )
-            .await
-    }
-
-    // -- Folders ------------------------------------------------------------
-
-    /// List folders with optional pagination.
+    /// List folders (items with type=folder).
     pub async fn list_folders(&self, page: Option<u32>) -> Result<DRFPage<DriveFolder>> {
-        let path = match page {
-            Some(p) => format!("folders/?page={p}"),
-            None => "folders/".to_string(),
-        };
+        let mut path = String::from("items/?type=folder&");
+        if let Some(p) = page {
+            path.push_str(&format!("page={p}&"));
+        }
         self.transport
             .json(Method::GET, &path, Option::<&()>::None, "drive list folders")
             .await
     }
 
-    /// Create a new folder.
+    /// Get a single item by ID.
+    pub async fn get_file(&self, id: &str) -> Result<DriveFile> {
+        self.transport
+            .json(
+                Method::GET,
+                &format!("items/{id}/"),
+                Option::<&()>::None,
+                "drive get item",
+            )
+            .await
+    }
+
+    /// Create a new item (file or folder) at the root level.
+    pub async fn upload_file(&self, body: &serde_json::Value) -> Result<DriveFile> {
+        self.transport
+            .json(Method::POST, "items/", Some(body), "drive create item")
+            .await
+    }
+
+    /// Delete an item.
+    pub async fn delete_file(&self, id: &str) -> Result<()> {
+        self.transport
+            .send(
+                Method::DELETE,
+                &format!("items/{id}/"),
+                Option::<&()>::None,
+                "drive delete item",
+            )
+            .await
+    }
+
+    /// Create a new folder at the root level.
     pub async fn create_folder(&self, body: &serde_json::Value) -> Result<DriveFolder> {
         self.transport
-            .json(Method::POST, "folders/", Some(body), "drive create folder")
+            .json(Method::POST, "items/", Some(body), "drive create folder")
             .await
+    }
+
+    // -- Items (children API) ------------------------------------------------
+
+    /// Create a child item under a parent folder.
+    /// Returns the created item including its upload_url for files.
+    pub async fn create_child(
+        &self,
+        parent_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("items/{parent_id}/children/"),
+                Some(body),
+                "drive create child",
+            )
+            .await
+    }
+
+    /// List children of an item (folder).
+    pub async fn list_children(
+        &self,
+        parent_id: &str,
+        page: Option<u32>,
+    ) -> Result<DRFPage<serde_json::Value>> {
+        let path = match page {
+            Some(p) => format!("items/{parent_id}/children/?page={p}"),
+            None => format!("items/{parent_id}/children/"),
+        };
+        self.transport
+            .json(Method::GET, &path, Option::<&()>::None, "drive list children")
+            .await
+    }
+
+    /// Notify Drive that a file upload to S3 is complete.
+    pub async fn upload_ended(&self, item_id: &str) -> Result<serde_json::Value> {
+        self.transport
+            .json(
+                Method::POST,
+                &format!("items/{item_id}/upload-ended/"),
+                Option::<&()>::None,
+                "drive upload ended",
+            )
+            .await
+    }
+
+    /// Upload file bytes directly to a presigned S3 URL.
+    pub async fn upload_to_s3(&self, presigned_url: &str, data: bytes::Bytes) -> Result<()> {
+        let resp = reqwest::Client::new()
+            .put(presigned_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(data)
+            .send()
+            .await
+            .map_err(|e| crate::error::SunbeamError::network(format!("S3 upload: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(crate::error::SunbeamError::network(format!(
+                "S3 upload: HTTP {status}: {body}"
+            )));
+        }
+        Ok(())
     }
 
     // -- Shares -------------------------------------------------------------

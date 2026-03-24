@@ -550,6 +550,15 @@ pub enum DriveCommand {
         #[command(subcommand)]
         action: PermissionAction,
     },
+    /// Upload a local file or directory to a Drive folder.
+    Upload {
+        /// Local path to upload (file or directory).
+        #[arg(short, long)]
+        path: String,
+        /// Target Drive folder ID.
+        #[arg(short = 't', long)]
+        folder_id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -687,7 +696,130 @@ pub async fn dispatch_drive(
                 )
             }
         },
+        DriveCommand::Upload { path, folder_id } => {
+            upload_recursive(drive, &path, &folder_id).await
+        }
     }
+}
+
+/// Recursively upload a local file or directory to a Drive folder.
+async fn upload_recursive(
+    drive: &super::DriveClient,
+    local_path: &str,
+    parent_id: &str,
+) -> Result<()> {
+    let path = std::path::Path::new(local_path);
+    if !path.exists() {
+        return Err(crate::error::SunbeamError::Other(format!(
+            "Path does not exist: {local_path}"
+        )));
+    }
+
+    if path.is_file() {
+        upload_single_file(drive, path, parent_id).await
+    } else if path.is_dir() {
+        upload_directory(drive, path, parent_id).await
+    } else {
+        Err(crate::error::SunbeamError::Other(format!(
+            "Not a file or directory: {local_path}"
+        )))
+    }
+}
+
+async fn upload_directory(
+    drive: &super::DriveClient,
+    dir: &std::path::Path,
+    parent_id: &str,
+) -> Result<()> {
+    let dir_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed");
+
+    output::step(&format!("Creating folder: {dir_name}"));
+
+    // Create the folder in Drive
+    let folder = drive
+        .create_child(
+            parent_id,
+            &serde_json::json!({
+                "title": dir_name,
+                "type": "folder",
+            }),
+        )
+        .await?;
+
+    let folder_id = folder["id"]
+        .as_str()
+        .ok_or_else(|| crate::error::SunbeamError::Other("No folder ID in response".into()))?;
+
+    // Process entries
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| crate::error::SunbeamError::Other(format!("reading dir: {e}")))?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            Box::pin(upload_directory(drive, &entry_path, folder_id)).await?;
+        } else if entry_path.is_file() {
+            upload_single_file(drive, &entry_path, folder_id).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn upload_single_file(
+    drive: &super::DriveClient,
+    file_path: &std::path::Path,
+    parent_id: &str,
+) -> Result<()> {
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed");
+
+    // Skip hidden files
+    if filename.starts_with('.') {
+        return Ok(());
+    }
+
+    output::ok(&format!("Uploading: {filename}"));
+
+    // Create the file item in Drive
+    let item = drive
+        .create_child(
+            parent_id,
+            &serde_json::json!({
+                "title": filename,
+                "type": "file",
+            }),
+        )
+        .await?;
+
+    let item_id = item["id"]
+        .as_str()
+        .ok_or_else(|| crate::error::SunbeamError::Other("No item ID in response".into()))?;
+
+    // Get the presigned upload URL (Drive returns it as "policy" on create)
+    let upload_url = item["policy"]
+        .as_str()
+        .ok_or_else(|| crate::error::SunbeamError::Other("No upload policy URL in response — is the item a file?".into()))?;
+
+    // Read the file and upload to S3
+    let data = std::fs::read(file_path)
+        .map_err(|e| crate::error::SunbeamError::Other(format!("reading file: {e}")))?;
+    drive
+        .upload_to_s3(upload_url, bytes::Bytes::from(data))
+        .await?;
+
+    // Notify Drive the upload is complete
+    drive.upload_ended(item_id).await?;
+
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

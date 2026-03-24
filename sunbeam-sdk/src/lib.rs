@@ -19,6 +19,7 @@ pub mod secrets;
 pub mod services;
 pub mod update;
 pub mod users;
+pub mod vault_keystore;
 
 // Feature-gated service client modules
 #[cfg(feature = "identity")]
