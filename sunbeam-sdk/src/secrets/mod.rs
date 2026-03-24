@@ -102,6 +102,15 @@ fn rand_token_n(n: usize) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
+/// Generate an alphanumeric random string of exactly `n` characters.
+/// Used for secrets that require a fixed character length (e.g. xchacha20-poly1305 cipher keys).
+pub(crate) fn rand_alphanum(n: usize) -> String {
+    use rand::rngs::OsRng;
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    (0..n).map(|_| CHARSET[OsRng.gen_range(0..CHARSET.len())] as char).collect()
+}
+
 // ── Port-forward helper ─────────────────────────────────────────────────────
 
 /// Port-forward guard — cancels the background forwarder on drop.
