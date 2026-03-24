@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1
+
+- cd80a57 fix: DynamicBearer auth, retry on 500/429, upload resilience
+- de5c807 fix: progress bar tracks files not bytes, retry on 502, dedup folders
+- 2ab2fd5 fix: polish Drive upload progress UI
+- 27536b4 feat: parallel Drive upload with indicatif progress UI
+
 ## v1.1.0
 
 - 477006e chore: bump to v1.1.0, update package description
