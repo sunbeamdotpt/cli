@@ -456,7 +456,7 @@ impl SunbeamClient {
     pub async fn meet(&self) -> Result<&crate::lasuite::MeetClient> {
         self.sso_token().await?;
         self.meet.get_or_try_init(|| async {
-            let url = format!("https://meet.{}/external_api/v1.0", self.domain);
+            let url = format!("https://meet.{}/external-api/v1.0", self.domain);
             Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
