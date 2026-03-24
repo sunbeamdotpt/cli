@@ -20,6 +20,8 @@ pub enum AuthMethod {
     None,
     /// Bearer token (`Authorization: Bearer <token>`).
     Bearer(String),
+    /// Dynamic bearer — resolves token fresh on each request (survives expiry).
+    DynamicBearer,
     /// Custom header (e.g. `X-Vault-Token`).
     Header { name: &'static str, value: String },
     /// Gitea-style PAT (`Authorization: token <pat>`).
@@ -83,6 +85,12 @@ impl HttpTransport {
             AuthMethod::None => {}
             AuthMethod::Bearer(token) => {
                 req = req.bearer_auth(token);
+            }
+            AuthMethod::DynamicBearer => {
+                // Resolve token fresh on each request — survives token expiry/refresh.
+                if let Ok(token) = crate::auth::get_token_sync() {
+                    req = req.bearer_auth(token);
+                }
             }
             AuthMethod::Header { name, value } => {
                 req = req.header(*name, value);
@@ -427,64 +435,65 @@ impl SunbeamClient {
 
     #[cfg(feature = "lasuite")]
     pub async fn people(&self) -> Result<&crate::lasuite::PeopleClient> {
+        // Ensure we have a valid token (triggers refresh if expired).
+        self.sso_token().await?;
         self.people.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://people.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::PeopleClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::PeopleClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn docs(&self) -> Result<&crate::lasuite::DocsClient> {
+        self.sso_token().await?;
         self.docs.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://docs.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::DocsClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::DocsClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn meet(&self) -> Result<&crate::lasuite::MeetClient> {
+        self.sso_token().await?;
         self.meet.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://meet.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn drive(&self) -> Result<&crate::lasuite::DriveClient> {
+        self.sso_token().await?;
         self.drive.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://drive.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::DriveClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::DriveClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn messages(&self) -> Result<&crate::lasuite::MessagesClient> {
+        self.sso_token().await?;
         self.messages.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://mail.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::MessagesClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::MessagesClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn calendars(&self) -> Result<&crate::lasuite::CalendarsClient> {
+        self.sso_token().await?;
         self.calendars.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://calendar.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::CalendarsClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::CalendarsClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
     #[cfg(feature = "lasuite")]
     pub async fn find(&self) -> Result<&crate::lasuite::FindClient> {
+        self.sso_token().await?;
         self.find.get_or_try_init(|| async {
-            let token = self.sso_token().await?;
             let url = format!("https://find.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::FindClient::from_parts(url, AuthMethod::Bearer(token)))
+            Ok(crate::lasuite::FindClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 

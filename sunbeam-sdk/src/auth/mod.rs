@@ -674,6 +674,16 @@ pub fn get_gitea_token() -> Result<String> {
     })
 }
 
+/// Get cached SSO access token synchronously (reads from cache file).
+/// If the token was recently refreshed by the async `get_token()`, this
+/// returns the fresh one. Used by DynamicBearer for per-request auth.
+pub fn get_token_sync() -> Result<String> {
+    let cached = read_cache().map_err(|_| {
+        SunbeamError::identity("Not logged in. Run `sunbeam auth login` first.")
+    })?;
+    Ok(cached.access_token)
+}
+
 /// Get cached OIDC id_token (JWT).
 pub fn get_id_token() -> Result<String> {
     let tokens = read_cache().map_err(|_| {
