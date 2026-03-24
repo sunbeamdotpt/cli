@@ -11,8 +11,8 @@ use crate::openbao::BaoClient;
 use crate::output::{ok, warn};
 
 use super::{
-    gen_dkim_key_pair, gen_fernet_key, port_forward, rand_token, rand_token_n, scw_config,
-    wait_pod_running, delete_resource, GITEA_ADMIN_USER, SMTP_URI,
+    gen_dkim_key_pair, gen_fernet_key, port_forward, rand_alphanum, rand_token, rand_token_n,
+    scw_config, wait_pod_running, delete_resource, GITEA_ADMIN_USER, SMTP_URI,
 };
 
 /// Internal result from seed_openbao, used by cmd_seed.
@@ -238,12 +238,14 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
     .await?;
 
     let smtp_uri_fn = || SMTP_URI.to_string();
+    let cipher_fn = || rand_alphanum(32);
     let kratos = get_or_create(
         &bao,
         "kratos",
         &[
             ("secrets-default", &rand_token as &dyn Fn() -> String),
             ("secrets-cookie", &rand_token),
+            ("secrets-cipher", &cipher_fn),
             ("smtp-connection-uri", &smtp_uri_fn),
         ],
         &mut dirty_paths,
