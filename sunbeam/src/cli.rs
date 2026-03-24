@@ -126,13 +126,6 @@ pub enum Verb {
         kubectl_args: Vec<String>,
     },
 
-    /// bao CLI passthrough (runs inside OpenBao pod with root token).
-    Bao {
-        /// arguments forwarded verbatim to bao
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        bao_args: Vec<String>,
-    },
-
     /// Project management across Planka and Gitea.
     Pm {
         #[command(subcommand)]
@@ -193,18 +186,6 @@ pub enum Verb {
     Vault {
         #[command(subcommand)]
         action: sunbeam_sdk::openbao::cli::VaultCommand,
-    },
-
-    /// People / contacts (La Suite).
-    People {
-        #[command(subcommand)]
-        action: sunbeam_sdk::lasuite::cli::PeopleCommand,
-    },
-
-    /// Documents (La Suite).
-    Docs {
-        #[command(subcommand)]
-        action: sunbeam_sdk::lasuite::cli::DocsCommand,
     },
 
     /// Video meetings (La Suite).
@@ -644,18 +625,6 @@ mod tests {
     }
 
     #[test]
-    fn test_people_contact_list() {
-        let cli = parse(&["sunbeam", "people", "contact", "list"]);
-        assert!(matches!(cli.verb, Some(Verb::People { .. })));
-    }
-
-    #[test]
-    fn test_docs_document_list() {
-        let cli = parse(&["sunbeam", "docs", "document", "list"]);
-        assert!(matches!(cli.verb, Some(Verb::Docs { .. })));
-    }
-
-    #[test]
     fn test_meet_room_list() {
         let cli = parse(&["sunbeam", "meet", "room", "list"]);
         assert!(matches!(cli.verb, Some(Verb::Meet { .. })));
@@ -912,10 +881,6 @@ pub async fn dispatch() -> Result<()> {
             sunbeam_sdk::kube::cmd_k8s(&kubectl_args).await
         }
 
-        Some(Verb::Bao { bao_args }) => {
-            sunbeam_sdk::kube::cmd_bao(&bao_args).await
-        }
-
         Some(Verb::Auth { action }) => {
             let sc = sunbeam_sdk::client::SunbeamClient::from_context(
                 &sunbeam_sdk::config::active_context(),
@@ -970,20 +935,6 @@ pub async fn dispatch() -> Result<()> {
                 &sunbeam_sdk::config::active_context(),
             );
             sunbeam_sdk::openbao::cli::dispatch(action, &sc, cli.output_format).await
-        }
-
-        Some(Verb::People { action }) => {
-            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
-                &sunbeam_sdk::config::active_context(),
-            );
-            sunbeam_sdk::lasuite::cli::dispatch_people(action, &sc, cli.output_format).await
-        }
-
-        Some(Verb::Docs { action }) => {
-            let sc = sunbeam_sdk::client::SunbeamClient::from_context(
-                &sunbeam_sdk::config::active_context(),
-            );
-            sunbeam_sdk::lasuite::cli::dispatch_docs(action, &sc, cli.output_format).await
         }
 
         Some(Verb::Meet { action }) => {
