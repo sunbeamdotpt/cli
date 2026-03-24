@@ -558,6 +558,9 @@ pub enum DriveCommand {
         /// Target Drive folder ID.
         #[arg(short = 't', long)]
         folder_id: String,
+        /// Number of concurrent uploads.
+        #[arg(long, default_value = "4")]
+        parallel: usize,
     },
 }
 
@@ -623,13 +626,14 @@ pub async fn dispatch_drive(
                 let page_data = drive.list_files(page).await?;
                 output::render_list(
                     &page_data.results,
-                    &["ID", "NAME", "SIZE", "MIME_TYPE"],
+                    &["ID", "TITLE", "TYPE", "SIZE", "MIMETYPE"],
                     |f| {
                         vec![
                             f.id.clone(),
-                            f.name.clone().unwrap_or_default(),
+                            f.title.clone().unwrap_or_default(),
+                            f.item_type.clone().unwrap_or_default(),
                             f.size.map_or("-".into(), |s| s.to_string()),
-                            f.mime_type.clone().unwrap_or_default(),
+                            f.mimetype.clone().unwrap_or_default(),
                         ]
                     },
                     fmt,
@@ -655,12 +659,13 @@ pub async fn dispatch_drive(
                 let page_data = drive.list_folders(page).await?;
                 output::render_list(
                     &page_data.results,
-                    &["ID", "NAME", "PARENT_ID"],
+                    &["ID", "TITLE", "CHILDREN", "CREATED"],
                     |f| {
                         vec![
                             f.id.clone(),
-                            f.name.clone().unwrap_or_default(),
-                            f.parent_id.clone().unwrap_or_default(),
+                            f.title.clone().unwrap_or_default(),
+                            f.numchild.map_or("-".into(), |n| n.to_string()),
+                            f.created_at.clone().unwrap_or_default(),
                         ]
                     },
                     fmt,
@@ -696,10 +701,18 @@ pub async fn dispatch_drive(
                 )
             }
         },
-        DriveCommand::Upload { path, folder_id } => {
-            upload_recursive(drive, &path, &folder_id).await
+        DriveCommand::Upload { path, folder_id, parallel } => {
+            upload_recursive(drive, &path, &folder_id, parallel).await
         }
     }
+}
+
+/// A file that needs uploading, collected during the directory-walk phase.
+struct UploadJob {
+    local_path: std::path::PathBuf,
+    parent_id: String,
+    file_size: u64,
+    relative_path: String,
 }
 
 /// Recursively upload a local file or directory to a Drive folder.
@@ -707,7 +720,12 @@ async fn upload_recursive(
     drive: &super::DriveClient,
     local_path: &str,
     parent_id: &str,
+    parallel: usize,
 ) -> Result<()> {
+    use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
     let path = std::path::Path::new(local_path);
     if !path.exists() {
         return Err(crate::error::SunbeamError::Other(format!(
@@ -715,30 +733,139 @@ async fn upload_recursive(
         )));
     }
 
+    // Phase 1 — Walk and collect: create folders sequentially, gather file jobs.
+    let mut jobs = Vec::new();
     if path.is_file() {
-        upload_single_file(drive, path, parent_id).await
+        let file_size = std::fs::metadata(path)
+            .map_err(|e| crate::error::SunbeamError::Other(format!("stat: {e}")))?
+            .len();
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed");
+        if !filename.starts_with('.') {
+            jobs.push(UploadJob {
+                local_path: path.to_path_buf(),
+                parent_id: parent_id.to_string(),
+                file_size,
+                relative_path: filename.to_string(),
+            });
+        }
     } else if path.is_dir() {
-        upload_directory(drive, path, parent_id).await
+        collect_upload_jobs(drive, path, parent_id, "", &mut jobs).await?;
     } else {
-        Err(crate::error::SunbeamError::Other(format!(
+        return Err(crate::error::SunbeamError::Other(format!(
             "Not a file or directory: {local_path}"
-        )))
+        )));
     }
+
+    if jobs.is_empty() {
+        output::ok("Nothing to upload.");
+        return Ok(());
+    }
+
+    let total_files = jobs.len() as u64;
+    let total_bytes: u64 = jobs.iter().map(|j| j.file_size).sum();
+
+    // Phase 2 — Parallel upload with progress bars.
+    let multi = MultiProgress::new();
+    let overall_style = ProgressStyle::with_template(
+        "{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} files ({binary_bytes_per_sec}) ETA: {eta}",
+    )
+    .unwrap()
+    .progress_chars("\u{2588}\u{2593}\u{2591}");
+    let overall = multi.add(ProgressBar::new(total_files));
+    overall.set_style(overall_style);
+    overall.set_length(total_files);
+
+    let file_style = ProgressStyle::with_template(
+        "  {spinner:.cyan} {wide_msg} {bytes}/{total_bytes}",
+    )
+    .unwrap();
+
+    let sem = Arc::new(Semaphore::new(parallel));
+    let drive = Arc::new(drive.clone());
+    let mut handles = Vec::new();
+    let start = std::time::Instant::now();
+
+    for job in jobs {
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        let drive = Arc::clone(&drive);
+        let multi = multi.clone();
+        let overall = overall.clone();
+        let file_style = file_style.clone();
+
+        let handle = tokio::spawn(async move {
+            let pb = multi.add(ProgressBar::new(job.file_size));
+            pb.set_style(file_style);
+            pb.set_message(job.relative_path.clone());
+
+            let result = upload_single_file_with_progress(&drive, &job, &pb).await;
+
+            pb.finish_and_clear();
+            multi.remove(&pb);
+            overall.inc(1);
+
+            drop(permit);
+            result
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle
+            .await
+            .map_err(|e| crate::error::SunbeamError::Other(format!("task join: {e}")))??;
+    }
+
+    overall.finish_and_clear();
+
+    let elapsed = start.elapsed();
+    let secs = elapsed.as_secs_f64();
+    let speed = if secs > 0.0 {
+        total_bytes as f64 / secs
+    } else {
+        0.0
+    };
+    let mins = elapsed.as_secs() / 60;
+    let secs_rem = elapsed.as_secs() % 60;
+    println!(
+        "\u{2713} Uploaded {total_files} files ({}) in {mins}m {secs_rem}s ({}/s)",
+        HumanBytes(total_bytes),
+        HumanBytes(speed as u64),
+    );
+
+    Ok(())
 }
 
-async fn upload_directory(
+/// Phase 1: Walk a directory recursively, create folders in Drive sequentially,
+/// and collect [`UploadJob`]s for every regular file.
+async fn collect_upload_jobs(
     drive: &super::DriveClient,
     dir: &std::path::Path,
     parent_id: &str,
+    prefix: &str,
+    jobs: &mut Vec<UploadJob>,
 ) -> Result<()> {
     let dir_name = dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unnamed");
 
+    // Skip hidden directories
+    if dir_name.starts_with('.') {
+        return Ok(());
+    }
+
+    // Build the display prefix for children
+    let display_prefix = if prefix.is_empty() {
+        dir_name.to_string()
+    } else {
+        format!("{prefix}/{dir_name}")
+    };
+
     output::step(&format!("Creating folder: {dir_name}"));
 
-    // Create the folder in Drive
     let folder = drive
         .create_child(
             parent_id,
@@ -751,9 +878,9 @@ async fn upload_directory(
 
     let folder_id = folder["id"]
         .as_str()
-        .ok_or_else(|| crate::error::SunbeamError::Other("No folder ID in response".into()))?;
+        .ok_or_else(|| crate::error::SunbeamError::Other("No folder ID in response".into()))?
+        .to_string();
 
-    // Process entries
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| crate::error::SunbeamError::Other(format!("reading dir: {e}")))?
         .filter_map(|e| e.ok())
@@ -762,39 +889,61 @@ async fn upload_directory(
 
     for entry in entries {
         let entry_path = entry.path();
+        let name = entry
+            .file_name()
+            .to_str()
+            .unwrap_or_default()
+            .to_string();
+
+        // Skip hidden entries
+        if name.starts_with('.') {
+            continue;
+        }
+
         if entry_path.is_dir() {
-            Box::pin(upload_directory(drive, &entry_path, folder_id)).await?;
+            Box::pin(collect_upload_jobs(
+                drive,
+                &entry_path,
+                &folder_id,
+                &display_prefix,
+                jobs,
+            ))
+            .await?;
         } else if entry_path.is_file() {
-            upload_single_file(drive, &entry_path, folder_id).await?;
+            let file_size = std::fs::metadata(&entry_path)
+                .map_err(|e| crate::error::SunbeamError::Other(format!("stat: {e}")))?
+                .len();
+            jobs.push(UploadJob {
+                local_path: entry_path,
+                parent_id: folder_id.clone(),
+                file_size,
+                relative_path: format!("{display_prefix}/{name}"),
+            });
         }
     }
 
     Ok(())
 }
 
-async fn upload_single_file(
+/// Upload a single file to Drive, updating the progress bar.
+async fn upload_single_file_with_progress(
     drive: &super::DriveClient,
-    file_path: &std::path::Path,
-    parent_id: &str,
+    job: &UploadJob,
+    pb: &indicatif::ProgressBar,
 ) -> Result<()> {
-    let filename = file_path
+    let filename = job
+        .local_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unnamed");
 
-    // Skip hidden files
-    if filename.starts_with('.') {
-        return Ok(());
-    }
-
-    output::ok(&format!("Uploading: {filename}"));
-
     // Create the file item in Drive
     let item = drive
         .create_child(
-            parent_id,
+            &job.parent_id,
             &serde_json::json!({
                 "title": filename,
+                "filename": filename,
                 "type": "file",
             }),
         )
@@ -804,17 +953,24 @@ async fn upload_single_file(
         .as_str()
         .ok_or_else(|| crate::error::SunbeamError::Other("No item ID in response".into()))?;
 
-    // Get the presigned upload URL (Drive returns it as "policy" on create)
     let upload_url = item["policy"]
         .as_str()
-        .ok_or_else(|| crate::error::SunbeamError::Other("No upload policy URL in response — is the item a file?".into()))?;
+        .ok_or_else(|| {
+            crate::error::SunbeamError::Other(
+                "No upload policy URL in response \u{2014} is the item a file?".into(),
+            )
+        })?;
+
+    tracing::debug!("S3 presigned URL: {upload_url}");
 
     // Read the file and upload to S3
-    let data = std::fs::read(file_path)
+    let data = std::fs::read(&job.local_path)
         .map_err(|e| crate::error::SunbeamError::Other(format!("reading file: {e}")))?;
+    let len = data.len() as u64;
     drive
         .upload_to_s3(upload_url, bytes::Bytes::from(data))
         .await?;
+    pb.set_position(len);
 
     // Notify Drive the upload is complete
     drive.upload_ended(item_id).await?;
