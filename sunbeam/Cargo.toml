@@ -1,8 +1,8 @@
 [package]
 name = "sunbeam"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
-description = "Sunbeam local dev stack manager"
+description = "Sunbeam Studios SDK, CLI, and ecosystem integrations"
 
 [[bin]]
 name = "sunbeam"
