@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 
 /// Sunbeam local dev stack manager.
 #[derive(Parser, Debug)]
-#[command(name = "sunbeam", about = "Sunbeam local dev stack manager")]
+#[command(name = "sunbeam", about = "Sunbeam Studios CLI")]
 pub struct Cli {
     /// Named context to use (overrides current-context from config).
     #[arg(long)]
@@ -107,10 +107,10 @@ pub enum Verb {
         target: Option<String>,
     },
 
-    /// Mirror amd64-only La Suite images.
+    /// Mirror container images.
     Mirror,
 
-    /// Create Gitea orgs/repos; bootstrap services.
+    /// Bootstrap orgs, repos, and services.
     Bootstrap,
 
     /// Manage sunbeam configuration.
@@ -126,7 +126,7 @@ pub enum Verb {
         kubectl_args: Vec<String>,
     },
 
-    /// Project management across Planka and Gitea.
+    /// Project management.
     Pm {
         #[command(subcommand)]
         action: Option<PmAction>,
@@ -146,73 +146,73 @@ pub enum Verb {
         action: sunbeam_sdk::identity::cli::AuthCommand,
     },
 
-    /// Version control (Gitea).
+    /// Version control.
     Vcs {
         #[command(subcommand)]
         action: sunbeam_sdk::gitea::cli::VcsCommand,
     },
 
-    /// Chat / messaging (Matrix).
+    /// Chat and messaging.
     Chat {
         #[command(subcommand)]
         action: sunbeam_sdk::matrix::cli::ChatCommand,
     },
 
-    /// Search engine (OpenSearch).
+    /// Search engine.
     Search {
         #[command(subcommand)]
         action: sunbeam_sdk::search::cli::SearchCommand,
     },
 
-    /// Object storage (S3).
+    /// Object storage.
     Storage {
         #[command(subcommand)]
         action: sunbeam_sdk::storage::cli::StorageCommand,
     },
 
-    /// Media / video (LiveKit).
+    /// Media and video.
     Media {
         #[command(subcommand)]
         action: sunbeam_sdk::media::cli::MediaCommand,
     },
 
-    /// Monitoring (Prometheus, Loki, Grafana).
+    /// Monitoring.
     Mon {
         #[command(subcommand)]
         action: sunbeam_sdk::monitoring::cli::MonCommand,
     },
 
-    /// Secrets management (OpenBao/Vault).
+    /// Secrets management.
     Vault {
         #[command(subcommand)]
         action: sunbeam_sdk::openbao::cli::VaultCommand,
     },
 
-    /// Video meetings (La Suite).
+    /// Video meetings.
     Meet {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::MeetCommand,
     },
 
-    /// File storage (La Suite).
+    /// File storage.
     Drive {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::DriveCommand,
     },
 
-    /// Email (La Suite).
+    /// Email.
     Mail {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::MailCommand,
     },
 
-    /// Calendar (La Suite).
+    /// Calendar.
     Cal {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::CalCommand,
     },
 
-    /// Search across La Suite services.
+    /// Search across services.
     Find {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::FindCommand,
