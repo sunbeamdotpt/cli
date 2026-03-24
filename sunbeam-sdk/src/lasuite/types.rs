@@ -219,13 +219,17 @@ pub struct DriveFile {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
-    pub name: Option<String>,
+    pub title: Option<String>,
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
     #[serde(default)]
     pub size: Option<u64>,
     #[serde(default)]
-    pub mime_type: Option<String>,
+    pub mimetype: Option<String>,
     #[serde(default)]
-    pub folder_id: Option<String>,
+    pub upload_state: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
@@ -234,15 +238,17 @@ pub struct DriveFile {
     pub updated_at: Option<String>,
 }
 
-/// A folder in the Drive service.
+/// A folder in the Drive service (same API, type=folder).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DriveFolder {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
-    pub name: Option<String>,
+    pub title: Option<String>,
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
     #[serde(default)]
-    pub parent_id: Option<String>,
+    pub numchild: Option<u32>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]

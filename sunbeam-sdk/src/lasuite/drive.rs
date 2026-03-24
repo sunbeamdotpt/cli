@@ -6,6 +6,7 @@ use reqwest::Method;
 use super::types::*;
 
 /// Client for the La Suite Drive API.
+#[derive(Clone)]
 pub struct DriveClient {
     pub(crate) transport: HttpTransport,
 }
@@ -160,10 +161,11 @@ impl DriveClient {
     }
 
     /// Upload file bytes directly to a presigned S3 URL.
+    /// The presigned URL's SigV4 signature covers host + x-amz-acl headers.
     pub async fn upload_to_s3(&self, presigned_url: &str, data: bytes::Bytes) -> Result<()> {
         let resp = reqwest::Client::new()
             .put(presigned_url)
-            .header("Content-Type", "application/octet-stream")
+            .header("x-amz-acl", "private")
             .body(data)
             .send()
             .await

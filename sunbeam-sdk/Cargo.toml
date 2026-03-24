@@ -55,6 +55,7 @@ base64 = "0.22"
 rand = "0.8"
 aes-gcm = "0.10"
 argon2 = "0.5"
+indicatif = { version = "0.17", features = ["tokio"] }
 
 # Certificate generation
 rcgen = "0.14"
