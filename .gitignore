@@ -11,3 +11,4 @@ build/
 
 # Environment
 .envrc
+.DS_Store
