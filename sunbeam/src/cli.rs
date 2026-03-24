@@ -30,100 +30,16 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Verb {
-    // -- Infrastructure commands (preserved) ----------------------------------
-
-    /// Full cluster bring-up.
-    Up,
-
-    /// Pod health (optionally scoped).
-    Status {
-        /// namespace or namespace/name
-        target: Option<String>,
+    /// Platform operations (cluster, builds, deploys).
+    Platform {
+        #[command(subcommand)]
+        action: PlatformAction,
     },
-
-    /// kustomize build + domain subst + kubectl apply.
-    Apply {
-        /// Limit apply to one namespace.
-        namespace: Option<String>,
-        /// Apply all namespaces without confirmation.
-        #[arg(long = "all")]
-        apply_all: bool,
-        /// Domain suffix (e.g. sunbeam.pt).
-        #[arg(long, default_value = "")]
-        domain: String,
-        /// ACME email for cert-manager.
-        #[arg(long, default_value = "")]
-        email: String,
-    },
-
-    /// Generate/store all credentials in OpenBao.
-    Seed,
-
-    /// E2E VSO + OpenBao integration test.
-    Verify,
-
-    /// kubectl logs for a service.
-    Logs {
-        /// namespace/name
-        target: String,
-        /// Stream logs.
-        #[arg(short, long)]
-        follow: bool,
-    },
-
-    /// Raw kubectl get for a pod (ns/name).
-    Get {
-        /// namespace/name
-        target: String,
-        /// kubectl output format (yaml, json, wide).
-        #[arg(long = "kubectl-output", default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
-        output: String,
-    },
-
-    /// Rolling restart of services.
-    Restart {
-        /// namespace or namespace/name
-        target: Option<String>,
-    },
-
-    /// Build an artifact.
-    Build {
-        /// What to build.
-        what: BuildTarget,
-        /// Push image to registry after building.
-        #[arg(long)]
-        push: bool,
-        /// Apply manifests and rollout restart after pushing (implies --push).
-        #[arg(long)]
-        deploy: bool,
-        /// Disable buildkitd layer cache.
-        #[arg(long)]
-        no_cache: bool,
-    },
-
-    /// Functional service health checks.
-    Check {
-        /// namespace or namespace/name
-        target: Option<String>,
-    },
-
-    /// Mirror container images.
-    Mirror,
-
-    /// Bootstrap orgs, repos, and services.
-    Bootstrap,
 
     /// Manage sunbeam configuration.
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
-    },
-
-    /// kubectl passthrough.
-    K8s {
-        /// arguments forwarded verbatim to kubectl
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        kubectl_args: Vec<String>,
     },
 
     /// Project management.
@@ -138,7 +54,7 @@ pub enum Verb {
     /// Print version info.
     Version,
 
-    // -- Service commands (new) -----------------------------------------------
+    // -- Service commands -----------------------------------------------------
 
     /// Authentication, identity & OAuth2 management.
     Auth {
@@ -216,6 +132,85 @@ pub enum Verb {
     Find {
         #[command(subcommand)]
         action: sunbeam_sdk::lasuite::cli::FindCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PlatformAction {
+    /// Full cluster bring-up.
+    Up,
+    /// Pod health (optionally scoped).
+    Status {
+        /// namespace or namespace/name
+        target: Option<String>,
+    },
+    /// Build and apply manifests.
+    Apply {
+        /// Limit apply to one namespace.
+        namespace: Option<String>,
+        /// Apply all namespaces without confirmation.
+        #[arg(long = "all")]
+        apply_all: bool,
+        /// Domain suffix (e.g. sunbeam.pt).
+        #[arg(long, default_value = "")]
+        domain: String,
+        /// ACME email for cert-manager.
+        #[arg(long, default_value = "")]
+        email: String,
+    },
+    /// Seed credentials and secrets.
+    Seed,
+    /// End-to-end integration test.
+    Verify,
+    /// View service logs.
+    Logs {
+        /// namespace/name
+        target: String,
+        /// Stream logs.
+        #[arg(short, long)]
+        follow: bool,
+    },
+    /// Get a resource (ns/name).
+    Get {
+        /// namespace/name
+        target: String,
+        /// Output format (yaml, json, wide).
+        #[arg(long = "kubectl-output", default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
+        output: String,
+    },
+    /// Rolling restart of services.
+    Restart {
+        /// namespace or namespace/name
+        target: Option<String>,
+    },
+    /// Build an artifact.
+    Build {
+        /// What to build.
+        what: BuildTarget,
+        /// Push image to registry after building.
+        #[arg(long)]
+        push: bool,
+        /// Apply manifests and rollout restart after pushing (implies --push).
+        #[arg(long)]
+        deploy: bool,
+        /// Disable layer cache.
+        #[arg(long)]
+        no_cache: bool,
+    },
+    /// Service health checks.
+    Check {
+        /// namespace or namespace/name
+        target: Option<String>,
+    },
+    /// Mirror container images.
+    Mirror,
+    /// Bootstrap orgs, repos, and services.
+    Bootstrap,
+    /// kubectl passthrough.
+    K8s {
+        /// arguments forwarded verbatim to kubectl
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        kubectl_args: Vec<String>,
     },
 }
 
@@ -313,16 +308,16 @@ mod tests {
     // 1. test_up
     #[test]
     fn test_up() {
-        let cli = parse(&["sunbeam", "up"]);
-        assert!(matches!(cli.verb, Some(Verb::Up)));
+        let cli = parse(&["sunbeam", "platform", "up"]);
+        assert!(matches!(cli.verb, Some(Verb::Platform { action: PlatformAction::Up })));
     }
 
     // 2. test_status_no_target
     #[test]
     fn test_status_no_target() {
-        let cli = parse(&["sunbeam", "status"]);
+        let cli = parse(&["sunbeam", "platform", "status"]);
         match cli.verb {
-            Some(Verb::Status { target }) => assert!(target.is_none()),
+            Some(Verb::Platform { action: PlatformAction::Status { target } }) => assert!(target.is_none()),
             _ => panic!("expected Status"),
         }
     }
@@ -330,9 +325,9 @@ mod tests {
     // 3. test_status_with_namespace
     #[test]
     fn test_status_with_namespace() {
-        let cli = parse(&["sunbeam", "status", "ory"]);
+        let cli = parse(&["sunbeam", "platform", "status", "ory"]);
         match cli.verb {
-            Some(Verb::Status { target }) => assert_eq!(target.unwrap(), "ory"),
+            Some(Verb::Platform { action: PlatformAction::Status { target } }) => assert_eq!(target.unwrap(), "ory"),
             _ => panic!("expected Status"),
         }
     }
@@ -340,9 +335,9 @@ mod tests {
     // 4. test_logs_no_follow
     #[test]
     fn test_logs_no_follow() {
-        let cli = parse(&["sunbeam", "logs", "ory/kratos"]);
+        let cli = parse(&["sunbeam", "platform", "logs", "ory/kratos"]);
         match cli.verb {
-            Some(Verb::Logs { target, follow }) => {
+            Some(Verb::Platform { action: PlatformAction::Logs { target, follow } }) => {
                 assert_eq!(target, "ory/kratos");
                 assert!(!follow);
             }
@@ -353,9 +348,9 @@ mod tests {
     // 5. test_logs_follow_short
     #[test]
     fn test_logs_follow_short() {
-        let cli = parse(&["sunbeam", "logs", "ory/kratos", "-f"]);
+        let cli = parse(&["sunbeam", "platform", "logs", "ory/kratos", "-f"]);
         match cli.verb {
-            Some(Verb::Logs { follow, .. }) => assert!(follow),
+            Some(Verb::Platform { action: PlatformAction::Logs { follow, .. } }) => assert!(follow),
             _ => panic!("expected Logs"),
         }
     }
@@ -363,9 +358,9 @@ mod tests {
     // 6. test_build_proxy
     #[test]
     fn test_build_proxy() {
-        let cli = parse(&["sunbeam", "build", "proxy"]);
+        let cli = parse(&["sunbeam", "platform", "build", "proxy"]);
         match cli.verb {
-            Some(Verb::Build { what, push, deploy, no_cache }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, push, deploy, no_cache } }) => {
                 assert!(matches!(what, BuildTarget::Proxy));
                 assert!(!push);
                 assert!(!deploy);
@@ -378,9 +373,9 @@ mod tests {
     // 7. test_build_deploy_flag
     #[test]
     fn test_build_deploy_flag() {
-        let cli = parse(&["sunbeam", "build", "proxy", "--deploy"]);
+        let cli = parse(&["sunbeam", "platform", "build", "proxy", "--deploy"]);
         match cli.verb {
-            Some(Verb::Build { deploy, push, no_cache, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { deploy, push, no_cache, .. } }) => {
                 assert!(deploy);
                 // clap does not imply --push; that logic is in dispatch()
                 assert!(!push);
@@ -393,16 +388,16 @@ mod tests {
     // 8. test_build_invalid_target
     #[test]
     fn test_build_invalid_target() {
-        let result = Cli::try_parse_from(&["sunbeam", "build", "notavalidtarget"]);
+        let result = Cli::try_parse_from(&["sunbeam", "platform", "build", "notavalidtarget"]);
         assert!(result.is_err());
     }
 
     // 12. test_apply_no_namespace
     #[test]
     fn test_apply_no_namespace() {
-        let cli = parse(&["sunbeam", "apply"]);
+        let cli = parse(&["sunbeam", "platform", "apply"]);
         match cli.verb {
-            Some(Verb::Apply { namespace, .. }) => assert!(namespace.is_none()),
+            Some(Verb::Platform { action: PlatformAction::Apply { namespace, .. } }) => assert!(namespace.is_none()),
             _ => panic!("expected Apply"),
         }
     }
@@ -410,9 +405,9 @@ mod tests {
     // 13. test_apply_with_namespace
     #[test]
     fn test_apply_with_namespace() {
-        let cli = parse(&["sunbeam", "apply", "lasuite"]);
+        let cli = parse(&["sunbeam", "platform", "apply", "lasuite"]);
         match cli.verb {
-            Some(Verb::Apply { namespace, .. }) => assert_eq!(namespace.unwrap(), "lasuite"),
+            Some(Verb::Platform { action: PlatformAction::Apply { namespace, .. } }) => assert_eq!(namespace.unwrap(), "lasuite"),
             _ => panic!("expected Apply"),
         }
     }
@@ -463,9 +458,9 @@ mod tests {
     // 17. test_get_json_output
     #[test]
     fn test_get_json_output() {
-        let cli = parse(&["sunbeam", "get", "ory/kratos-abc", "--kubectl-output", "json"]);
+        let cli = parse(&["sunbeam", "platform", "get", "ory/kratos-abc", "--kubectl-output", "json"]);
         match cli.verb {
-            Some(Verb::Get { target, output }) => {
+            Some(Verb::Platform { action: PlatformAction::Get { target, output } }) => {
                 assert_eq!(target, "ory/kratos-abc");
                 assert_eq!(output, "json");
             }
@@ -476,9 +471,9 @@ mod tests {
     // 18. test_check_with_target
     #[test]
     fn test_check_with_target() {
-        let cli = parse(&["sunbeam", "check", "devtools"]);
+        let cli = parse(&["sunbeam", "platform", "check", "devtools"]);
         match cli.verb {
-            Some(Verb::Check { target }) => assert_eq!(target.unwrap(), "devtools"),
+            Some(Verb::Platform { action: PlatformAction::Check { target } }) => assert_eq!(target.unwrap(), "devtools"),
             _ => panic!("expected Check"),
         }
     }
@@ -486,9 +481,9 @@ mod tests {
     // 19. test_build_messages_components
     #[test]
     fn test_build_messages_backend() {
-        let cli = parse(&["sunbeam", "build", "messages-backend"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-backend"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesBackend));
             }
             _ => panic!("expected Build"),
@@ -497,9 +492,9 @@ mod tests {
 
     #[test]
     fn test_build_messages_frontend() {
-        let cli = parse(&["sunbeam", "build", "messages-frontend"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-frontend"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesFrontend));
             }
             _ => panic!("expected Build"),
@@ -508,9 +503,9 @@ mod tests {
 
     #[test]
     fn test_build_messages_mta_in() {
-        let cli = parse(&["sunbeam", "build", "messages-mta-in"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-mta-in"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesMtaIn));
             }
             _ => panic!("expected Build"),
@@ -519,9 +514,9 @@ mod tests {
 
     #[test]
     fn test_build_messages_mta_out() {
-        let cli = parse(&["sunbeam", "build", "messages-mta-out"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-mta-out"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesMtaOut));
             }
             _ => panic!("expected Build"),
@@ -530,9 +525,9 @@ mod tests {
 
     #[test]
     fn test_build_messages_mpa() {
-        let cli = parse(&["sunbeam", "build", "messages-mpa"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-mpa"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesMpa));
             }
             _ => panic!("expected Build"),
@@ -541,9 +536,9 @@ mod tests {
 
     #[test]
     fn test_build_messages_socks_proxy() {
-        let cli = parse(&["sunbeam", "build", "messages-socks-proxy"]);
+        let cli = parse(&["sunbeam", "platform", "build", "messages-socks-proxy"]);
         match cli.verb {
-            Some(Verb::Build { what, .. }) => {
+            Some(Verb::Platform { action: PlatformAction::Build { what, .. } }) => {
                 assert!(matches!(what, BuildTarget::MessagesSocksProxy));
             }
             _ => panic!("expected Build"),
@@ -663,12 +658,12 @@ mod tests {
 
     #[test]
     fn test_infra_commands_preserved() {
-        // Verify all old infra commands still parse
-        assert!(matches!(parse(&["sunbeam", "up"]).verb, Some(Verb::Up)));
-        assert!(matches!(parse(&["sunbeam", "seed"]).verb, Some(Verb::Seed)));
-        assert!(matches!(parse(&["sunbeam", "verify"]).verb, Some(Verb::Verify)));
-        assert!(matches!(parse(&["sunbeam", "mirror"]).verb, Some(Verb::Mirror)));
-        assert!(matches!(parse(&["sunbeam", "bootstrap"]).verb, Some(Verb::Bootstrap)));
+        // Verify all old infra commands still parse under platform
+        assert!(matches!(parse(&["sunbeam", "platform", "up"]).verb, Some(Verb::Platform { action: PlatformAction::Up })));
+        assert!(matches!(parse(&["sunbeam", "platform", "seed"]).verb, Some(Verb::Platform { action: PlatformAction::Seed })));
+        assert!(matches!(parse(&["sunbeam", "platform", "verify"]).verb, Some(Verb::Platform { action: PlatformAction::Verify })));
+        assert!(matches!(parse(&["sunbeam", "platform", "mirror"]).verb, Some(Verb::Platform { action: PlatformAction::Mirror })));
+        assert!(matches!(parse(&["sunbeam", "platform", "bootstrap"]).verb, Some(Verb::Platform { action: PlatformAction::Bootstrap })));
         assert!(matches!(parse(&["sunbeam", "update"]).verb, Some(Verb::Update)));
         assert!(matches!(parse(&["sunbeam", "version"]).verb, Some(Verb::Version)));
     }
@@ -708,77 +703,83 @@ pub async fn dispatch() -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Up) => sunbeam_sdk::cluster::cmd_up().await,
+        Some(Verb::Platform { action }) => match action {
+            PlatformAction::Up => sunbeam_sdk::cluster::cmd_up().await,
 
-        Some(Verb::Status { target }) => {
-            sunbeam_sdk::services::cmd_status(target.as_deref()).await
-        }
-
-        Some(Verb::Apply {
-            namespace,
-            apply_all,
-            domain,
-            email,
-        }) => {
-            let is_production = !sunbeam_sdk::config::active_context().ssh_host.is_empty();
-            let env_str = if is_production { "production" } else { "local" };
-            let domain = if domain.is_empty() {
-                cli.domain.clone()
-            } else {
-                domain
-            };
-            let email = if email.is_empty() {
-                cli.email.clone()
-            } else {
-                email
-            };
-            let ns = namespace.unwrap_or_default();
-
-            // Production full-apply requires --all or confirmation
-            if is_production && ns.is_empty() && !apply_all {
-                sunbeam_sdk::output::warn(
-                    "This will apply ALL namespaces to production.",
-                );
-                eprint!("  Continue? [y/N] ");
-                let mut answer = String::new();
-                std::io::stdin().read_line(&mut answer)?;
-                if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
-                    println!("Aborted.");
-                    return Ok(());
-                }
+            PlatformAction::Status { target } => {
+                sunbeam_sdk::services::cmd_status(target.as_deref()).await
             }
 
-            sunbeam_sdk::manifests::cmd_apply(&env_str, &domain, &email, &ns).await
-        }
+            PlatformAction::Apply {
+                namespace,
+                apply_all,
+                domain,
+                email,
+            } => {
+                let is_production = !sunbeam_sdk::config::active_context().ssh_host.is_empty();
+                let env_str = if is_production { "production" } else { "local" };
+                let domain = if domain.is_empty() {
+                    cli.domain.clone()
+                } else {
+                    domain
+                };
+                let email = if email.is_empty() {
+                    cli.email.clone()
+                } else {
+                    email
+                };
+                let ns = namespace.unwrap_or_default();
 
-        Some(Verb::Seed) => sunbeam_sdk::secrets::cmd_seed().await,
+                // Production full-apply requires --all or confirmation
+                if is_production && ns.is_empty() && !apply_all {
+                    sunbeam_sdk::output::warn(
+                        "This will apply ALL namespaces to production.",
+                    );
+                    eprint!("  Continue? [y/N] ");
+                    let mut answer = String::new();
+                    std::io::stdin().read_line(&mut answer)?;
+                    if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                        println!("Aborted.");
+                        return Ok(());
+                    }
+                }
 
-        Some(Verb::Verify) => sunbeam_sdk::secrets::cmd_verify().await,
+                sunbeam_sdk::manifests::cmd_apply(&env_str, &domain, &email, &ns).await
+            }
 
-        Some(Verb::Logs { target, follow }) => {
-            sunbeam_sdk::services::cmd_logs(&target, follow).await
-        }
+            PlatformAction::Seed => sunbeam_sdk::secrets::cmd_seed().await,
 
-        Some(Verb::Get { target, output }) => {
-            sunbeam_sdk::services::cmd_get(&target, &output).await
-        }
+            PlatformAction::Verify => sunbeam_sdk::secrets::cmd_verify().await,
 
-        Some(Verb::Restart { target }) => {
-            sunbeam_sdk::services::cmd_restart(target.as_deref()).await
-        }
+            PlatformAction::Logs { target, follow } => {
+                sunbeam_sdk::services::cmd_logs(&target, follow).await
+            }
 
-        Some(Verb::Build { what, push, deploy, no_cache }) => {
-            let push = push || deploy;
-            sunbeam_sdk::images::cmd_build(&what, push, deploy, no_cache).await
-        }
+            PlatformAction::Get { target, output } => {
+                sunbeam_sdk::services::cmd_get(&target, &output).await
+            }
 
-        Some(Verb::Check { target }) => {
-            sunbeam_sdk::checks::cmd_check(target.as_deref()).await
-        }
+            PlatformAction::Restart { target } => {
+                sunbeam_sdk::services::cmd_restart(target.as_deref()).await
+            }
 
-        Some(Verb::Mirror) => sunbeam_sdk::images::cmd_mirror().await,
+            PlatformAction::Build { what, push, deploy, no_cache } => {
+                let push = push || deploy;
+                sunbeam_sdk::images::cmd_build(&what, push, deploy, no_cache).await
+            }
 
-        Some(Verb::Bootstrap) => sunbeam_sdk::gitea::cmd_bootstrap().await,
+            PlatformAction::Check { target } => {
+                sunbeam_sdk::checks::cmd_check(target.as_deref()).await
+            }
+
+            PlatformAction::Mirror => sunbeam_sdk::images::cmd_mirror().await,
+
+            PlatformAction::Bootstrap => sunbeam_sdk::gitea::cmd_bootstrap().await,
+
+            PlatformAction::K8s { kubectl_args } => {
+                sunbeam_sdk::kube::cmd_k8s(&kubectl_args).await
+            }
+        },
 
         Some(Verb::Config { action }) => match action {
             None => {
@@ -876,10 +877,6 @@ pub async fn dispatch() -> Result<()> {
             }
             Some(ConfigAction::Clear) => sunbeam_sdk::config::clear_config(),
         },
-
-        Some(Verb::K8s { kubectl_args }) => {
-            sunbeam_sdk::kube::cmd_k8s(&kubectl_args).await
-        }
 
         Some(Verb::Auth { action }) => {
             let sc = sunbeam_sdk::client::SunbeamClient::from_context(
