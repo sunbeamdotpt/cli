@@ -617,10 +617,14 @@ async fn ensure_opensearch_ml() {
                 already_deployed = true;
                 break;
             }
-            "REGISTERED" | "DEPLOYING" => {
-                model_id = Some(id.to_string());
+            // Any existing model (even DEPLOY_FAILED) — reuse it instead of
+            // registering a new version. This prevents accumulating stale
+            // copies in .plugins-ml-model when the pod restarts.
+            _ => {
+                if model_id.is_none() && !id.is_empty() {
+                    model_id = Some(id.to_string());
+                }
             }
-            _ => {}
         }
     }
 
