@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.2
+
+- 30dc4f9 fix(opensearch): make ML model registration idempotent
+- 3d2d16d feat(secrets): add xchacha20-poly1305 cipher key seeding for Kratos
+- 80ab6d6 feat: enable Meet external API, fix SDK path
+- b08a80d refactor: nest infra commands under `sunbeam platform`
+
 ## v1.1.1
 
 - cd80a57 fix: DynamicBearer auth, retry on 500/429, upload resilience
