@@ -32,23 +32,43 @@ const DEFAULT_CLIENT_ID: &str = "sunbeam-cli";
 // Cache file helpers
 // ---------------------------------------------------------------------------
 
-/// Cache path for auth tokens — per-domain so multiple environments work.
-fn cache_path_for_domain(domain: &str) -> PathBuf {
-    let dir = dirs::data_dir()
+/// Legacy auth cache dir — used only for migration.
+fn legacy_auth_dir() -> PathBuf {
+    dirs::data_dir()
         .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".local/share")
         })
         .join("sunbeam")
-        .join("auth");
-    if domain.is_empty() {
-        dir.join("default.json")
+        .join("auth")
+}
+
+/// Cache path for auth tokens — per-domain so multiple environments work.
+/// Files live under ~/.sunbeam/auth/{safe_domain}.json.
+fn cache_path_for_domain(domain: &str) -> PathBuf {
+    let dir = crate::config::sunbeam_dir().join("auth");
+    let filename = if domain.is_empty() {
+        "default.json".to_string()
     } else {
-        // Sanitize domain for filename
         let safe = domain.replace(['/', '\\', ':'], "_");
-        dir.join(format!("{safe}.json"))
+        format!("{safe}.json")
+    };
+
+    let new_path = dir.join(&filename);
+
+    // Migration: copy from legacy location if new path doesn't exist yet
+    if !new_path.exists() {
+        let legacy = legacy_auth_dir().join(&filename);
+        if legacy.exists() {
+            if let Some(parent) = new_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::copy(&legacy, &new_path);
+        }
     }
+
+    new_path
 }
 
 fn cache_path() -> PathBuf {
@@ -487,6 +507,15 @@ pub async fn get_token() -> Result<String> {
     Err(SunbeamError::identity(
         "Session expired. Run `sunbeam auth login` to re-authenticate.",
     ))
+}
+
+/// Print the current access token as a JSON headers object.
+/// Designed for use as a Claude Code MCP `headersHelper`.
+/// Output: {"Authorization": "Bearer <token>"}
+pub async fn cmd_auth_token() -> Result<()> {
+    let token = get_token().await?;
+    println!("{{\"Authorization\": \"Bearer {token}\"}}");
+    Ok(())
 }
 
 /// Interactive browser-based OAuth2 login.
@@ -939,8 +968,7 @@ mod tests {
     fn test_cache_path_is_under_sunbeam() {
         let path = cache_path_for_domain("sunbeam.pt");
         let path_str = path.to_string_lossy();
-        assert!(path_str.contains("sunbeam"));
-        assert!(path_str.contains("auth"));
+        assert!(path_str.contains(".sunbeam/auth"));
         assert!(path_str.ends_with("sunbeam.pt.json"));
     }
 

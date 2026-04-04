@@ -20,9 +20,9 @@ use crate::output::{ok, step, warn};
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const ADMIN_USERNAME: &str = "estudio-admin";
-const GITEA_ADMIN_USER: &str = "gitea_admin";
-const PG_USERS: &[&str] = &[
+pub(crate) const ADMIN_USERNAME: &str = "estudio-admin";
+pub(crate) const GITEA_ADMIN_USER: &str = "gitea_admin";
+pub(crate) const PG_USERS: &[&str] = &[
     "kratos",
     "hydra",
     "gitea",
@@ -36,14 +36,15 @@ const PG_USERS: &[&str] = &[
     "find",
     "calendars",
     "projects",
+    "penpot",
 ];
 
-const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
+pub(crate) const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
 
 // ── Key generation ──────────────────────────────────────────────────────────
 
 /// Generate a Fernet-compatible key (32 random bytes, URL-safe base64).
-fn gen_fernet_key() -> String {
+pub(crate) fn gen_fernet_key() -> String {
     use base64::Engine;
     let mut buf = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut buf);
@@ -52,7 +53,7 @@ fn gen_fernet_key() -> String {
 
 /// Generate an RSA 2048-bit DKIM key pair.
 /// Returns (private_pem_pkcs8, public_pem). Returns ("", "") on failure.
-fn gen_dkim_key_pair() -> (String, String) {
+pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let mut rng = rand::thread_rng();
     let bits = 2048;
     let private_key = match RsaPrivateKey::new(&mut rng, bits) {
@@ -84,7 +85,7 @@ fn gen_dkim_key_pair() -> (String, String) {
 }
 
 /// Generate a URL-safe random token (32 bytes).
-fn rand_token() -> String {
+pub(crate) fn rand_token() -> String {
     use base64::Engine;
     let mut buf = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut buf);
@@ -92,7 +93,7 @@ fn rand_token() -> String {
 }
 
 /// Generate a URL-safe random token with a specific byte count.
-fn rand_token_n(n: usize) -> String {
+pub(crate) fn rand_token_n(n: usize) -> String {
     use base64::Engine;
     let mut buf = vec![0u8; n];
     rand::thread_rng().fill_bytes(&mut buf);
@@ -102,7 +103,7 @@ fn rand_token_n(n: usize) -> String {
 // ── Port-forward helper ─────────────────────────────────────────────────────
 
 /// Port-forward guard — cancels the background forwarder on drop.
-struct PortForwardGuard {
+pub(crate) struct PortForwardGuard {
     _abort_handle: tokio::task::AbortHandle,
     pub local_port: u16,
 }
@@ -115,7 +116,7 @@ impl Drop for PortForwardGuard {
 
 /// Open a kube-rs port-forward to `pod_name` in `namespace` on `remote_port`.
 /// Binds a local TCP listener and proxies connections to the pod.
-async fn port_forward(
+pub(crate) async fn port_forward(
     namespace: &str,
     pod_name: &str,
     remote_port: u16,
@@ -192,7 +193,7 @@ async fn port_forward(
 }
 
 /// Port-forward to a service by finding a matching pod via label selector.
-async fn port_forward_svc(
+pub(crate) async fn port_forward_svc(
     namespace: &str,
     label_selector: &str,
     remote_port: u16,
@@ -221,10 +222,10 @@ struct SeedResult {
 }
 
 /// Read-or-create pattern: reads existing KV values, only generates missing ones.
-async fn get_or_create(
+pub(crate) async fn get_or_create(
     bao: &BaoClient,
     path: &str,
-    fields: &[(&str, &dyn Fn() -> String)],
+    fields: &[(&str, &(dyn Fn() -> String + Send + Sync))],
     dirty_paths: &mut HashSet<String>,
 ) -> Result<HashMap<String, String>> {
     let existing = bao.kv_get("secret", path).await?.unwrap_or_default();
@@ -358,7 +359,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "hydra",
         &[
-            ("system-secret", &rand_token as &dyn Fn() -> String),
+            ("system-secret", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("cookie-secret", &rand_token),
             ("pairwise-salt", &rand_token),
         ],
@@ -371,7 +372,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "kratos",
         &[
-            ("secrets-default", &rand_token as &dyn Fn() -> String),
+            ("secrets-default", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("secrets-cookie", &rand_token),
             ("smtp-connection-uri", &smtp_uri_fn),
         ],
@@ -383,7 +384,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "seaweedfs",
         &[
-            ("access-key", &rand_token as &dyn Fn() -> String),
+            ("access-key", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("secret-key", &rand_token),
         ],
         &mut dirty_paths,
@@ -397,7 +398,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &[
             (
                 "admin-username",
-                &gitea_admin_user_fn as &dyn Fn() -> String,
+                &gitea_admin_user_fn as &(dyn Fn() -> String + Send + Sync),
             ),
             ("admin-password", &rand_token),
         ],
@@ -410,7 +411,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "hive",
         &[
-            ("oidc-client-id", &hive_local_fn as &dyn Fn() -> String),
+            ("oidc-client-id", &hive_local_fn as &(dyn Fn() -> String + Send + Sync)),
             ("oidc-client-secret", &rand_token),
         ],
         &mut dirty_paths,
@@ -422,7 +423,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "livekit",
         &[
-            ("api-key", &devkey_fn as &dyn Fn() -> String),
+            ("api-key", &devkey_fn as &(dyn Fn() -> String + Send + Sync)),
             ("api-secret", &rand_token),
         ],
         &mut dirty_paths,
@@ -432,7 +433,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
     let people = get_or_create(
         &bao,
         "people",
-        &[("django-secret-key", &rand_token as &dyn Fn() -> String)],
+        &[("django-secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync))],
         &mut dirty_paths,
     )
     .await?;
@@ -441,7 +442,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "login-ui",
         &[
-            ("cookie-secret", &rand_token as &dyn Fn() -> String),
+            ("cookie-secret", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("csrf-cookie-secret", &rand_token),
         ],
         &mut dirty_paths,
@@ -464,7 +465,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "kratos-admin",
         &[
-            ("cookie-secret", &rand_token as &dyn Fn() -> String),
+            ("cookie-secret", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("csrf-cookie-secret", &rand_token),
             ("admin-identity-ids", &empty_fn),
             ("s3-access-key", &sw_access_fn),
@@ -478,7 +479,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "docs",
         &[
-            ("django-secret-key", &rand_token as &dyn Fn() -> String),
+            ("django-secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("collaboration-secret", &rand_token),
         ],
         &mut dirty_paths,
@@ -489,7 +490,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "meet",
         &[
-            ("django-secret-key", &rand_token as &dyn Fn() -> String),
+            ("django-secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("application-jwt-secret-key", &rand_token),
         ],
         &mut dirty_paths,
@@ -499,7 +500,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
     let drive = get_or_create(
         &bao,
         "drive",
-        &[("django-secret-key", &rand_token as &dyn Fn() -> String)],
+        &[("django-secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync))],
         &mut dirty_paths,
     )
     .await?;
@@ -507,7 +508,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
     let projects = get_or_create(
         &bao,
         "projects",
-        &[("secret-key", &rand_token as &dyn Fn() -> String)],
+        &[("secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync))],
         &mut dirty_paths,
     )
     .await?;
@@ -517,7 +518,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "calendars",
         &[
-            ("django-secret-key", &cal_django_fn as &dyn Fn() -> String),
+            ("django-secret-key", &cal_django_fn as &(dyn Fn() -> String + Send + Sync)),
             ("salt-key", &rand_token),
             ("caldav-inbound-api-key", &rand_token),
             ("caldav-outbound-api-key", &rand_token),
@@ -563,12 +564,12 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "messages",
         &[
-            ("django-secret-key", &rand_token as &dyn Fn() -> String),
+            ("django-secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync)),
             ("salt-key", &rand_token),
             ("mda-api-secret", &rand_token),
             (
                 "oidc-refresh-token-key",
-                &gen_fernet_key as &dyn Fn() -> String,
+                &gen_fernet_key as &(dyn Fn() -> String + Send + Sync),
             ),
             ("dkim-private-key", &dkim_priv_fn),
             ("dkim-public-key", &dkim_pub_fn),
@@ -586,7 +587,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "collabora",
         &[
-            ("username", &admin_fn as &dyn Fn() -> String),
+            ("username", &admin_fn as &(dyn Fn() -> String + Send + Sync)),
             ("password", &rand_token),
         ],
         &mut dirty_paths,
@@ -597,7 +598,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         &bao,
         "tuwunel",
         &[
-            ("oidc-client-id", &empty_fn as &dyn Fn() -> String),
+            ("oidc-client-id", &empty_fn as &(dyn Fn() -> String + Send + Sync)),
             ("oidc-client-secret", &empty_fn),
             ("turn-secret", &empty_fn),
             ("registration-token", &rand_token),
@@ -609,18 +610,26 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
     let grafana = get_or_create(
         &bao,
         "grafana",
-        &[("admin-password", &rand_token as &dyn Fn() -> String)],
+        &[("admin-password", &rand_token as &(dyn Fn() -> String + Send + Sync))],
         &mut dirty_paths,
     )
     .await?;
 
     let scw_access_fn = || scw_config("access-key");
     let scw_secret_fn = || scw_config("secret-key");
+    let penpot = get_or_create(
+        &bao,
+        "penpot",
+        &[("secret-key", &rand_token as &(dyn Fn() -> String + Send + Sync))],
+        &mut dirty_paths,
+    )
+    .await?;
+
     let scaleway_s3 = get_or_create(
         &bao,
         "scaleway-s3",
         &[
-            ("access-key-id", &scw_access_fn as &dyn Fn() -> String),
+            ("access-key-id", &scw_access_fn as &(dyn Fn() -> String + Send + Sync)),
             ("secret-access-key", &scw_secret_fn),
         ],
         &mut dirty_paths,
@@ -662,6 +671,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
             ("tuwunel", &tuwunel),
             ("grafana", &grafana),
             ("scaleway-s3", &scaleway_s3),
+            ("penpot", &penpot),
         ];
 
         for (path, data) in all_paths {
@@ -694,7 +704,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         "auth/kubernetes/role/vso",
         &serde_json::json!({
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,matrix,media,data,monitoring",
+            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,matrix,media,data,monitoring,cert-manager",
             "policies": "vso-reader",
             "ttl": "1h"
         }),
@@ -742,7 +752,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
 // ── Database secrets engine ─────────────────────────────────────────────────
 
 /// Enable OpenBao database secrets engine and create PostgreSQL static roles.
-async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
+pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
     ok("Configuring OpenBao database secrets engine...");
     let pg_rw = "postgres-rw.data.svc.cluster.local:5432";
 
@@ -825,7 +835,7 @@ async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
 }
 
 /// Execute a psql command on the CNPG primary pod.
-async fn psql_exec(cnpg_pod: &str, sql: &str) -> Result<(i32, String)> {
+pub(crate) async fn psql_exec(cnpg_pod: &str, sql: &str) -> Result<(i32, String)> {
     k::kube_exec(
         "data",
         cnpg_pod,
@@ -838,16 +848,16 @@ async fn psql_exec(cnpg_pod: &str, sql: &str) -> Result<(i32, String)> {
 // ── Kratos admin identity seeding ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-struct KratosIdentity {
-    id: String,
+pub(crate) struct KratosIdentity {
+    pub(crate) id: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct KratosRecovery {
+pub(crate) struct KratosRecovery {
     #[serde(default)]
-    recovery_link: String,
+    pub(crate) recovery_link: String,
     #[serde(default)]
-    recovery_code: String,
+    pub(crate) recovery_code: String,
 }
 
 /// Ensure estudio-admin@<domain> exists in Kratos and is the only admin identity.
@@ -951,77 +961,7 @@ async fn seed_kratos_admin_identity(bao: &BaoClient) -> (String, String) {
 
 // ── cmd_seed — main entry point ─────────────────────────────────────────────
 
-/// Seed OpenBao KV with crypto-random credentials, then mirror to K8s Secrets.
-/// File-based advisory lock for `cmd_seed` to prevent concurrent runs.
-struct SeedLock {
-    path: std::path::PathBuf,
-}
-
-impl SeedLock {
-    fn acquire() -> Result<Self> {
-        let lock_path = dirs::data_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".local/share"))
-            .join("sunbeam")
-            .join("seed.lock");
-        std::fs::create_dir_all(lock_path.parent().unwrap())?;
-
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(mut f) => {
-                use std::io::Write;
-                write!(f, "{}", std::process::id())?;
-                Ok(SeedLock { path: lock_path })
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Check if the PID in the file is still alive
-                if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
-                    if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                        // kill(pid, 0) checks if process exists without sending a signal
-                        let alive = is_pid_alive(pid);
-                        if alive {
-                            return Err(SunbeamError::secrets(
-                                "Another sunbeam seed is already running. Wait for it to finish.",
-                            ));
-                        }
-                    }
-                }
-                // Stale lock, remove and retry
-                std::fs::remove_file(&lock_path)?;
-                let mut f = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&lock_path)?;
-                use std::io::Write;
-                write!(f, "{}", std::process::id())?;
-                Ok(SeedLock { path: lock_path })
-            }
-            Err(e) => Err(e.into()),
-        }
-    }
-}
-
-impl Drop for SeedLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-/// Check if a process with the given PID is still alive.
-fn is_pid_alive(pid: i32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 pub async fn cmd_seed() -> Result<()> {
-    let _lock = SeedLock::acquire()?;
     step("Seeding secrets...");
 
     let seed_result = seed_openbao().await?;
@@ -1512,7 +1452,7 @@ spec:
 
 // ── Utility helpers ─────────────────────────────────────────────────────────
 
-async fn wait_pod_running(ns: &str, pod_name: &str, timeout_secs: u64) -> bool {
+pub(crate) async fn wait_pod_running(ns: &str, pod_name: &str, timeout_secs: u64) -> bool {
     let client = match k::get_client().await {
         Ok(c) => c,
         Err(_) => return false,
@@ -1537,7 +1477,7 @@ async fn wait_pod_running(ns: &str, pod_name: &str, timeout_secs: u64) -> bool {
     false
 }
 
-fn scw_config(key: &str) -> String {
+pub(crate) fn scw_config(key: &str) -> String {
     std::process::Command::new("scw")
         .args(["config", "get", key])
         .output()
@@ -1565,7 +1505,7 @@ async fn delete_k8s_secret(ns: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn delete_resource(ns: &str, kind: &str, name: &str) -> Result<()> {
+pub(crate) async fn delete_resource(ns: &str, kind: &str, name: &str) -> Result<()> {
     let ctx = format!("--context={}", k::context());
     let _ = tokio::process::Command::new("kubectl")
         .args([&ctx, "-n", ns, "delete", kind, name, "--ignore-not-found"])

@@ -143,6 +143,12 @@ pub enum Verb {
         action: Option<PmAction>,
     },
 
+    /// Workflow management (list, status, retry, cancel, run).
+    Workflow {
+        #[command(subcommand)]
+        action: crate::workflows::cmd::WorkflowAction,
+    },
+
     /// Self-update from latest mainline commit.
     Update,
 
@@ -174,6 +180,8 @@ pub enum AuthAction {
     Logout,
     /// Show current authentication status.
     Status,
+    /// Print the current access token (for use in scripts and MCP headers).
+    Token,
 }
 
 #[derive(Subcommand, Debug)]
@@ -750,6 +758,109 @@ mod tests {
         ]);
         assert!(result.is_err());
     }
+
+    // -- Workflow subcommand tests --
+
+    #[test]
+    fn test_workflow_list() {
+        let cli = parse(&["sunbeam", "workflow", "list"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => {
+                assert!(matches!(action, crate::workflows::cmd::WorkflowAction::List { .. }));
+            }
+            _ => panic!("expected Workflow List"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_list_with_status_filter() {
+        let cli = parse(&["sunbeam", "workflow", "list", "--status", "complete"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::List { status } => {
+                    assert_eq!(status, "complete");
+                }
+                _ => panic!("expected List"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_status() {
+        let cli = parse(&["sunbeam", "workflow", "status", "abc-123"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::Status { id } => {
+                    assert_eq!(id, "abc-123");
+                }
+                _ => panic!("expected Status"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_retry() {
+        let cli = parse(&["sunbeam", "workflow", "retry", "wf-456"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::Retry { id } => {
+                    assert_eq!(id, "wf-456");
+                }
+                _ => panic!("expected Retry"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_cancel() {
+        let cli = parse(&["sunbeam", "workflow", "cancel", "wf-789"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::Cancel { id } => {
+                    assert_eq!(id, "wf-789");
+                }
+                _ => panic!("expected Cancel"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_run_default_file() {
+        let cli = parse(&["sunbeam", "workflow", "run"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::Run { file } => {
+                    assert_eq!(file, "");
+                }
+                _ => panic!("expected Run"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_run_with_file() {
+        let cli = parse(&["sunbeam", "workflow", "run", "deploy.yaml"]);
+        match cli.verb {
+            Some(Verb::Workflow { action }) => match action {
+                crate::workflows::cmd::WorkflowAction::Run { file } => {
+                    assert_eq!(file, "deploy.yaml");
+                }
+                _ => panic!("expected Run"),
+            },
+            _ => panic!("expected Workflow"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_status_missing_id() {
+        let result = Cli::try_parse_from(&["sunbeam", "workflow", "status"]);
+        assert!(result.is_err());
+    }
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
@@ -786,7 +897,49 @@ pub async fn dispatch() -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Up) => crate::cluster::cmd_up().await,
+        Some(Verb::Up) => {
+            crate::output::step("Bringing up cluster (workflow engine)...");
+
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::up::register(&host).await;
+
+            let step_ctx = crate::workflows::StepContext::from_active();
+            let initial_data = serde_json::json!({
+                "__ctx": step_ctx,
+                "domain": "",
+            });
+
+            let instance = wfe::run_workflow_sync(
+                &host,
+                "up",
+                1,
+                initial_data,
+                std::time::Duration::from_secs(3600),
+            )
+            .await
+            .map_err(|e| SunbeamError::Other(format!("up workflow failed: {e}")))?;
+
+            crate::workflows::up::print_summary(&instance);
+            crate::workflows::host::shutdown_host(host).await;
+
+            if instance.status != wfe_core::models::WorkflowStatus::Complete {
+                return Err(SunbeamError::Other(format!(
+                    "up workflow ended with status {:?}",
+                    instance.status
+                )));
+            }
+
+            Ok(())
+        }
 
         Some(Verb::Status { target }) => {
             crate::services::cmd_status(target.as_deref()).await
@@ -829,9 +982,91 @@ pub async fn dispatch() -> Result<()> {
             crate::manifests::cmd_apply(&env_str, &domain, &email, &ns).await
         }
 
-        Some(Verb::Seed) => crate::secrets::cmd_seed().await,
+        Some(Verb::Seed) => {
+            crate::output::step("Seeding secrets (workflow engine)...");
 
-        Some(Verb::Verify) => crate::secrets::cmd_verify().await,
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::seed::register(&host).await;
+
+            let step_ctx = crate::workflows::StepContext::from_active();
+            let initial_data = serde_json::json!({
+                "__ctx": step_ctx,
+            });
+
+            let instance = wfe::run_workflow_sync(
+                &host,
+                "seed",
+                1,
+                initial_data,
+                std::time::Duration::from_secs(900),
+            )
+            .await
+            .map_err(|e| SunbeamError::secrets(format!("seed workflow failed: {e}")))?;
+
+            crate::workflows::seed::print_summary(&instance);
+            crate::workflows::host::shutdown_host(host).await;
+
+            if instance.status != wfe_core::models::WorkflowStatus::Complete {
+                return Err(SunbeamError::secrets(format!(
+                    "seed workflow ended with status {:?}",
+                    instance.status
+                )));
+            }
+
+            Ok(())
+        }
+
+        Some(Verb::Verify) => {
+            crate::output::step("Verifying VSO -> OpenBao integration (workflow engine)...");
+
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::verify::register(&host).await;
+
+            let step_ctx = crate::workflows::StepContext::from_active();
+            let initial_data = serde_json::json!({
+                "__ctx": step_ctx,
+            });
+
+            let instance = wfe::run_workflow_sync(
+                &host,
+                "verify",
+                1,
+                initial_data,
+                std::time::Duration::from_secs(300),
+            )
+            .await
+            .map_err(|e| SunbeamError::Other(format!("verify workflow failed: {e}")))?;
+
+            crate::workflows::verify::print_summary(&instance);
+            crate::workflows::host::shutdown_host(host).await;
+
+            if instance.status != wfe_core::models::WorkflowStatus::Complete {
+                return Err(SunbeamError::Other(format!(
+                    "verify workflow ended with status {:?}",
+                    instance.status
+                )));
+            }
+
+            Ok(())
+        }
 
         Some(Verb::Logs { target, follow }) => {
             crate::services::cmd_logs(&target, follow).await
@@ -856,7 +1091,48 @@ pub async fn dispatch() -> Result<()> {
 
         Some(Verb::Mirror) => crate::images::cmd_mirror().await,
 
-        Some(Verb::Bootstrap) => crate::gitea::cmd_bootstrap().await,
+        Some(Verb::Bootstrap) => {
+            crate::output::step("Bootstrapping Gitea (workflow engine)...");
+
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::bootstrap::register(&host).await;
+
+            let step_ctx = crate::workflows::StepContext::from_active();
+            let initial_data = serde_json::json!({
+                "__ctx": step_ctx,
+            });
+
+            let instance = wfe::run_workflow_sync(
+                &host,
+                "bootstrap",
+                1,
+                initial_data,
+                std::time::Duration::from_secs(300),
+            )
+            .await
+            .map_err(|e| SunbeamError::Other(format!("bootstrap workflow failed: {e}")))?;
+
+            crate::workflows::bootstrap::print_summary(&instance);
+            crate::workflows::host::shutdown_host(host).await;
+
+            if instance.status != wfe_core::models::WorkflowStatus::Complete {
+                return Err(SunbeamError::Other(format!(
+                    "bootstrap workflow ended with status {:?}",
+                    instance.status
+                )));
+            }
+
+            Ok(())
+        }
 
         Some(Verb::Config { action }) => match action {
             None => {
@@ -1053,6 +1329,7 @@ pub async fn dispatch() -> Result<()> {
             }
             Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
             Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
+            Some(AuthAction::Token) => crate::auth::cmd_auth_token().await,
         },
 
         Some(Verb::Pm { action }) => match action {
@@ -1086,6 +1363,18 @@ pub async fn dispatch() -> Result<()> {
                 crate::pm::cmd_pm_assign(&id, &user).await
             }
         },
+
+        Some(Verb::Workflow { action }) => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            crate::workflows::cmd::dispatch(&ctx_name, action).await
+        }
 
         Some(Verb::Update) => crate::update::cmd_update().await,
 
