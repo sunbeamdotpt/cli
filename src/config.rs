@@ -1,4 +1,4 @@
-use crate::error::{Result, ResultExt, SunbeamError};
+use crate::error::{Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -126,6 +126,7 @@ pub fn load_config() -> SunbeamConfig {
                 let _ = std::fs::create_dir_all(parent);
             }
             if std::fs::copy(&legacy, &path).is_ok() {
+                let _ = std::fs::remove_file(&legacy);
                 crate::output::ok(&format!(
                     "Migrated config: {} → {}",
                     legacy.display(),
@@ -176,7 +177,7 @@ pub fn load_config() -> SunbeamConfig {
     config
 }
 
-/// Save configuration to ~/.sunbeam.json.
+/// Save configuration to ~/.sunbeam/config.json.
 pub fn save_config(config: &SunbeamConfig) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
