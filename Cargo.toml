@@ -70,10 +70,10 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Workflow engine
-wfe = { version = "1.6.2", registry = "sunbeam" }
-wfe-core = { version = "1.6.2", registry = "sunbeam", features = ["test-support"] }
-wfe-sqlite = { version = "1.6.2", registry = "sunbeam" }
-wfe-yaml = { version = "1.6.2", registry = "sunbeam" }
+wfe = { version = "1.6.3", registry = "sunbeam" }
+wfe-core = { version = "1.6.3", registry = "sunbeam", features = ["test-support"] }
+wfe-sqlite = { version = "1.6.3", registry = "sunbeam" }
+wfe-yaml = { version = "1.6.3", registry = "sunbeam" }
 async-trait = "0.1"
 
 [dev-dependencies]
