@@ -37,6 +37,7 @@ pub(crate) const PG_USERS: &[&str] = &[
     "calendars",
     "projects",
     "penpot",
+    "stalwart",
 ];
 
 pub(crate) const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
@@ -136,6 +137,8 @@ pub(crate) async fn port_forward(
     let ns = namespace.to_string();
     let task = tokio::spawn(async move {
         let mut current_pod = pod_name;
+        let mut consecutive_failures: u32 = 0;
+        const MAX_CONSECUTIVE_FAILURES: u32 = 30;
         loop {
             let (mut client_stream, _) = match listener.accept().await {
                 Ok(s) => s,
@@ -144,9 +147,18 @@ pub(crate) async fn port_forward(
 
             let pf_result = pods.portforward(&current_pod, &[remote_port]).await;
             let mut pf = match pf_result {
-                Ok(pf) => pf,
+                Ok(pf) => {
+                    consecutive_failures = 0;
+                    pf
+                }
                 Err(e) => {
-                    tracing::warn!("Port-forward failed, re-resolving pod: {e}");
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        tracing::error!("Port-forward to {current_pod} failed {consecutive_failures} times, giving up: {e}");
+                        break;
+                    }
+                    tracing::warn!("Port-forward failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}), re-resolving pod: {e}");
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     // Re-resolve the pod in case it restarted with a new name
                     if let Ok(new_client) = k::get_client().await {
                         let new_pods: Api<Pod> = Api::namespaced(new_client.clone(), &ns);
@@ -168,7 +180,7 @@ pub(crate) async fn port_forward(
                             }
                         }
                     }
-                    continue; // next accept() iteration will retry
+                    continue;
                 }
             };
 
@@ -704,7 +716,7 @@ async fn seed_openbao() -> Result<Option<SeedResult>> {
         "auth/kubernetes/role/vso",
         &serde_json::json!({
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,matrix,media,data,monitoring,cert-manager",
+            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,stalwart,matrix,media,data,monitoring,cert-manager",
             "policies": "vso-reader",
             "ttl": "1h"
         }),
@@ -1596,7 +1608,7 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 13);
+        assert_eq!(PG_USERS.len(), 15);
         assert!(PG_USERS.contains(&"kratos"));
         assert!(PG_USERS.contains(&"projects"));
     }
@@ -1661,6 +1673,8 @@ mod tests {
             "find",
             "calendars",
             "projects",
+            "penpot",
+            "stalwart",
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }
