@@ -1,1 +1,0 @@
-{"name":"stable_deref_trait","vers":"1.2.1","deps":[],"features":{"alloc":[],"default":["std"],"std":["alloc"]},"features2":null,"cksum":"febf8ab15ac88151c9da9bff51fb9354080c04dd54c0e3de96708f153745811b","yanked":null,"links":null,"rust_version":null,"v":2}

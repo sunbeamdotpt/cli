@@ -1,1 +1,0 @@
-{"name":"percent-encoding","vers":"2.3.2","deps":[],"features":{"alloc":[],"default":["std"],"std":["alloc"]},"features2":null,"cksum":"5ad1aeb569b56fa419ce65c5ba407bab0d0853e73c029f72fec58ff59e2b6700","yanked":null,"links":null,"rust_version":null,"v":2}
