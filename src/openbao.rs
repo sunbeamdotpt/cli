@@ -1,233 +1,159 @@
-//! Lightweight OpenBao/Vault HTTP API client.
+//! OpenBao/Vault client — thin wrapper around vaultrs.
 //!
-//! Replaces all `kubectl exec openbao-0 -- sh -c "bao ..."` calls from the
-//! Python version with direct HTTP API calls via port-forward to openbao:8200.
+//! Provides a `BaoClient` API that can be swapped to a different backend
+//! without changing callers.
 
 use crate::error::{Result, ResultExt};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use vaultrs::client::{Client, VaultClient, VaultClientSettingsBuilder};
 
-/// OpenBao HTTP client wrapping a base URL and optional root token.
-#[derive(Clone)]
+/// OpenBao HTTP client wrapping vaultrs::VaultClient.
 pub struct BaoClient {
+    inner: VaultClient,
     pub base_url: String,
-    pub token: Option<String>,
-    http: reqwest::Client,
 }
 
-// ── API response types ──────────────────────────────────────────────────────
+// Re-export the init response type for callers that need it.
+pub use vaultrs::api::sys::responses::StartInitializationResponse as InitResponse;
 
-#[derive(Debug, Deserialize)]
-pub struct InitResponse {
-    #[serde(alias = "unseal_keys_b64")]
-    pub keys_base64: Vec<String>,
-    pub root_token: String,
-}
-
-#[derive(Debug, Deserialize)]
+/// Seal status response.
+#[derive(Debug, Default)]
 pub struct SealStatusResponse {
-    #[serde(default)]
     pub initialized: bool,
-    #[serde(default)]
     pub sealed: bool,
-    #[serde(default)]
-    pub progress: u32,
-    #[serde(default)]
-    pub t: u32,
-    #[serde(default)]
-    pub n: u32,
 }
 
-#[derive(Debug, Deserialize)]
+/// Unseal response.
+#[derive(Debug, Default)]
 pub struct UnsealResponse {
-    #[serde(default)]
     pub sealed: bool,
-    #[serde(default)]
-    pub progress: u32,
 }
-
-/// KV v2 read response wrapper.
-#[derive(Debug, Deserialize)]
-struct KvReadResponse {
-    data: Option<KvReadData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct KvReadData {
-    data: Option<HashMap<String, serde_json::Value>>,
-}
-
-// ── Client implementation ───────────────────────────────────────────────────
 
 impl BaoClient {
     /// Create a new client pointing at `base_url` (e.g. `http://localhost:8200`).
     pub fn new(base_url: &str) -> Self {
+        let url = base_url.trim_end_matches('/');
+        let settings = VaultClientSettingsBuilder::default()
+            .address(url)
+            .build()
+            .expect("valid vault client settings");
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            token: None,
-            http: reqwest::Client::new(),
+            inner: VaultClient::new(settings).expect("valid vault client"),
+            base_url: url.to_string(),
         }
     }
 
     /// Create a client with an authentication token.
     pub fn with_token(base_url: &str, token: &str) -> Self {
-        let mut client = Self::new(base_url);
-        client.token = Some(token.to_string());
-        client
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("{}/v1/{}", self.base_url, path.trim_start_matches('/'))
-    }
-
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http.request(method, self.url(path));
-        if let Some(ref token) = self.token {
-            req = req.header("X-Vault-Token", token);
+        let url = base_url.trim_end_matches('/');
+        let settings = VaultClientSettingsBuilder::default()
+            .address(url)
+            .token(token.to_string())
+            .build()
+            .expect("valid vault client settings");
+        Self {
+            inner: VaultClient::new(settings).expect("valid vault client"),
+            base_url: url.to_string(),
         }
-        req
+    }
+
+    fn token_header(&self) -> Option<String> {
+        let t = &self.inner.settings().token;
+        if t.is_empty() { None } else { Some(t.clone()) }
     }
 
     // ── System operations ───────────────────────────────────────────────
 
-    /// Get the seal status of the OpenBao instance.
     pub async fn seal_status(&self) -> Result<SealStatusResponse> {
-        let resp = self
-            .http
-            .get(format!("{}/v1/sys/seal-status", self.base_url))
-            .send()
-            .await
-            .ctx("Failed to connect to OpenBao")?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("OpenBao seal-status returned {status}: {body}");
+        match vaultrs::sys::status(&self.inner).await {
+            Ok(status) => {
+                use vaultrs::sys::ServerStatus;
+                let (initialized, sealed) = match status {
+                    ServerStatus::OK => (true, false),
+                    ServerStatus::SEALED => (true, true),
+                    ServerStatus::PERFSTANDBY | ServerStatus::STANDBY => (true, false),
+                    ServerStatus::RECOVERY => (true, true),
+                    ServerStatus::UNINITIALIZED | ServerStatus::UNKNOWN => (false, true),
+                };
+                Ok(SealStatusResponse { initialized, sealed })
+            }
+            Err(e) => Err(crate::error::SunbeamError::Other(format!(
+                "Failed to get seal status: {e}"
+            ))),
         }
-        resp.json().await.ctx("Failed to parse seal status")
     }
 
-    /// Initialize OpenBao with the given number of key shares and threshold.
     pub async fn init(&self, key_shares: u32, key_threshold: u32) -> Result<InitResponse> {
-        #[derive(Serialize)]
-        struct InitRequest {
-            secret_shares: u32,
-            secret_threshold: u32,
-        }
-
-        let resp = self
-            .http
-            .put(format!("{}/v1/sys/init", self.base_url))
-            .json(&InitRequest {
-                secret_shares: key_shares,
-                secret_threshold: key_threshold,
-            })
-            .send()
-            .await
-            .ctx("Failed to initialize OpenBao")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("OpenBao init returned {status}: {body}");
-        }
-        resp.json().await.ctx("Failed to parse init response")
+        vaultrs::sys::start_initialization(
+            &self.inner,
+            key_shares as u64,
+            key_threshold as u64,
+            None,
+        )
+        .await
+        .map_err(|e| crate::error::SunbeamError::Other(format!("OpenBao init failed: {e}")))
     }
 
-    /// Unseal OpenBao with one key share.
     pub async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
-        #[derive(Serialize)]
-        struct UnsealRequest<'a> {
-            key: &'a str,
-        }
-
-        let resp = self
-            .http
-            .put(format!("{}/v1/sys/unseal", self.base_url))
-            .json(&UnsealRequest { key })
-            .send()
-            .await
-            .ctx("Failed to unseal OpenBao")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("OpenBao unseal returned {status}: {body}");
-        }
-        resp.json().await.ctx("Failed to parse unseal response")
+        let resp = vaultrs::sys::unseal(
+            &self.inner,
+            Some(key.to_string()),
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| crate::error::SunbeamError::Other(format!("OpenBao unseal failed: {e}")))?;
+        Ok(UnsealResponse { sealed: resp.sealed })
     }
 
     // ── Secrets engine management ───────────────────────────────────────
 
-    /// Enable a secrets engine at the given path.
-    /// Returns Ok(()) even if already enabled (400 is tolerated).
     pub async fn enable_secrets_engine(&self, path: &str, engine_type: &str) -> Result<()> {
-        #[derive(Serialize)]
-        struct EnableRequest<'a> {
-            r#type: &'a str,
-        }
-
-        let resp = self
-            .request(reqwest::Method::POST, &format!("sys/mounts/{path}"))
-            .json(&EnableRequest {
-                r#type: engine_type,
-            })
-            .send()
-            .await
-            .ctx("Failed to enable secrets engine")?;
-
-        let status = resp.status();
-        if status.is_success() || status.as_u16() == 400 {
-            // 400 = "path is already in use" — idempotent
-            Ok(())
-        } else {
-            let body = resp.text().await.unwrap_or_default();
-            bail!("Enable secrets engine {path} returned {status}: {body}");
+        match vaultrs::sys::mount::enable(&self.inner, path, engine_type, None).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("400") || msg.contains("already in use") {
+                    Ok(()) // idempotent
+                } else {
+                    Err(crate::error::SunbeamError::Other(format!(
+                        "Enable secrets engine {path}: {e}"
+                    )))
+                }
+            }
         }
     }
 
     // ── KV v2 operations ────────────────────────────────────────────────
 
-    /// Read all fields from a KV v2 secret path.
-    /// Returns None if the path doesn't exist (404).
     pub async fn kv_get(&self, mount: &str, path: &str) -> Result<Option<HashMap<String, String>>> {
-        let resp = self
-            .request(reqwest::Method::GET, &format!("{mount}/data/{path}"))
-            .send()
-            .await
-            .ctx("Failed to read KV secret")?;
-
-        if resp.status().as_u16() == 404 {
-            return Ok(None);
+        match vaultrs::kv2::read::<HashMap<String, serde_json::Value>>(&self.inner, mount, path).await {
+            Ok(data) => {
+                let result: HashMap<String, String> = data
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let s = match v {
+                            serde_json::Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        (k, s)
+                    })
+                    .collect();
+                Ok(Some(result))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("404") || msg.contains("Not Found") {
+                    Ok(None)
+                } else {
+                    Err(crate::error::SunbeamError::Other(format!(
+                        "KV get {mount}/{path}: {e}"
+                    )))
+                }
+            }
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("KV get {mount}/{path} returned {status}: {body}");
-        }
-
-        let kv_resp: KvReadResponse = resp.json().await.ctx("Failed to parse KV response")?;
-        let data = kv_resp
-            .data
-            .and_then(|d| d.data)
-            .unwrap_or_default();
-
-        // Convert all values to strings
-        let result: HashMap<String, String> = data
-            .into_iter()
-            .map(|(k, v)| {
-                let s = match v {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                };
-                (k, s)
-            })
-            .collect();
-
-        Ok(Some(result))
     }
 
-    /// Read a single field from a KV v2 secret path.
-    /// Returns empty string if path or field doesn't exist.
     pub async fn kv_get_field(&self, mount: &str, path: &str, field: &str) -> Result<String> {
         match self.kv_get(mount, path).await? {
             Some(data) => Ok(data.get(field).cloned().unwrap_or_default()),
@@ -235,53 +161,32 @@ impl BaoClient {
         }
     }
 
-    /// Write (create or overwrite) all fields in a KV v2 secret path.
-    pub async fn kv_put(
-        &self,
-        mount: &str,
-        path: &str,
-        data: &HashMap<String, String>,
-    ) -> Result<()> {
-        #[derive(Serialize)]
-        struct KvWriteRequest<'a> {
-            data: &'a HashMap<String, String>,
-        }
-
-        let resp = self
-            .request(reqwest::Method::POST, &format!("{mount}/data/{path}"))
-            .json(&KvWriteRequest { data })
-            .send()
+    pub async fn kv_put(&self, mount: &str, path: &str, data: &HashMap<String, String>) -> Result<()> {
+        vaultrs::kv2::set(&self.inner, mount, path, data)
             .await
-            .ctx("Failed to write KV secret")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("KV put {mount}/{path} returned {status}: {body}");
-        }
+            .map_err(|e| crate::error::SunbeamError::Other(format!("KV put {mount}/{path}: {e}")))?;
         Ok(())
     }
 
-    /// Patch (merge) fields into an existing KV v2 secret path.
-    pub async fn kv_patch(
-        &self,
-        mount: &str,
-        path: &str,
-        data: &HashMap<String, String>,
-    ) -> Result<()> {
-        #[derive(Serialize)]
+    /// Patch (merge) fields into an existing KV v2 secret.
+    /// vaultrs doesn't have a patch method, so we use a raw HTTP request.
+    pub async fn kv_patch(&self, mount: &str, path: &str, data: &HashMap<String, String>) -> Result<()> {
+        #[derive(serde::Serialize)]
         struct KvWriteRequest<'a> {
             data: &'a HashMap<String, String>,
         }
 
-        let resp = self
-            .request(reqwest::Method::PATCH, &format!("{mount}/data/{path}"))
+        let url = format!("{}/v1/{mount}/data/{path}", self.base_url);
+        let mut req = reqwest::Client::new()
+            .patch(&url)
             .header("Content-Type", "application/merge-patch+json")
-            .json(&KvWriteRequest { data })
-            .send()
-            .await
-            .ctx("Failed to patch KV secret")?;
+            .json(&KvWriteRequest { data });
 
+        if let Some(token) = self.token_header() {
+            req = req.header("X-Vault-Token", token);
+        }
+
+        let resp = req.send().await.ctx("Failed to patch KV secret")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -290,89 +195,57 @@ impl BaoClient {
         Ok(())
     }
 
-    /// Delete a KV v2 secret path (soft delete — deletes latest version).
     pub async fn kv_delete(&self, mount: &str, path: &str) -> Result<()> {
-        let resp = self
-            .request(reqwest::Method::DELETE, &format!("{mount}/data/{path}"))
-            .send()
-            .await
-            .ctx("Failed to delete KV secret")?;
-
-        // 404 is fine (already deleted)
-        if !resp.status().is_success() && resp.status().as_u16() != 404 {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("KV delete {mount}/{path} returned {status}: {body}");
+        match vaultrs::kv2::delete_latest(&self.inner, mount, path).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("404") {
+                    Ok(())
+                } else {
+                    Err(crate::error::SunbeamError::Other(format!(
+                        "KV delete {mount}/{path}: {e}"
+                    )))
+                }
+            }
         }
-        Ok(())
     }
 
     // ── Auth operations ─────────────────────────────────────────────────
 
-    /// Enable an auth method at the given path.
-    /// Tolerates "already enabled" (400/409).
     pub async fn auth_enable(&self, path: &str, method_type: &str) -> Result<()> {
-        #[derive(Serialize)]
-        struct AuthEnableRequest<'a> {
-            r#type: &'a str,
-        }
-
-        let resp = self
-            .request(reqwest::Method::POST, &format!("sys/auth/{path}"))
-            .json(&AuthEnableRequest {
-                r#type: method_type,
-            })
-            .send()
-            .await
-            .ctx("Failed to enable auth method")?;
-
-        let status = resp.status();
-        if status.is_success() || status.as_u16() == 400 {
-            Ok(())
-        } else {
-            let body = resp.text().await.unwrap_or_default();
-            bail!("Enable auth {path} returned {status}: {body}");
+        match vaultrs::sys::auth::enable(&self.inner, path, method_type, None).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("400") || msg.contains("already in use") {
+                    Ok(())
+                } else {
+                    Err(crate::error::SunbeamError::Other(format!(
+                        "Enable auth {path}: {e}"
+                    )))
+                }
+            }
         }
     }
 
-    /// Write a policy.
     pub async fn write_policy(&self, name: &str, policy_hcl: &str) -> Result<()> {
-        #[derive(Serialize)]
-        struct PolicyRequest<'a> {
-            policy: &'a str,
-        }
-
-        let resp = self
-            .request(
-                reqwest::Method::PUT,
-                &format!("sys/policies/acl/{name}"),
-            )
-            .json(&PolicyRequest { policy: policy_hcl })
-            .send()
+        vaultrs::sys::policy::set(&self.inner, name, policy_hcl)
             .await
-            .ctx("Failed to write policy")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("Write policy {name} returned {status}: {body}");
-        }
-        Ok(())
+            .map_err(|e| crate::error::SunbeamError::Other(format!("Write policy {name}: {e}")))
     }
 
-    /// Write to an arbitrary API path (for auth config, roles, database config, etc.).
-    pub async fn write(
-        &self,
-        path: &str,
-        data: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let resp = self
-            .request(reqwest::Method::POST, path)
-            .json(data)
-            .send()
-            .await
-            .with_ctx(|| format!("Failed to write to {path}"))?;
+    // ── Generic write (for auth config, roles, etc.) ────────────────────
 
+    pub async fn write(&self, path: &str, data: &serde_json::Value) -> Result<serde_json::Value> {
+        let url = format!("{}/v1/{}", self.base_url, path.trim_start_matches('/'));
+        let mut req = reqwest::Client::new().post(&url).json(data);
+        if let Some(token) = self.token_header() {
+            req = req.header("X-Vault-Token", token);
+        }
+
+        let resp = req.send().await
+            .with_ctx(|| format!("Failed to write to {path}"))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -387,34 +260,8 @@ impl BaoClient {
         }
     }
 
-    /// Read from an arbitrary API path.
-    pub async fn read(&self, path: &str) -> Result<Option<serde_json::Value>> {
-        let resp = self
-            .request(reqwest::Method::GET, path)
-            .send()
-            .await
-            .with_ctx(|| format!("Failed to read {path}"))?;
-
-        if resp.status().as_u16() == 404 {
-            return Ok(None);
-        }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("Read {path} returned {status}: {body}");
-        }
-
-        let body = resp.text().await.unwrap_or_default();
-        if body.is_empty() {
-            Ok(Some(serde_json::Value::Null))
-        } else {
-            Ok(Some(serde_json::from_str(&body)?))
-        }
-    }
-
     // ── Database secrets engine ─────────────────────────────────────────
 
-    /// Configure the database secrets engine connection.
     pub async fn write_db_config(
         &self,
         name: &str,
@@ -435,7 +282,6 @@ impl BaoClient {
         Ok(())
     }
 
-    /// Create a database static role.
     pub async fn write_db_static_role(
         &self,
         name: &str,
@@ -450,8 +296,7 @@ impl BaoClient {
             "rotation_period": rotation_period,
             "rotation_statements": rotation_statements,
         });
-        self.write(&format!("database/static-roles/{name}"), &data)
-            .await?;
+        self.write(&format!("database/static-roles/{name}"), &data).await?;
         Ok(())
     }
 }
@@ -461,39 +306,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_client_url_construction() {
+    fn test_new_client() {
         let client = BaoClient::new("http://localhost:8200");
-        assert_eq!(client.url("sys/seal-status"), "http://localhost:8200/v1/sys/seal-status");
-        assert_eq!(client.url("/sys/seal-status"), "http://localhost:8200/v1/sys/seal-status");
-    }
-
-    #[test]
-    fn test_client_url_strips_trailing_slash() {
-        let client = BaoClient::new("http://localhost:8200/");
         assert_eq!(client.base_url, "http://localhost:8200");
     }
 
     #[test]
     fn test_with_token() {
         let client = BaoClient::with_token("http://localhost:8200", "mytoken");
-        assert_eq!(client.token, Some("mytoken".to_string()));
+        assert_eq!(client.inner.settings().token, "mytoken");
     }
 
     #[test]
-    fn test_new_has_no_token() {
-        let client = BaoClient::new("http://localhost:8200");
-        assert!(client.token.is_none());
+    fn test_strips_trailing_slash() {
+        let client = BaoClient::new("http://localhost:8200/");
+        assert_eq!(client.base_url, "http://localhost:8200");
     }
 
     #[tokio::test]
     async fn test_seal_status_error_on_nonexistent_server() {
-        // Connecting to a port where nothing is listening should produce an
-        // error (connection refused), not a panic or hang.
         let client = BaoClient::new("http://127.0.0.1:19999");
         let result = client.seal_status().await;
-        assert!(
-            result.is_err(),
-            "seal_status should return an error when the server is unreachable"
-        );
+        assert!(result.is_err());
     }
 }

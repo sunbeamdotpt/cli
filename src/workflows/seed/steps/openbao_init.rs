@@ -164,7 +164,7 @@ impl StepBody for InitOrUnsealOpenBao {
         let mut root_token = String::new();
 
         let status = status.unwrap_or_else(|| crate::openbao::SealStatusResponse {
-            initialized: false, sealed: true, progress: 0, t: 0, n: 0,
+            initialized: false, sealed: true,
         });
 
         // Check if truly initialized (not just a placeholder secret)
@@ -213,7 +213,7 @@ impl StepBody for InitOrUnsealOpenBao {
         // Unseal if needed
         let status = bao.seal_status().await.unwrap_or_else(|_| {
             crate::openbao::SealStatusResponse {
-                initialized: true, sealed: true, progress: 0, t: 0, n: 0,
+                initialized: true, sealed: true,
             }
         });
         if status.sealed && !unseal_key.is_empty() {
