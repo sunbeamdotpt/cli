@@ -113,10 +113,6 @@ pub async fn cmd_apply(env: &str, domain: &str, email: &str, namespace: &str) ->
     // Post-apply hooks
     if namespace.is_empty() || namespace == "matrix" {
         patch_tuwunel_oauth2_redirect(&resolved_domain).await;
-        inject_opensearch_model_id().await;
-    }
-    if namespace.is_empty() || namespace == "data" {
-        ensure_opensearch_ml().await;
     }
 
     crate::output::ok("Applied.");
@@ -463,6 +459,7 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
 // ---------------------------------------------------------------------------
 
 /// Call OpenSearch API via kube exec curl inside the opensearch pod.
+#[allow(dead_code)]
 async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> {
     let url = format!("http://localhost:9200{path}");
     let mut curl_args: Vec<&str> = vec!["curl", "-sf", &url];
@@ -491,7 +488,7 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
 }
 
 /// Inject OpenSearch model_id into matrix/opensearch-ml-config ConfigMap.
-async fn inject_opensearch_model_id() {
+pub async fn inject_opensearch_model_id() {
     let pipe_resp =
         match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await {
             Some(r) => r,
@@ -556,7 +553,7 @@ async fn inject_opensearch_model_id() {
 /// 1. Sets cluster settings to allow ML on data nodes.
 /// 2. Registers and deploys all-mpnet-base-v2 (pre-trained, 384-dim).
 /// 3. Creates ingest + search pipelines for hybrid BM25+neural scoring.
-async fn ensure_opensearch_ml() {
+pub async fn ensure_opensearch_ml() {
     if os_api("/_cluster/health", "GET", None).await.is_none() {
         crate::output::warn("OpenSearch not reachable -- skipping ML setup.");
         return;
