@@ -4,11 +4,37 @@ use std::path::PathBuf;
 static KUSTOMIZE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kustomize"));
 static HELM_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/helm"));
 
-fn cache_dir() -> PathBuf {
+/// Legacy bin cache dir — used only for migration.
+fn legacy_cache_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
         .join("sunbeam")
         .join("bin")
+}
+
+fn cache_dir() -> PathBuf {
+    let new_dir = crate::config::sunbeam_dir().join("bin");
+
+    // Migration: copy binaries from legacy location if new dir doesn't exist yet
+    if !new_dir.exists() {
+        let legacy = legacy_cache_dir();
+        if legacy.is_dir() {
+            let _ = std::fs::create_dir_all(&new_dir);
+            if let Ok(entries) = std::fs::read_dir(&legacy) {
+                for entry in entries.flatten() {
+                    let dest = new_dir.join(entry.file_name());
+                    let _ = std::fs::copy(entry.path(), &dest);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+                    }
+                }
+            }
+        }
+    }
+
+    new_dir
 }
 
 /// Extract an embedded binary to the cache directory if not already present.
@@ -94,8 +120,8 @@ mod tests {
     fn cache_dir_ends_with_sunbeam_bin() {
         let dir = cache_dir();
         assert!(
-            dir.ends_with("sunbeam/bin"),
-            "cache_dir() should end with sunbeam/bin, got: {}",
+            dir.ends_with(".sunbeam/bin"),
+            "cache_dir() should end with .sunbeam/bin, got: {}",
             dir.display()
         );
     }

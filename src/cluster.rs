@@ -1,4 +1,4 @@
-//! Cluster lifecycle — cert-manager, Linkerd, TLS, core service readiness.
+//! Cluster lifecycle — cert-manager, TLS, core service readiness.
 //!
 //! Pure K8s implementation: no Lima VM operations.
 
@@ -6,13 +6,10 @@ use crate::constants::GITEA_ADMIN_USER;
 use crate::error::{Result, ResultExt, SunbeamError};
 use std::path::PathBuf;
 
-const CERT_MANAGER_URL: &str =
+pub(crate) const CERT_MANAGER_URL: &str =
     "https://github.com/cert-manager/cert-manager/releases/download/v1.17.0/cert-manager.yaml";
 
-const GATEWAY_API_CRDS_URL: &str =
-    "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml";
-
-fn secrets_dir() -> PathBuf {
+pub(crate) fn secrets_dir() -> PathBuf {
     crate::config::get_infra_dir()
         .join("secrets")
         .join("local")
@@ -57,76 +54,10 @@ async fn ensure_cert_manager() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Linkerd
-// ---------------------------------------------------------------------------
-
-async fn ensure_linkerd() -> Result<()> {
-    crate::output::step("Linkerd...");
-
-    if crate::kube::ns_exists("linkerd").await? {
-        crate::output::ok("Already installed.");
-        return Ok(());
-    }
-
-    // Gateway API CRDs
-    crate::output::ok("Installing Gateway API CRDs...");
-    let gateway_body = reqwest::get(GATEWAY_API_CRDS_URL)
-        .await
-        .ctx("Failed to download Gateway API CRDs")?
-        .text()
-        .await?;
-
-    // Gateway API CRDs require server-side apply; kube_apply already does SSA
-    crate::kube::kube_apply(&gateway_body).await?;
-
-    // Linkerd CRDs via subprocess (no pure HTTP source for linkerd manifests)
-    crate::output::ok("Installing Linkerd CRDs...");
-    let crds_output = tokio::process::Command::new("linkerd")
-        .args(["install", "--crds"])
-        .output()
-        .await
-        .ctx("Failed to run `linkerd install --crds`")?;
-
-    if !crds_output.status.success() {
-        let stderr = String::from_utf8_lossy(&crds_output.stderr);
-        return Err(SunbeamError::tool("linkerd", format!("install --crds failed: {stderr}")));
-    }
-    let crds = String::from_utf8_lossy(&crds_output.stdout);
-    crate::kube::kube_apply(&crds).await?;
-
-    // Linkerd control plane
-    crate::output::ok("Installing Linkerd control plane...");
-    let cp_output = tokio::process::Command::new("linkerd")
-        .args(["install"])
-        .output()
-        .await
-        .ctx("Failed to run `linkerd install`")?;
-
-    if !cp_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cp_output.stderr);
-        return Err(SunbeamError::tool("linkerd", format!("install failed: {stderr}")));
-    }
-    let cp = String::from_utf8_lossy(&cp_output.stdout);
-    crate::kube::kube_apply(&cp).await?;
-
-    for dep in &[
-        "linkerd-identity",
-        "linkerd-destination",
-        "linkerd-proxy-injector",
-    ] {
-        crate::output::ok(&format!("Waiting for {dep}..."));
-        wait_rollout("linkerd", dep, 120).await?;
-    }
-
-    crate::output::ok("Installed.");
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // TLS certificate (rcgen)
 // ---------------------------------------------------------------------------
 
-async fn ensure_tls_cert(domain: &str) -> Result<()> {
+pub(crate) async fn ensure_tls_cert(domain: &str) -> Result<()> {
     crate::output::step("TLS certificate...");
 
     let dir = secrets_dir();
@@ -174,7 +105,7 @@ async fn ensure_tls_cert(domain: &str) -> Result<()> {
 // TLS secret
 // ---------------------------------------------------------------------------
 
-async fn ensure_tls_secret(domain: &str) -> Result<()> {
+pub(crate) async fn ensure_tls_secret(domain: &str) -> Result<()> {
     crate::output::step("TLS secret...");
 
     let _ = domain; // domain used contextually above; secret uses files
@@ -242,7 +173,7 @@ async fn wait_for_core() -> Result<()> {
 // Print URLs
 // ---------------------------------------------------------------------------
 
-fn print_urls(domain: &str, _gitea_admin_pass: &str) {
+pub(crate) fn print_urls(domain: &str, _gitea_admin_pass: &str) {
     let sep = "\u{2500}".repeat(60);
     println!("\n{sep}");
     println!("  Stack is up.  Domain: {domain}");
@@ -284,7 +215,7 @@ fn print_urls(domain: &str, _gitea_admin_pass: &str) {
 // ---------------------------------------------------------------------------
 
 /// Poll deployment rollout status (approximate: check Available condition).
-async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) -> Result<()> {
+pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) -> Result<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use std::time::{Duration, Instant};
 
@@ -330,7 +261,6 @@ pub async fn cmd_up() -> Result<()> {
     let domain = crate::kube::get_domain().await?;
 
     ensure_cert_manager().await?;
-    ensure_linkerd().await?;
     ensure_tls_cert(&domain).await?;
     ensure_tls_secret(&domain).await?;
 
@@ -379,22 +309,6 @@ mod tests {
         assert!(
             CERT_MANAGER_URL.contains("/v1."),
             "CERT_MANAGER_URL should reference a v1.x release"
-        );
-    }
-
-    #[test]
-    fn gateway_api_crds_url_points_to_github_release() {
-        assert!(GATEWAY_API_CRDS_URL
-            .starts_with("https://github.com/kubernetes-sigs/gateway-api/"));
-        assert!(GATEWAY_API_CRDS_URL.contains("/releases/download/"));
-        assert!(GATEWAY_API_CRDS_URL.ends_with(".yaml"));
-    }
-
-    #[test]
-    fn gateway_api_crds_url_has_version() {
-        assert!(
-            GATEWAY_API_CRDS_URL.contains("/v1."),
-            "GATEWAY_API_CRDS_URL should reference a v1.x release"
         );
     }
 

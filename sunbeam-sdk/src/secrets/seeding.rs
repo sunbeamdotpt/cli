@@ -454,6 +454,17 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
     )
     .await?;
 
+    let stalwart = get_or_create(
+        &bao,
+        "stalwart",
+        &[
+            ("admin-password", &rand_token as &dyn Fn() -> String),
+            ("dkim-private-key", &empty_fn),
+        ],
+        &mut dirty_paths,
+    )
+    .await?;
+
     let admin_fn = || "admin".to_string();
     let collabora = get_or_create(
         &bao,
@@ -531,6 +542,7 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
             ("projects", &projects),
             ("calendars", &calendars),
             ("messages", &messages),
+            ("stalwart", &stalwart),
             ("collabora", &collabora),
             ("tuwunel", &tuwunel),
             ("grafana", &grafana),
@@ -606,7 +618,7 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
         "auth/kubernetes/role/vso",
         &serde_json::json!({
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,matrix,media,data,monitoring",
+            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,stalwart,matrix,media,data,monitoring",
             "policies": "vso-reader",
             "ttl": "1h"
         }),

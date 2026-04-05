@@ -51,11 +51,8 @@ pub enum SyncStatus {
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// Base directory for vault keystore files.
-fn base_dir(override_dir: Option<&Path>) -> PathBuf {
-    if let Some(d) = override_dir {
-        return d.to_path_buf();
-    }
+/// Legacy vault dir — used only for migration.
+fn legacy_vault_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| {
             dirs::home_dir()
@@ -64,6 +61,41 @@ fn base_dir(override_dir: Option<&Path>) -> PathBuf {
         })
         .join("sunbeam")
         .join("vault")
+}
+
+/// Base directory for vault keystore files: ~/.sunbeam/vault/
+fn base_dir(override_dir: Option<&Path>) -> PathBuf {
+    if let Some(d) = override_dir {
+        return d.to_path_buf();
+    }
+    let new_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".sunbeam")
+        .join("vault");
+
+    // Migration: copy files from legacy location if new dir doesn't exist yet
+    if !new_dir.exists() {
+        let legacy = legacy_vault_dir();
+        if legacy.is_dir() {
+            let _ = std::fs::create_dir_all(&new_dir);
+            if let Ok(entries) = std::fs::read_dir(&legacy) {
+                for entry in entries.flatten() {
+                    let dest = new_dir.join(entry.file_name());
+                    let _ = std::fs::copy(entry.path(), &dest);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(
+                            &dest,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    new_dir
 }
 
 /// Path to the encrypted keystore file for a domain.
@@ -83,6 +115,11 @@ pub fn keystore_exists(domain: &str) -> bool {
     keystore_path(domain).exists()
 }
 
+/// Whether a keystore exists in a specific directory (context-aware).
+pub fn keystore_exists_at(domain: &str, dir: &Path) -> bool {
+    keystore_path_in(domain, Some(dir)).exists()
+}
+
 fn keystore_exists_in(domain: &str, dir: Option<&Path>) -> bool {
     keystore_path_in(domain, dir).exists()
 }
@@ -92,7 +129,13 @@ fn keystore_exists_in(domain: &str, dir: Option<&Path>) -> bool {
 // ---------------------------------------------------------------------------
 
 fn machine_salt_path(override_dir: Option<&Path>) -> PathBuf {
-    base_dir(override_dir).join(".machine-salt")
+    if let Some(d) = override_dir {
+        return d.join(".machine-salt");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".sunbeam")
+        .join(".machine-salt")
 }
 
 fn load_or_create_machine_salt(override_dir: Option<&Path>) -> Result<Vec<u8>> {
@@ -203,9 +246,14 @@ fn decrypt(data: &[u8], domain: &str, override_dir: Option<&Path>) -> Result<Vec
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Save a keystore, encrypted, to the local filesystem.
+/// Save a keystore, encrypted, to the local filesystem (default dir).
 pub fn save_keystore(ks: &VaultKeystore) -> Result<()> {
     save_keystore_in(ks, None)
+}
+
+/// Save a keystore to a specific directory (context-aware).
+pub fn save_keystore_to(ks: &VaultKeystore, dir: &Path) -> Result<()> {
+    save_keystore_in(ks, Some(dir))
 }
 
 fn save_keystore_in(ks: &VaultKeystore, override_dir: Option<&Path>) -> Result<()> {
@@ -235,9 +283,14 @@ fn save_keystore_in(ks: &VaultKeystore, override_dir: Option<&Path>) -> Result<(
     Ok(())
 }
 
-/// Load and decrypt a keystore from the local filesystem.
+/// Load and decrypt a keystore from the local filesystem (default dir).
 pub fn load_keystore(domain: &str) -> Result<VaultKeystore> {
     load_keystore_in(domain, None)
+}
+
+/// Load a keystore from a specific directory (context-aware).
+pub fn load_keystore_from(domain: &str, dir: &Path) -> Result<VaultKeystore> {
+    load_keystore_in(domain, Some(dir))
 }
 
 fn load_keystore_in(domain: &str, override_dir: Option<&Path>) -> Result<VaultKeystore> {
@@ -273,6 +326,11 @@ fn load_keystore_in(domain: &str, override_dir: Option<&Path>) -> Result<VaultKe
 /// Load and validate a keystore — fails if any critical fields are empty.
 pub fn verify_vault_keys(domain: &str) -> Result<VaultKeystore> {
     verify_vault_keys_in(domain, None)
+}
+
+/// Verify vault keys from a specific directory (context-aware).
+pub fn verify_vault_keys_from(domain: &str, dir: &Path) -> Result<VaultKeystore> {
+    verify_vault_keys_in(domain, Some(dir))
 }
 
 fn verify_vault_keys_in(domain: &str, override_dir: Option<&Path>) -> Result<VaultKeystore> {
