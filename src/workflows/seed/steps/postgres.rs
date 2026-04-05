@@ -13,7 +13,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::kube as k;
 use crate::openbao::BaoClient;
 use crate::output::{ok, warn};
-use crate::secrets::{self, PG_USERS};
+use crate::secrets;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -38,6 +38,7 @@ pub(crate) fn pg_db_map() -> HashMap<&'static str, &'static str> {
         ("conversations", "conversations_db"), ("people", "people_db"),
         ("find", "find_db"), ("calendars", "calendars_db"), ("projects", "projects_db"),
         ("penpot", "penpot_db"),
+        ("stalwart", "stalwart_db"),
     ].into_iter().collect()
 }
 
@@ -117,48 +118,6 @@ impl StepBody for WaitForPostgres {
             result.output_data = Some(serde_json::json!({ "pg_pod": pg_pod }));
         }
         Ok(result)
-    }
-}
-
-// ── EnsurePGRolesAndDatabases ───────────────────────────────────────────────
-
-/// Create all 13 users and databases.
-///
-/// Reads: `skip_seed`, `pg_pod`
-#[derive(Default)]
-pub struct EnsurePGRolesAndDatabases;
-
-#[async_trait::async_trait]
-impl StepBody for EnsurePGRolesAndDatabases {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        let data = &ctx.workflow.data;
-
-        if json_bool(data, "skip_seed") {
-            return Ok(ExecutionResult::next());
-        }
-
-        let pg_pod = match json_str(data, "pg_pod") {
-            Some(p) if !p.is_empty() => p,
-            _ => return Ok(ExecutionResult::next()),
-        };
-
-        ok("Ensuring postgres roles and databases exist...");
-
-        let db_map = pg_db_map();
-
-        for user in PG_USERS {
-            let sql = ensure_user_sql(user);
-            let _ = k::kube_exec("data", &pg_pod, &["psql", "-U", "postgres", "-c", &sql], Some("postgres")).await;
-
-            let db = db_map.get(user).copied().unwrap_or("unknown_db");
-            let sql = create_db_sql(db, user);
-            let _ = k::kube_exec("data", &pg_pod, &["psql", "-U", "postgres", "-c", &sql], Some("postgres")).await;
-        }
-
-        Ok(ExecutionResult::next())
     }
 }
 
@@ -245,18 +204,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ensure_pg_roles_skip_seed() {
-        let instance = run_step::<EnsurePGRolesAndDatabases>(serde_json::json!({ "skip_seed": true })).await;
-        assert_eq!(instance.status, WorkflowStatus::Complete);
-    }
-
-    #[tokio::test]
-    async fn test_ensure_pg_roles_no_pg_pod() {
-        let instance = run_step::<EnsurePGRolesAndDatabases>(serde_json::json!({ "skip_seed": false })).await;
-        assert_eq!(instance.status, WorkflowStatus::Complete);
-    }
-
-    #[tokio::test]
     async fn test_configure_db_engine_skip_seed() {
         let instance = run_step::<ConfigureDatabaseEngine>(serde_json::json!({ "skip_seed": true })).await;
         assert_eq!(instance.status, WorkflowStatus::Complete);
@@ -271,8 +218,8 @@ mod tests {
     #[test]
     fn test_pg_db_map_contains_all_users() {
         let map = pg_db_map();
-        assert_eq!(map.len(), 13);
-        for user in PG_USERS {
+        assert_eq!(map.len(), 15);
+        for user in crate::secrets::PG_USERS {
             assert!(map.contains_key(user), "pg_db_map missing key for: {user}");
         }
     }
