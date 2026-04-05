@@ -1,1 +1,0 @@
-{"name":"leb128fmt","vers":"0.1.0","deps":[],"features":{"alloc":[],"default":["std"],"std":[]},"features2":null,"cksum":"ed3c49e62299f078e0b484e49ecae3e0a794f93f3fdd2ae89466259eab5dcd9d","yanked":null,"links":null,"rust_version":null,"v":2}

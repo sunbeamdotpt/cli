@@ -1,1 +1,0 @@
-{"name":"minimal-lexical","vers":"0.2.1","deps":[],"features":{"alloc":[],"compact":[],"default":["std"],"lint":[],"nightly":[],"std":[]},"features2":null,"cksum":"de4fd86de3ccf9877264253f9972e4860539bf20e82c94f0d9cce08c4b006069","yanked":null,"links":null,"rust_version":null,"v":2}
