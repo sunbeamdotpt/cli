@@ -1,0 +1,411 @@
+//! Steps for the verify workflow — VSO ↔ OpenBao E2E verification.
+
+use wfe_core::models::ExecutionResult;
+use wfe_core::traits::{StepBody, StepExecutionContext};
+
+use crate::kube as k;
+use crate::openbao::BaoClient;
+use crate::output::{ok, warn};
+use crate::secrets;
+use crate::workflows::data::VerifyData;
+
+const TEST_NS: &str = "ory";
+const TEST_NAME: &str = "vso-verify";
+
+fn load_data(ctx: &StepExecutionContext<'_>) -> wfe_core::Result<VerifyData> {
+    serde_json::from_value(ctx.workflow.data.clone())
+        .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))
+}
+
+fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
+    wfe_core::WfeError::StepExecution(msg.into())
+}
+
+// ── FindOpenBaoPod ─────────────────────────────────────────────────────────
+
+/// Find the OpenBao server pod by label selector.
+#[derive(Default)]
+pub struct FindOpenBaoPod;
+
+#[async_trait::async_trait]
+impl StepBody for FindOpenBaoPod {
+    async fn run(
+        &mut self,
+        ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        let data = load_data(ctx)?;
+        let step_ctx = data.ctx.as_ref()
+            .ok_or_else(|| step_err("missing __ctx in workflow data"))?;
+
+        k::set_context(&step_ctx.kube_context, &step_ctx.ssh_host);
+
+        let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
+        let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
+            kube::Api::namespaced(client.clone(), "data");
+        let lp = kube::api::ListParams::default()
+            .labels("app.kubernetes.io/name=openbao,component=server");
+        let pod_list = pods.list(&lp).await.map_err(|e| step_err(e.to_string()))?;
+
+        let ob_pod = pod_list
+            .items
+            .first()
+            .and_then(|p| p.metadata.name.as_deref())
+            .ok_or_else(|| step_err("OpenBao pod not found -- run full bring-up first"))?;
+
+        ok(&format!("OpenBao pod: {ob_pod}"));
+
+        let mut result = ExecutionResult::next();
+        result.output_data = Some(serde_json::json!({ "ob_pod": ob_pod }));
+        Ok(result)
+    }
+}
+
+// ── GetRootToken ───────────────────────────────────────────────────────────
+
+/// Read the root token from the openbao-keys K8s secret.
+#[derive(Default)]
+pub struct GetRootToken;
+
+#[async_trait::async_trait]
+impl StepBody for GetRootToken {
+    async fn run(
+        &mut self,
+        _ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        let root_token = k::kube_get_secret_field("data", "openbao-keys", "root-token")
+            .await
+            .map_err(|e| step_err(format!("Could not read openbao-keys secret: {e}")))?;
+
+        ok("Root token retrieved.");
+
+        let mut result = ExecutionResult::next();
+        result.output_data = Some(serde_json::json!({ "root_token": root_token }));
+        Ok(result)
+    }
+}
+
+// ── WriteSentinel ──────────────────────────────────────────────────────────
+
+/// Write a random test sentinel value to OpenBao secret/vso-test.
+#[derive(Default)]
+pub struct WriteSentinel;
+
+#[async_trait::async_trait]
+impl StepBody for WriteSentinel {
+    async fn run(
+        &mut self,
+        ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        let data = load_data(ctx)?;
+        let ob_pod = data.ob_pod.as_deref()
+            .ok_or_else(|| step_err("ob_pod not set"))?;
+        let root_token = data.root_token.as_deref()
+            .ok_or_else(|| step_err("root_token not set"))?;
+
+        let pf = secrets::port_forward("data", ob_pod, 8200).await
+            .map_err(|e| step_err(e.to_string()))?;
+        let bao = BaoClient::with_token(
+            &format!("http://127.0.0.1:{}", pf.local_port),
+            root_token,
+        );
+
+        let test_value = secrets::rand_token_n(16);
+        ok("Writing test sentinel to OpenBao secret/vso-test...");
+
+        let mut kv_data = std::collections::HashMap::new();
+        kv_data.insert("test-key".to_string(), test_value.clone());
+        bao.kv_put("secret", "vso-test", &kv_data).await
+            .map_err(|e| step_err(e.to_string()))?;
+
+        let mut result = ExecutionResult::next();
+        result.output_data = Some(serde_json::json!({ "test_value": test_value }));
+        Ok(result)
+    }
+}
+
+// ── ApplyVaultAuth ─────────────────────────────────────────────────────────
+
+/// Create the VaultAuth CRD for the test.
+#[derive(Default)]
+pub struct ApplyVaultAuth;
+
+#[async_trait::async_trait]
+impl StepBody for ApplyVaultAuth {
+    async fn run(
+        &mut self,
+        _ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        ok(&format!("Creating VaultAuth {TEST_NS}/{TEST_NAME}..."));
+        k::kube_apply(&format!(
+            r#"
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: {TEST_NAME}
+  namespace: {TEST_NS}
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso
+    serviceAccount: default
+"#
+        ))
+        .await
+        .map_err(|e| step_err(e.to_string()))?;
+
+        Ok(ExecutionResult::next())
+    }
+}
+
+// ── ApplyVaultStaticSecret ─────────────────────────────────────────────────
+
+/// Create the VaultStaticSecret CRD that VSO will sync.
+#[derive(Default)]
+pub struct ApplyVaultStaticSecret;
+
+#[async_trait::async_trait]
+impl StepBody for ApplyVaultStaticSecret {
+    async fn run(
+        &mut self,
+        _ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        ok(&format!("Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}..."));
+        k::kube_apply(&format!(
+            r#"
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: {TEST_NAME}
+  namespace: {TEST_NS}
+spec:
+  vaultAuthRef: {TEST_NAME}
+  mount: secret
+  type: kv-v2
+  path: vso-test
+  refreshAfter: 10s
+  destination:
+    name: {TEST_NAME}
+    create: true
+    overwrite: true
+"#
+        ))
+        .await
+        .map_err(|e| step_err(e.to_string()))?;
+
+        Ok(ExecutionResult::next())
+    }
+}
+
+// ── WaitForSync ────────────────────────────────────────────────────────────
+
+/// Wait for VSO to sync the secret (up to 60s).
+#[derive(Default)]
+pub struct WaitForSync;
+
+#[async_trait::async_trait]
+impl StepBody for WaitForSync {
+    async fn run(
+        &mut self,
+        _ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        ok("Waiting for VSO to sync (up to 60s)...");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut synced = false;
+
+        while tokio::time::Instant::now() < deadline {
+            let (code, mac) = kubectl_jsonpath(
+                TEST_NS,
+                "vaultstaticsecret",
+                TEST_NAME,
+                "{.status.secretMAC}",
+            )
+            .await;
+            if code == 0 && !mac.is_empty() && mac != "<none>" {
+                synced = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+
+        if !synced {
+            let (_, msg) = kubectl_jsonpath(
+                TEST_NS,
+                "vaultstaticsecret",
+                TEST_NAME,
+                "{.status.conditions[0].message}",
+            )
+            .await;
+            return Err(step_err(format!(
+                "VSO did not sync within 60s. Last status: {}",
+                if msg.is_empty() { "unknown".to_string() } else { msg }
+            )));
+        }
+
+        let mut result = ExecutionResult::next();
+        result.output_data = Some(serde_json::json!({ "synced": true }));
+        Ok(result)
+    }
+}
+
+// ── CheckSecretValue ───────────────────────────────────────────────────────
+
+/// Verify the K8s Secret contains the expected sentinel value.
+#[derive(Default)]
+pub struct CheckSecretValue;
+
+#[async_trait::async_trait]
+impl StepBody for CheckSecretValue {
+    async fn run(
+        &mut self,
+        ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        let data = load_data(ctx)?;
+        let test_value = data.test_value.as_deref()
+            .ok_or_else(|| step_err("test_value not set"))?;
+
+        ok("Verifying K8s Secret contents...");
+
+        let secret = k::kube_get_secret(TEST_NS, TEST_NAME)
+            .await
+            .map_err(|e| step_err(e.to_string()))?
+            .ok_or_else(|| step_err(format!("K8s Secret {TEST_NS}/{TEST_NAME} not found")))?;
+
+        let secret_data = secret.data.as_ref()
+            .ok_or_else(|| step_err("Secret has no data"))?;
+        let raw = secret_data.get("test-key")
+            .ok_or_else(|| step_err("Missing key 'test-key' in secret"))?;
+        let actual = String::from_utf8(raw.0.clone())
+            .map_err(|e| step_err(format!("UTF-8 error: {e}")))?;
+
+        if actual != test_value {
+            return Err(step_err(format!(
+                "Value mismatch!\n  expected: {:?}\n  got:      {:?}",
+                test_value, actual
+            )));
+        }
+
+        ok("Sentinel value matches -- VSO -> OpenBao integration is working.");
+        Ok(ExecutionResult::next())
+    }
+}
+
+// ── Cleanup ────────────────────────────────────────────────────────────────
+
+/// Clean up all test resources (always runs).
+#[derive(Default)]
+pub struct Cleanup;
+
+#[async_trait::async_trait]
+impl StepBody for Cleanup {
+    async fn run(
+        &mut self,
+        ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        ok("Cleaning up test resources...");
+
+        let _ = secrets::delete_resource(TEST_NS, "vaultstaticsecret", TEST_NAME).await;
+        let _ = secrets::delete_resource(TEST_NS, "vaultauth", TEST_NAME).await;
+
+        // Delete the K8s Secret
+        if let Ok(client) = k::get_client().await {
+            let api: kube::Api<k8s_openapi::api::core::v1::Secret> =
+                kube::Api::namespaced(client.clone(), TEST_NS);
+            let _ = api.delete(TEST_NAME, &kube::api::DeleteParams::default()).await;
+        }
+
+        // Delete the vault KV entry
+        let data = load_data(ctx)?;
+        if let (Some(ob_pod), Some(root_token)) = (data.ob_pod.as_deref(), data.root_token.as_deref()) {
+            if let Ok(pf) = secrets::port_forward("data", ob_pod, 8200).await {
+                let bao = BaoClient::with_token(
+                    &format!("http://127.0.0.1:{}", pf.local_port),
+                    root_token,
+                );
+                let _ = bao.kv_delete("secret", "vso-test").await;
+            }
+        }
+
+        Ok(ExecutionResult::next())
+    }
+}
+
+// ── PrintResult ────────────────────────────────────────────────────────────
+
+/// Print final verification result.
+#[derive(Default)]
+pub struct PrintResult;
+
+#[async_trait::async_trait]
+impl StepBody for PrintResult {
+    async fn run(
+        &mut self,
+        ctx: &StepExecutionContext<'_>,
+    ) -> wfe_core::Result<ExecutionResult> {
+        let data = load_data(ctx)?;
+        if data.synced {
+            ok("VSO E2E verification passed.");
+        } else {
+            warn("VSO verification did not complete successfully.");
+        }
+        Ok(ExecutionResult::next())
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+async fn kubectl_jsonpath(ns: &str, kind: &str, name: &str, jsonpath: &str) -> (i32, String) {
+    let ctx = format!("--context={}", k::context());
+    let jp = format!("-o=jsonpath={jsonpath}");
+    match tokio::process::Command::new("kubectl")
+        .args([&ctx, "-n", ns, "get", kind, name, &jp, "--ignore-not-found"])
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (code, stdout)
+        }
+        Err(_) => (1, String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_openbao_pod_is_default() { let _ = FindOpenBaoPod::default(); }
+
+    #[test]
+    fn get_root_token_is_default() { let _ = GetRootToken::default(); }
+
+    #[test]
+    fn write_sentinel_is_default() { let _ = WriteSentinel::default(); }
+
+    #[test]
+    fn apply_vault_auth_is_default() { let _ = ApplyVaultAuth::default(); }
+
+    #[test]
+    fn apply_vault_static_secret_is_default() { let _ = ApplyVaultStaticSecret::default(); }
+
+    #[test]
+    fn wait_for_sync_is_default() { let _ = WaitForSync::default(); }
+
+    #[test]
+    fn check_secret_value_is_default() { let _ = CheckSecretValue::default(); }
+
+    #[test]
+    fn cleanup_is_default() { let _ = Cleanup::default(); }
+
+    #[test]
+    fn print_result_is_default() { let _ = PrintResult::default(); }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(TEST_NS, "ory");
+        assert_eq!(TEST_NAME, "vso-verify");
+    }
+}

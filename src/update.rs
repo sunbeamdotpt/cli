@@ -56,10 +56,7 @@ fn forge_url() -> String {
 
 /// Cache file location for background update checks.
 fn update_cache_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local/share"))
-        .join("sunbeam")
-        .join("update-check.json")
+    crate::config::sunbeam_dir().join("update-check.json")
 }
 
 // ---------------------------------------------------------------------------

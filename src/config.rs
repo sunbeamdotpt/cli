@@ -81,19 +81,60 @@ pub fn domain() -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Central path helpers — all sunbeam state lives under ~/.sunbeam/
+// ---------------------------------------------------------------------------
+
+/// Base directory for all sunbeam state: ~/.sunbeam/
+pub fn sunbeam_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".sunbeam")
+}
+
+/// Context-specific directory: ~/.sunbeam/{context}/
+pub fn context_dir(context_name: &str) -> PathBuf {
+    let name = if context_name.is_empty() { "default" } else { context_name };
+    sunbeam_dir().join(name)
+}
+
+// ---------------------------------------------------------------------------
 // Config file I/O
 // ---------------------------------------------------------------------------
 
 fn config_path() -> PathBuf {
+    sunbeam_dir().join("config.json")
+}
+
+/// Legacy config path (~/.sunbeam.json) — used only for migration.
+fn legacy_config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".sunbeam.json")
 }
 
-/// Load configuration from ~/.sunbeam.json, return default if not found.
+/// Load configuration, return default if not found.
+/// Migrates legacy ~/.sunbeam.json → ~/.sunbeam/config.json on first load.
 /// Migrates legacy flat config to context-based format.
 pub fn load_config() -> SunbeamConfig {
     let path = config_path();
+
+    // Migration: move legacy ~/.sunbeam.json → ~/.sunbeam/config.json
+    if !path.exists() {
+        let legacy = legacy_config_path();
+        if legacy.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::copy(&legacy, &path).is_ok() {
+                crate::output::ok(&format!(
+                    "Migrated config: {} → {}",
+                    legacy.display(),
+                    path.display()
+                ));
+            }
+        }
+    }
+
     if !path.exists() {
         return SunbeamConfig::default();
     }

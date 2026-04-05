@@ -19,6 +19,7 @@ mod services;
 mod tools;
 mod update;
 mod users;
+mod workflows;
 
 #[tokio::main]
 async fn main() {

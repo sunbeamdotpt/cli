@@ -309,7 +309,7 @@ pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) 
 pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
     let client = get_client().await.ok()?;
     let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
-        kube::Api::namespaced(client, ns);
+        kube::Api::namespaced(client.clone(), ns);
     let lp = kube::api::ListParams::default().labels(label);
     let pod_list = pods.list(&lp).await.ok()?;
     pod_list

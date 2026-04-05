@@ -39,6 +39,8 @@ const PG_USERS: &[&str] = &[
     "find",
     "calendars",
     "projects",
+    "penpot",
+    "stalwart",
 ];
 
 const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
@@ -1044,9 +1046,9 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 13);
+        assert_eq!(PG_USERS.len(), 15);
         assert!(PG_USERS.contains(&"kratos"));
-        assert!(PG_USERS.contains(&"projects"));
+        assert!(PG_USERS.contains(&"stalwart"));
     }
 
     #[test]
@@ -1109,6 +1111,8 @@ mod tests {
             "find",
             "calendars",
             "projects",
+            "penpot",
+            "stalwart",
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }

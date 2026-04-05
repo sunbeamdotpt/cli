@@ -921,7 +921,7 @@ pub async fn dispatch() -> Result<()> {
             let instance = wfe::run_workflow_sync(
                 &host,
                 "up",
-                1,
+                2,
                 initial_data,
                 std::time::Duration::from_secs(3600),
             )
@@ -1005,7 +1005,7 @@ pub async fn dispatch() -> Result<()> {
             let instance = wfe::run_workflow_sync(
                 &host,
                 "seed",
-                1,
+                2,
                 initial_data,
                 std::time::Duration::from_secs(900),
             )
