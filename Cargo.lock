@@ -117,7 +117,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -128,7 +128,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1045,7 +1045,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2228,7 +2228,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3187,7 +3187,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3578,7 +3578,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4028,7 +4028,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4661,9 +4661,9 @@ dependencies = [
 
 [[package]]
 name = "wfe"
-version = "1.6.2"
+version = "1.6.3"
 source = "sparse+https://src.sunbeam.pt/api/packages/studio/cargo/"
-checksum = "9634469c5e6c76f480d505cbe48df5e993b4d4bc69174d70099740be19b5858b"
+checksum = "897708db73bc9ec449c3cccbfc8e6ced7d2c89c772ce341660046f346e02ce50"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4680,9 +4680,9 @@ dependencies = [
 
 [[package]]
 name = "wfe-core"
-version = "1.6.2"
+version = "1.6.3"
 source = "sparse+https://src.sunbeam.pt/api/packages/studio/cargo/"
-checksum = "cd141154a5082c6f13f025599bbaa1fa0e0b04b807dc448d36ce2d324054b532"
+checksum = "5df2f270fb160dc44e7baf57cbe66860578928e545fcbd5819ff2dea820d6a60"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4697,9 +4697,9 @@ dependencies = [
 
 [[package]]
 name = "wfe-sqlite"
-version = "1.6.2"
+version = "1.6.3"
 source = "sparse+https://src.sunbeam.pt/api/packages/studio/cargo/"
-checksum = "b5d6bf0ef47e3290bcf9b69844f8ad4e9844c47e676a73990e8c07ab9843e554"
+checksum = "5b863e4617bc5d525ab03b56dd15622f271a15fc86f3bc9eef2e0799048b946e"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4715,9 +4715,9 @@ dependencies = [
 
 [[package]]
 name = "wfe-yaml"
-version = "1.6.2"
+version = "1.6.3"
 source = "sparse+https://src.sunbeam.pt/api/packages/studio/cargo/"
-checksum = "ee81e97065a8a53964796d6f0c5d035a84f6632bb8847343c145a5323ff27608"
+checksum = "ea332e58ad92b49105e567531f96be776893540ae6a8299f9720c5d024fc9438"
 dependencies = [
  "async-trait",
  "chrono",
