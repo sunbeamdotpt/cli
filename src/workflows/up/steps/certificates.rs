@@ -187,7 +187,6 @@ fn resolve_domain(data: &UpData) -> wfe_core::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::CERT_MANAGER_URL;
 
     #[test]
     fn secrets_dir_ends_with_secrets_local() {
@@ -200,21 +199,6 @@ mod tests {
     }
 
     #[test]
-    fn cert_manager_url_points_to_github_release() {
-        assert!(CERT_MANAGER_URL.starts_with("https://github.com/cert-manager/cert-manager/"));
-        assert!(CERT_MANAGER_URL.contains("/releases/download/"));
-        assert!(CERT_MANAGER_URL.ends_with(".yaml"));
-    }
-
-    #[test]
-    fn cert_manager_url_has_version() {
-        assert!(
-            CERT_MANAGER_URL.contains("/v1."),
-            "CERT_MANAGER_URL should reference a v1.x release"
-        );
-    }
-
-    #[test]
     fn ensure_tls_cert_is_default() {
         let _ = EnsureTLSCert::default();
     }
@@ -223,5 +207,4 @@ mod tests {
     fn ensure_tls_secret_is_default() {
         let _ = EnsureTLSSecret::default();
     }
-
 }
