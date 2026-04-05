@@ -181,7 +181,7 @@ impl StepBody for InitOrUnsealOpenBao {
             ok("Initializing OpenBao...");
             match bao.init(1, 1).await {
                 Ok(init) => {
-                    unseal_key = init.unseal_keys_b64[0].clone();
+                    unseal_key = init.keys_base64[0].clone();
                     root_token = init.root_token.clone();
                     let mut secret_data = HashMap::new();
                     secret_data.insert("key".to_string(), unseal_key.clone());

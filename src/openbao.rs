@@ -19,7 +19,8 @@ pub struct BaoClient {
 
 #[derive(Debug, Deserialize)]
 pub struct InitResponse {
-    pub unseal_keys_b64: Vec<String>,
+    #[serde(alias = "unseal_keys_b64")]
+    pub keys_base64: Vec<String>,
     pub root_token: String,
 }
 
