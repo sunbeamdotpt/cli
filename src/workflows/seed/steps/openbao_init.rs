@@ -88,6 +88,16 @@ impl StepBody for WaitPodRunning {
             None => return Ok(ExecutionResult::next()),
         };
 
+        // Ensure openbao-keys secret exists (even as placeholder) so the pod
+        // can mount it. InitOrUnsealOpenBao will overwrite with real values.
+        if k::kube_get_secret_field("data", "openbao-keys", "key").await.is_err() {
+            let placeholder = std::collections::HashMap::from([
+                ("key".to_string(), "placeholder".to_string()),
+                ("root-token".to_string(), "placeholder".to_string()),
+            ]);
+            let _ = k::create_secret("data", "openbao-keys", placeholder).await;
+        }
+
         let _ = secrets::wait_pod_running("data", &ob_pod, 300).await;
 
         Ok(ExecutionResult::next())
