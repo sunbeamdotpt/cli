@@ -69,6 +69,9 @@ tempfile = "3"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
+# OpenBao/Vault client
+vaultrs = "0.8"
+
 # Workflow engine
 wfe = { version = "1.6.3", registry = "sunbeam" }
 wfe-core = { version = "1.6.3", registry = "sunbeam", features = ["test-support"] }
