@@ -15,6 +15,7 @@ pub mod manifests;
 pub mod openbao;
 pub mod output;
 pub mod pm;
+pub mod registry;
 pub mod secrets;
 pub mod services;
 pub mod update;
