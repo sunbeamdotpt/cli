@@ -72,6 +72,23 @@ pub struct Context {
     /// empty, falls back to a static fallback address.
     #[serde(default, rename = "vpn-cluster-host", skip_serializing_if = "String::is_empty")]
     pub vpn_cluster_host: String,
+
+    /// Headscale API key for `sunbeam vpn create-key` and other admin
+    /// commands. Generated once via `headscale apikeys create`. Stored
+    /// in plain text — keep this file readable only by the user.
+    #[serde(default, rename = "vpn-api-key", skip_serializing_if = "String::is_empty")]
+    pub vpn_api_key: String,
+
+    /// Skip TLS certificate verification when talking to the VPN
+    /// coordination server (control plane, DERP relay, REST API).
+    /// Only set this for test stacks with self-signed certs — leave
+    /// false for production.
+    #[serde(default, rename = "vpn-tls-insecure", skip_serializing_if = "is_false")]
+    pub vpn_tls_insecure: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // ---------------------------------------------------------------------------
