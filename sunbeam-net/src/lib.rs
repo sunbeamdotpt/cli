@@ -3,6 +3,7 @@
 pub mod config;
 pub mod error;
 pub mod keys;
+pub mod noise;
 pub(crate) mod proto;
 
 pub use config::VpnConfig;
