@@ -18,11 +18,13 @@ services:
     image: headscale/headscale:0.23
     command: serve
     ports:
-      - "8080:8080"   # control plane (TS2021 Noise + HTTP API)
+      - "8443:8443"   # control plane + embedded DERP, both over TLS
       - "3478:3478/udp" # STUN
       - "9090:9090"   # metrics
     volumes:
       - ./config/headscale.yaml:/etc/headscale/config.yaml:ro
+      - ./config/test-cert.pem:/etc/headscale/test-cert.pem:ro
+      - ./config/test-key.pem:/etc/headscale/test-key.pem:ro
       - headscale-data:/var/lib/headscale
     healthcheck:
       test: ["CMD", "headscale", "nodes", "list"]
@@ -46,11 +48,15 @@ services:
       TS_AUTHKEY: "${PEER_A_AUTH_KEY}"
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "false"
-      TS_EXTRA_ARGS: --login-server=http://headscale:8080
+      TS_EXTRA_ARGS: --login-server=https://headscale:8443
       # Pin the WireGuard listen port (passed to tailscaled itself) so we
       # can publish it to the host — without this our test daemon (running
       # outside docker) can't reach peer-a's UDP endpoint.
       TS_TAILSCALED_EXTRA_ARGS: --port=41641
+      # Trust the self-signed test cert so the tailscale Go client can
+      # verify HTTPS connections to headscale + the embedded DERP. Go
+      # honors SSL_CERT_FILE for net/http TLS verification.
+      SSL_CERT_FILE: /etc/headscale/test-cert.pem
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -60,6 +66,7 @@ services:
       - "41641:41641/udp"
     volumes:
       - peer-a-state:/var/lib/tailscale
+      - ./config/test-cert.pem:/etc/headscale/test-cert.pem:ro
     # Tailscale doesn't have a great healthcheck, but it registers fast
     healthcheck:
       test: ["CMD", "tailscale", "status", "--json"]
@@ -78,7 +85,8 @@ services:
       TS_AUTHKEY: "${PEER_B_AUTH_KEY}"
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "false"
-      TS_EXTRA_ARGS: --login-server=http://headscale:8080
+      TS_EXTRA_ARGS: --login-server=https://headscale:8443
+      SSL_CERT_FILE: /etc/headscale/test-cert.pem
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -86,6 +94,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - peer-b-state:/var/lib/tailscale
+      - ./config/test-cert.pem:/etc/headscale/test-cert.pem:ro
     healthcheck:
       test: ["CMD", "tailscale", "status", "--json"]
       interval: 5s

@@ -38,6 +38,7 @@ async fn test_register_and_receive_netmap() {
         control_socket: state_dir.path().join("test.sock"),
         hostname: "sunbeam-net-test".into(),
         server_public_key: None,
+        derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
     };
 
     let keys = sunbeam_net::keys::NodeKeys::load_or_generate(&config.state_dir).unwrap();
@@ -107,6 +108,7 @@ async fn test_proxy_listener_accepts() {
         control_socket: state_dir.path().join("proxy.sock"),
         hostname: "sunbeam-net-proxy-test".into(),
         server_public_key: None,
+        derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config).await.unwrap();
@@ -132,24 +134,24 @@ async fn test_proxy_listener_accepts() {
 /// End-to-end: bring up the daemon, dial peer-a's echo server through the
 /// proxy, and assert we get bytes back across the WireGuard tunnel.
 ///
-/// **Currently ignored** because the docker-compose test stack runs Headscale
-/// over plain HTTP, but Tailscale's official client unconditionally tries to
-/// connect to DERP relays over TLS:
-///
-///     derp.Recv(derp-999): connect to region 999: tls: first record does
-///     not look like a TLS handshake
-///
-/// So peer-a can never receive WireGuard packets we forward via the relay,
-/// and we have no other reachable transport from the host into the docker
-/// network. Unblocking this requires either: (a) generating a self-signed
-/// cert, configuring Headscale + DERP for TLS, and teaching DerpClient to
-/// negotiate TLS; or (b) running the test daemon inside the same docker
-/// network as peer-a so direct UDP works without relays. Tracked separately.
+/// Requires the docker-compose stack with TUN-mode peers + TLS Headscale
+/// (sunbeam-net/tests/run.sh handles the setup). The test enables
+/// `derp_tls_insecure` because the test stack uses a self-signed cert.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "blocked on TLS DERP — see comment"]
 async fn test_e2e_tcp_through_tunnel() {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Try to install a tracing subscriber so the daemon's logs reach
+    // stderr when the test is run with `cargo test -- --nocapture`. Ignore
+    // failures (already installed by another test).
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("sunbeam_net=trace")),
+        )
+        .with_test_writer()
+        .try_init();
 
     let coord_url = require_env("SUNBEAM_NET_TEST_COORD_URL");
     let auth_key = require_env("SUNBEAM_NET_TEST_AUTH_KEY");
@@ -171,6 +173,8 @@ async fn test_e2e_tcp_through_tunnel() {
         control_socket: state_dir.path().join("e2e.sock"),
         hostname: "sunbeam-net-e2e-test".into(),
         server_public_key: None,
+        // Test stack uses a self-signed cert.
+        derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config)
@@ -252,6 +256,7 @@ async fn test_daemon_lifecycle() {
         control_socket: state_dir.path().join("daemon.sock"),
         hostname: "sunbeam-net-daemon-test".into(),
         server_public_key: None,
+        derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config)

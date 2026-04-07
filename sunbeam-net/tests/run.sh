@@ -59,7 +59,8 @@ $COMPOSE exec -T peer-b tailscale ip -4 || true
 echo "==> Running integration tests..."
 cd ../..
 SUNBEAM_NET_TEST_AUTH_KEY="$CLIENT_KEY" \
-SUNBEAM_NET_TEST_COORD_URL="http://localhost:8080" \
+SUNBEAM_NET_TEST_COORD_URL="https://localhost:8443" \
+SUNBEAM_NET_TEST_DERP_INSECURE=1 \
 SUNBEAM_NET_TEST_PEER_A_IP=$($COMPOSE -f sunbeam-net/tests/docker-compose.yml exec -T peer-a tailscale ip -4 2>/dev/null | tr -d '[:space:]') \
   cargo test -p sunbeam-net --features integration --test integration -- --nocapture
 
