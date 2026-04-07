@@ -32,15 +32,16 @@ fn json_str(data: &serde_json::Value, key: &str) -> Option<String> {
 /// Build the user to database mapping used by EnsurePGRolesAndDatabases.
 pub(crate) fn pg_db_map() -> HashMap<&'static str, &'static str> {
     [
-        ("kratos", "kratos_db"), ("hydra", "hydra_db"), ("gitea", "gitea_db"),
-        ("hive", "hive_db"), ("docs", "docs_db"), ("meet", "meet_db"),
-        ("drive", "drive_db"), ("messages", "messages_db"),
-        ("conversations", "conversations_db"), ("people", "people_db"),
-        ("find", "find_db"), ("calendars", "calendars_db"), ("projects", "projects_db"),
+        ("kratos", "kratos_db"),
+        ("hydra", "hydra_db"),
+        ("gitea", "gitea_db"),
         ("penpot", "penpot_db"),
         ("stalwart", "stalwart_db"),
         ("headscale", "headscale_db"),
-    ].into_iter().collect()
+        ("wfe", "wfe_db"),
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// SQL to idempotently create a postgres user if it does not exist.
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn test_pg_db_map_contains_all_users() {
         let map = pg_db_map();
-        assert_eq!(map.len(), 16);
+        assert_eq!(map.len(), 7);
         for user in crate::secrets::PG_USERS {
             assert!(map.contains_key(user), "pg_db_map missing key for: {user}");
         }

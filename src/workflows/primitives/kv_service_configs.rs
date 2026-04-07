@@ -26,57 +26,13 @@ pub fn all_service_configs() -> Vec<Value> {
             {"key":"admin-username","generator":"gitea_admin"},
             {"key":"admin-password","generator":"rand_token"}
         ]}),
-        json!({"service":"hive","fields":[
-            {"key":"oidc-client-id","generator":"static:hive-local"},
-            {"key":"oidc-client-secret","generator":"rand_token"}
-        ]}),
         json!({"service":"livekit","fields":[
             {"key":"api-key","generator":"static:devkey"},
             {"key":"api-secret","generator":"rand_token"}
         ]}),
-        json!({"service":"people","fields":[
-            {"key":"django-secret-key","generator":"rand_token"}
-        ]}),
         json!({"service":"login-ui","fields":[
             {"key":"cookie-secret","generator":"rand_token"},
             {"key":"csrf-cookie-secret","generator":"rand_token"}
-        ]}),
-        json!({"service":"docs","fields":[
-            {"key":"django-secret-key","generator":"rand_token"},
-            {"key":"collaboration-secret","generator":"rand_token"}
-        ]}),
-        json!({"service":"meet","fields":[
-            {"key":"django-secret-key","generator":"rand_token"},
-            {"key":"application-jwt-secret-key","generator":"rand_token"}
-        ]}),
-        json!({"service":"drive","fields":[
-            {"key":"django-secret-key","generator":"rand_token"}
-        ]}),
-        json!({"service":"projects","fields":[
-            {"key":"secret-key","generator":"rand_token"}
-        ]}),
-        json!({"service":"calendars","fields":[
-            {"key":"django-secret-key","generator":"rand_token_50"},
-            {"key":"salt-key","generator":"rand_token"},
-            {"key":"caldav-inbound-api-key","generator":"rand_token"},
-            {"key":"caldav-outbound-api-key","generator":"rand_token"},
-            {"key":"caldav-internal-api-key","generator":"rand_token"}
-        ]}),
-        json!({"service":"messages","fields":[
-            {"key":"django-secret-key","generator":"rand_token"},
-            {"key":"salt-key","generator":"rand_token"},
-            {"key":"mda-api-secret","generator":"rand_token"},
-            {"key":"oidc-refresh-token-key","generator":"fernet_key"},
-            {"key":"dkim-private-key","generator":"dkim_private"},
-            {"key":"dkim-public-key","generator":"dkim_public"},
-            {"key":"rspamd-password","generator":"rand_token"},
-            {"key":"socks-proxy-users","generator":"socks_proxy"},
-            {"key":"mta-out-smtp-username","generator":"static:sunbeam"},
-            {"key":"mta-out-smtp-password","generator":"rand_token"}
-        ]}),
-        json!({"service":"collabora","fields":[
-            {"key":"username","generator":"static:admin"},
-            {"key":"password","generator":"rand_token"}
         ]}),
         json!({"service":"tuwunel","fields":[
             {"key":"oidc-client-id","generator":"static:"},
@@ -117,10 +73,17 @@ pub fn kratos_admin_config() -> Value {
 /// All service names (for WriteKVPath branches).
 pub fn all_service_names() -> Vec<&'static str> {
     vec![
-        "hydra", "kratos", "seaweedfs", "gitea", "hive", "livekit",
-        "people", "login-ui", "kratos-admin", "docs", "meet", "drive",
-        "projects", "calendars", "messages", "collabora", "tuwunel",
-        "grafana", "scaleway-s3", "headscale",
+        "hydra",
+        "kratos",
+        "seaweedfs",
+        "gitea",
+        "livekit",
+        "login-ui",
+        "kratos-admin",
+        "tuwunel",
+        "grafana",
+        "scaleway-s3",
+        "headscale",
     ]
 }
 
@@ -132,22 +95,28 @@ mod tests {
     fn all_configs_have_service_and_fields() {
         for cfg in all_service_configs() {
             assert!(cfg.get("service").is_some(), "missing service in {cfg}");
-            assert!(cfg.get("fields").and_then(|f| f.as_array()).is_some(), "missing fields in {cfg}");
+            assert!(
+                cfg.get("fields").and_then(|f| f.as_array()).is_some(),
+                "missing fields in {cfg}"
+            );
         }
     }
 
     #[test]
     fn service_count() {
-        // 19 independent + 1 kratos-admin (dependent)
-        assert_eq!(all_service_configs().len(), 19);
-        assert_eq!(all_service_names().len(), 20);
+        // 10 independent + 1 kratos-admin (dependent)
+        assert_eq!(all_service_configs().len(), 10);
+        assert_eq!(all_service_names().len(), 11);
     }
 
     #[test]
     fn kratos_admin_has_from_creds() {
         let cfg = kratos_admin_config();
         let fields = cfg["fields"].as_array().unwrap();
-        let s3_field = fields.iter().find(|f| f["key"] == "s3-access-key").unwrap();
+        let s3_field = fields
+            .iter()
+            .find(|f| f["key"] == "s3-access-key")
+            .unwrap();
         assert!(s3_field["generator"].as_str().unwrap().starts_with("from_creds:"));
     }
 }

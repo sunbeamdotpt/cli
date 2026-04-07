@@ -102,7 +102,7 @@ pub fn build() -> WorkflowDefinition {
         .name("write-vso-role")
         .config(json!({"mount": "kubernetes", "role": "vso", "config": {
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,stalwart,matrix,media,data,monitoring,cert-manager",
+            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe",
             "policies": "vso-reader",
             "ttl": "1h"
         }}))
@@ -159,6 +159,17 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<ApplyManifest>("apply-media",
                     Some(json!({"namespace": "media"})));
             })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-stalwart",
+                    Some(json!({"namespace": "stalwart"})));
+            })
+            .branch(|b| {
+                // VPN bootstrap path — headscale needs cert-manager + the
+                // headscale_db postgres role from Phase 4. Both are done by
+                // the time this branch fires.
+                b.add_step_typed::<ApplyManifest>("apply-vpn",
+                    Some(json!({"namespace": "vpn"})));
+            })
         )
 
         // ── Phase 6: K8s secrets (parallel by namespace) ──────────────
@@ -212,27 +223,6 @@ pub fn build() -> WorkflowDefinition {
                 b.wire_outcome(s1, s2, None);
             })
             .branch(|b| {
-                let ns = b.add_step_typed::<EnsureNamespace>("ensure-ns-lasuite",
-                    Some(json!({"namespace": "lasuite"})));
-                let s1 = b.add_step_typed::<CreateK8sSecret>("secret-lasuite-s3",
-                    Some(json!({"namespace":"lasuite","name":"seaweedfs-s3-credentials","data":{
-                        "S3_ACCESS_KEY":"s3-access-key",
-                        "S3_SECRET_KEY":"s3-secret-key"
-                    }})));
-                let s2 = b.add_step_typed::<CreateK8sSecret>("secret-hive-oidc",
-                    Some(json!({"namespace":"lasuite","name":"hive-oidc","data":{
-                        "client-id":"hive-oidc-client-id",
-                        "client-secret":"hive-oidc-client-secret"
-                    }})));
-                let s3 = b.add_step_typed::<CreateK8sSecret>("secret-people-django",
-                    Some(json!({"namespace":"lasuite","name":"people-django-secret","data":{
-                        "DJANGO_SECRET_KEY":"people-django-secret"
-                    }})));
-                b.wire_outcome(ns, s1, None);
-                b.wire_outcome(s1, s2, None);
-                b.wire_outcome(s2, s3, None);
-            })
-            .branch(|b| {
                 b.add_step_typed::<EnsureNamespace>("ensure-ns-matrix",
                     Some(json!({"namespace": "matrix"})));
             })
@@ -254,12 +244,14 @@ pub fn build() -> WorkflowDefinition {
         // ── Phase 7: Application manifests ────────────────────────────
         .parallel(|p| p
             .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-lasuite",
-                    Some(json!({"namespace": "lasuite"})));
-            })
-            .branch(|b| {
                 b.add_step_typed::<ApplyManifest>("apply-matrix",
                     Some(json!({"namespace": "matrix"})));
+            })
+            .branch(|b| {
+                // wfe-server pulls its image from src.DOMAIN_SUFFIX (built
+                // locally), so it has to come *after* gitea bootstrap.
+                b.add_step_typed::<ApplyManifest>("apply-wfe",
+                    Some(json!({"namespace": "wfe"})));
             })
         )
 
