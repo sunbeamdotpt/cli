@@ -162,6 +162,7 @@ mod tests {
             ssh_host: String::new(),
             infra_dir: "/home/user/infra".to_string(),
             acme_email: "admin@local.dev".to_string(),
+            ..Default::default()
         };
         let sc = StepContext::from_config(&ctx, "local");
         assert_eq!(sc.domain, "local.dev");
@@ -180,6 +181,7 @@ mod tests {
             ssh_host: "sienna@62.210.145.138".to_string(),
             infra_dir: "/srv/infra".to_string(),
             acme_email: "ops@sunbeam.pt".to_string(),
+            ..Default::default()
         };
         let sc = StepContext::from_config(&ctx, "production");
         assert!(sc.is_production);

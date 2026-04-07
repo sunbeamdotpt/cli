@@ -53,6 +53,18 @@ pub struct Context {
     /// ACME email for cert-manager.
     #[serde(default, rename = "acme-email")]
     pub acme_email: String,
+
+    /// VPN coordination server URL (Headscale). When set, `sunbeam connect`
+    /// can establish a WireGuard tunnel through this server and the CLI
+    /// will route k8s API traffic through it instead of falling back to
+    /// SSH or kubeconfig.
+    #[serde(default, rename = "vpn-url", skip_serializing_if = "String::is_empty")]
+    pub vpn_url: String,
+
+    /// VPN pre-auth key for registering with the coordination server.
+    /// Stored in plain text — keep this file readable only by the user.
+    #[serde(default, rename = "vpn-auth-key", skip_serializing_if = "String::is_empty")]
+    pub vpn_auth_key: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +179,7 @@ pub fn load_config() -> SunbeamConfig {
                 ssh_host: config.production_host.clone(),
                 infra_dir: config.infra_directory.clone(),
                 acme_email: config.acme_email.clone(),
+                ..Default::default()
             },
         );
         if config.current_context.is_empty() {
@@ -369,6 +382,7 @@ mod tests {
                 ssh_host: "sienna@server.sunbeam.pt".to_string(),
                 infra_dir: "/home/infra".to_string(),
                 acme_email: "ops@sunbeam.pt".to_string(),
+                ..Default::default()
             },
         );
         let json = serde_json::to_string(&config).unwrap();

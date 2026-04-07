@@ -15,10 +15,12 @@ mod openbao;
 mod output;
 mod pm;
 mod secrets;
+mod service_cmds;
 mod services;
 mod tools;
 mod update;
 mod users;
+mod vpn_cmds;
 mod workflows;
 
 #[tokio::main]
