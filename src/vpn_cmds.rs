@@ -108,33 +108,49 @@ pub async fn cmd_connect() -> Result<()> {
 
 /// Run `sunbeam disconnect` — signal a running daemon via its IPC socket.
 pub async fn cmd_disconnect() -> Result<()> {
-    let state_dir = vpn_state_dir()?;
-    let socket = state_dir.join("daemon.sock");
-    if !socket.exists() {
+    let socket = vpn_state_dir()?.join("daemon.sock");
+    let client = sunbeam_net::IpcClient::new(&socket);
+    if !client.socket_exists() {
         return Err(SunbeamError::Other(
             "no running VPN daemon (control socket missing)".into(),
         ));
     }
-    // The daemon's IPC server lives in sunbeam_net::daemon::ipc, but it's
-    // not currently exported as a client. Until that lands, the canonical
-    // way to disconnect is to ^C the foreground `sunbeam connect` process.
-    Err(SunbeamError::Other(
-        "background daemon control not yet implemented — Ctrl-C the running `sunbeam connect`"
-            .into(),
-    ))
+    step("Asking VPN daemon to stop...");
+    client
+        .stop()
+        .await
+        .map_err(|e| SunbeamError::Other(format!("IPC stop: {e}")))?;
+    ok("Daemon acknowledged shutdown.");
+    Ok(())
 }
 
 /// Run `sunbeam vpn status` — query a running daemon's status via IPC.
 pub async fn cmd_vpn_status() -> Result<()> {
-    let state_dir = vpn_state_dir()?;
-    let socket = state_dir.join("daemon.sock");
-    if !socket.exists() {
+    let socket = vpn_state_dir()?.join("daemon.sock");
+    let client = sunbeam_net::IpcClient::new(&socket);
+    if !client.socket_exists() {
         println!("VPN: not running");
         return Ok(());
     }
-    println!("VPN: running (control socket at {})", socket.display());
-    // TODO: actually query the IPC socket once the IPC client API is
-    // exposed from sunbeam-net.
+    match client.status().await {
+        Ok(sunbeam_net::DaemonStatus::Running { addresses, peer_count, derp_home }) => {
+            let addrs: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
+            println!("VPN: running");
+            println!("  addresses: {}", addrs.join(", "));
+            println!("  peers: {peer_count}");
+            if let Some(region) = derp_home {
+                println!("  derp home: region {region}");
+            }
+        }
+        Ok(other) => {
+            println!("VPN: {other}");
+        }
+        Err(e) => {
+            // Socket exists but daemon isn't actually responding — common
+            // when the daemon crashed and left a stale socket file behind.
+            println!("VPN: stale socket at {} ({e})", socket.display());
+        }
+    }
     Ok(())
 }
 
