@@ -1,6 +1,7 @@
 //! sunbeam-net: Pure Rust Headscale/Tailscale-compatible VPN client.
 
 pub mod config;
+pub mod control;
 pub mod derp;
 pub mod error;
 pub mod keys;
