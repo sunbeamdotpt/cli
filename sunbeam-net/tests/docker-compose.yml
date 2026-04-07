@@ -33,6 +33,9 @@ services:
   # ── Tailscale peer A (validates that Headscale is working) ──────────
   # This peer registers with Headscale and stays online so our Rust
   # client can discover it in the netmap and attempt WireGuard tunnels.
+  # Runs in TUN mode (TS_USERSPACE=false) so the host kernel actually
+  # routes packets to peer-a's tailnet IP — this is what makes inbound
+  # TCP from other tailnet members work end-to-end.
   peer-a:
     image: tailscale/tailscale:stable
     hostname: peer-a
@@ -42,10 +45,19 @@ services:
     environment:
       TS_AUTHKEY: "${PEER_A_AUTH_KEY}"
       TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
       TS_EXTRA_ARGS: --login-server=http://headscale:8080
+      # Pin the WireGuard listen port (passed to tailscaled itself) so we
+      # can publish it to the host — without this our test daemon (running
+      # outside docker) can't reach peer-a's UDP endpoint.
+      TS_TAILSCALED_EXTRA_ARGS: --port=41641
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "41641:41641/udp"
     volumes:
       - peer-a-state:/var/lib/tailscale
     # Tailscale doesn't have a great healthcheck, but it registers fast
@@ -65,10 +77,13 @@ services:
     environment:
       TS_AUTHKEY: "${PEER_B_AUTH_KEY}"
       TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
       TS_EXTRA_ARGS: --login-server=http://headscale:8080
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
       - peer-b-state:/var/lib/tailscale
     healthcheck:

@@ -127,6 +127,110 @@ async fn test_proxy_listener_accepts() {
     handle.shutdown().await.unwrap();
 }
 
+/// End-to-end: bring up the daemon, dial peer-a's echo server through the
+/// proxy, and assert we get bytes back across the WireGuard tunnel.
+///
+/// **Currently ignored** because the docker-compose test stack runs Headscale
+/// over plain HTTP, but Tailscale's official client unconditionally tries to
+/// connect to DERP relays over TLS:
+///
+///     derp.Recv(derp-999): connect to region 999: tls: first record does
+///     not look like a TLS handshake
+///
+/// So peer-a can never receive WireGuard packets we forward via the relay,
+/// and we have no other reachable transport from the host into the docker
+/// network. Unblocking this requires either: (a) generating a self-signed
+/// cert, configuring Headscale + DERP for TLS, and teaching DerpClient to
+/// negotiate TLS; or (b) running the test daemon inside the same docker
+/// network as peer-a so direct UDP works without relays. Tracked separately.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "blocked on TLS DERP — see comment"]
+async fn test_e2e_tcp_through_tunnel() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let coord_url = require_env("SUNBEAM_NET_TEST_COORD_URL");
+    let auth_key = require_env("SUNBEAM_NET_TEST_AUTH_KEY");
+    let peer_a_ip: std::net::IpAddr = require_env("SUNBEAM_NET_TEST_PEER_A_IP")
+        .parse()
+        .expect("SUNBEAM_NET_TEST_PEER_A_IP must be a valid IP");
+
+    let state_dir = tempfile::tempdir().unwrap();
+    // Use a fixed local proxy port so the test client knows where to dial.
+    let proxy_bind: std::net::SocketAddr = "127.0.0.1:16578".parse().unwrap();
+    let config = sunbeam_net::VpnConfig {
+        coordination_url: coord_url,
+        auth_key,
+        state_dir: state_dir.path().to_path_buf(),
+        proxy_bind,
+        cluster_api_addr: peer_a_ip,
+        cluster_api_port: 5678,
+        control_socket: state_dir.path().join("e2e.sock"),
+        hostname: "sunbeam-net-e2e-test".into(),
+        server_public_key: None,
+    };
+
+    let handle = sunbeam_net::VpnDaemon::start(config)
+        .await
+        .expect("daemon start failed");
+
+    // Wait for Running.
+    let mut ready = false;
+    for _ in 0..60 {
+        if matches!(
+            handle.current_status(),
+            sunbeam_net::DaemonStatus::Running { .. }
+        ) {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(ready, "daemon did not reach Running within 30s");
+
+    // After Running we still need to wait for two things:
+    //   1. Headscale to push our node to peer-a's streaming netmap so peer-a
+    //      adds us to its peer table — propagation can take a few seconds
+    //      after the Lite update lands.
+    //   2. The boringtun handshake to complete its first round-trip once
+    //      smoltcp emits the SYN.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // Dial the proxy and read whatever the echo server returns. http-echo
+    // closes the connection after sending its body, so reading to EOF gives
+    // us the full response.
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::net::TcpStream::connect(proxy_bind),
+    )
+    .await
+    .expect("connect to proxy timed out")
+    .expect("connect to proxy failed");
+
+    stream
+        .write_all(b"GET / HTTP/1.0\r\nHost: peer-a\r\n\r\n")
+        .await
+        .expect("write request failed");
+
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(
+        Duration::from_secs(20),
+        stream.read_to_end(&mut buf),
+    )
+    .await
+    .expect("read response timed out")
+    .expect("read response failed");
+
+    assert!(read > 0, "expected bytes from echo server, got 0");
+    let body = String::from_utf8_lossy(&buf);
+    assert!(
+        body.contains("sunbeam-net integration test"),
+        "expected echo body in response, got: {body}"
+    );
+
+    handle.shutdown().await.expect("shutdown failed");
+}
+
 /// Test: full daemon lifecycle — start, reach Ready state, query via IPC, shutdown.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_daemon_lifecycle() {
