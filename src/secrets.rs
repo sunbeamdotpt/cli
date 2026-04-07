@@ -37,6 +37,7 @@ pub(crate) const PG_USERS: &[&str] = &[
     "projects",
     "penpot",
     "stalwart",
+    "headscale",
 ];
 
 pub(crate) const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
@@ -468,7 +469,7 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 15);
+        assert_eq!(PG_USERS.len(), 16);
         assert!(PG_USERS.contains(&"kratos"));
         assert!(PG_USERS.contains(&"projects"));
     }
@@ -518,6 +519,7 @@ mod tests {
             "projects",
             "penpot",
             "stalwart",
+            "headscale",
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }

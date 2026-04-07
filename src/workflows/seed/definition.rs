@@ -206,8 +206,8 @@ mod tests {
         let db_steps: Vec<_> = def.steps.iter()
             .filter(|s| s.step_type.contains("CreatePGDatabase"))
             .collect();
-        assert_eq!(role_steps.len(), 15, "should have 15 CreatePGRole steps");
-        assert_eq!(db_steps.len(), 15, "should have 15 CreatePGDatabase steps");
+        assert_eq!(role_steps.len(), 16, "should have 16 CreatePGRole steps");
+        assert_eq!(db_steps.len(), 16, "should have 16 CreatePGDatabase steps");
     }
 
     #[test]
