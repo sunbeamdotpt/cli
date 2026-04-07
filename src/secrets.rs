@@ -25,19 +25,10 @@ pub(crate) const PG_USERS: &[&str] = &[
     "kratos",
     "hydra",
     "gitea",
-    "hive",
-    "docs",
-    "meet",
-    "drive",
-    "messages",
-    "conversations",
-    "people",
-    "find",
-    "calendars",
-    "projects",
     "penpot",
     "stalwart",
     "headscale",
+    "wfe",
 ];
 
 pub(crate) const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
@@ -469,9 +460,11 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 16);
+        assert_eq!(PG_USERS.len(), 7);
         assert!(PG_USERS.contains(&"kratos"));
-        assert!(PG_USERS.contains(&"projects"));
+        assert!(PG_USERS.contains(&"hydra"));
+        assert!(PG_USERS.contains(&"wfe"));
+        assert!(PG_USERS.contains(&"headscale"));
     }
 
     #[test]
@@ -502,24 +495,15 @@ mod tests {
     }
 
     #[test]
-    fn test_pg_users_match_python() {
+    fn test_pg_users_canonical_order() {
         let expected = vec![
             "kratos",
             "hydra",
             "gitea",
-            "hive",
-            "docs",
-            "meet",
-            "drive",
-            "messages",
-            "conversations",
-            "people",
-            "find",
-            "calendars",
-            "projects",
             "penpot",
             "stalwart",
             "headscale",
+            "wfe",
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }
