@@ -19,22 +19,8 @@ use crate::output::{ok, step, warn};
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum BuildTarget {
     Proxy,
-    Integration,
     KratosAdmin,
-    Meet,
-    DocsFrontend,
-    PeopleFrontend,
-    People,
-    Messages,
-    MessagesBackend,
-    MessagesFrontend,
-    MessagesMtaIn,
-    MessagesMtaOut,
-    MessagesMpa,
-    MessagesSocksProxy,
     Tuwunel,
-    Calendars,
-    Projects,
     Sol,
 }
 
@@ -42,22 +28,8 @@ impl std::fmt::Display for BuildTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             BuildTarget::Proxy => "proxy",
-            BuildTarget::Integration => "integration",
             BuildTarget::KratosAdmin => "kratos-admin",
-            BuildTarget::Meet => "meet",
-            BuildTarget::DocsFrontend => "docs-frontend",
-            BuildTarget::PeopleFrontend => "people-frontend",
-            BuildTarget::People => "people",
-            BuildTarget::Messages => "messages",
-            BuildTarget::MessagesBackend => "messages-backend",
-            BuildTarget::MessagesFrontend => "messages-frontend",
-            BuildTarget::MessagesMtaIn => "messages-mta-in",
-            BuildTarget::MessagesMtaOut => "messages-mta-out",
-            BuildTarget::MessagesMpa => "messages-mpa",
-            BuildTarget::MessagesSocksProxy => "messages-socks-proxy",
             BuildTarget::Tuwunel => "tuwunel",
-            BuildTarget::Calendars => "calendars",
-            BuildTarget::Projects => "projects",
             BuildTarget::Sol => "sol",
         };
         write!(f, "{s}")
@@ -65,38 +37,7 @@ impl std::fmt::Display for BuildTarget {
 }
 
 /// amd64-only images that need mirroring: (source, org, repo, tag).
-const AMD64_ONLY_IMAGES: &[(&str, &str, &str, &str)] = &[
-    (
-        "docker.io/lasuite/people-backend:latest",
-        "studio",
-        "people-backend",
-        "latest",
-    ),
-    (
-        "docker.io/lasuite/people-frontend:latest",
-        "studio",
-        "people-frontend",
-        "latest",
-    ),
-    (
-        "docker.io/lasuite/impress-backend:latest",
-        "studio",
-        "impress-backend",
-        "latest",
-    ),
-    (
-        "docker.io/lasuite/impress-frontend:latest",
-        "studio",
-        "impress-frontend",
-        "latest",
-    ),
-    (
-        "docker.io/lasuite/impress-y-provider:latest",
-        "studio",
-        "impress-y-provider",
-        "latest",
-    ),
-];
+const AMD64_ONLY_IMAGES: &[(&str, &str, &str, &str)] = &[];
 
 // ---------------------------------------------------------------------------
 // Build environment
@@ -895,39 +836,8 @@ async fn clear_image_pull_error_pods() -> Result<()> {
 pub async fn cmd_build(what: &BuildTarget, push: bool, deploy: bool, no_cache: bool) -> Result<()> {
     match what {
         BuildTarget::Proxy => builders::build_proxy(push, deploy, no_cache).await,
-        BuildTarget::Integration => builders::build_integration(push, deploy, no_cache).await,
         BuildTarget::KratosAdmin => builders::build_kratos_admin(push, deploy, no_cache).await,
-        BuildTarget::Meet => builders::build_meet(push, deploy, no_cache).await,
-        BuildTarget::DocsFrontend => {
-            let repo_dir = crate::config::get_repo_root().join("docs");
-            builders::build_la_suite_frontend(
-                "docs-frontend",
-                &repo_dir,
-                "src/frontend",
-                "src/frontend/apps/impress",
-                "src/frontend/Dockerfile",
-                "impress-frontend",
-                "docs-frontend",
-                "lasuite",
-                push,
-                deploy,
-                no_cache,
-            )
-            .await
-        }
-        BuildTarget::PeopleFrontend | BuildTarget::People => builders::build_people(push, deploy, no_cache).await,
-        BuildTarget::Messages => builders::build_messages("messages", push, deploy, no_cache).await,
-        BuildTarget::MessagesBackend => builders::build_messages("messages-backend", push, deploy, no_cache).await,
-        BuildTarget::MessagesFrontend => builders::build_messages("messages-frontend", push, deploy, no_cache).await,
-        BuildTarget::MessagesMtaIn => builders::build_messages("messages-mta-in", push, deploy, no_cache).await,
-        BuildTarget::MessagesMtaOut => builders::build_messages("messages-mta-out", push, deploy, no_cache).await,
-        BuildTarget::MessagesMpa => builders::build_messages("messages-mpa", push, deploy, no_cache).await,
-        BuildTarget::MessagesSocksProxy => {
-            builders::build_messages("messages-socks-proxy", push, deploy, no_cache).await
-        }
         BuildTarget::Tuwunel => builders::build_tuwunel(push, deploy, no_cache).await,
-        BuildTarget::Calendars => builders::build_calendars(push, deploy, no_cache).await,
-        BuildTarget::Projects => builders::build_projects(push, deploy, no_cache).await,
         BuildTarget::Sol => builders::build_sol(push, deploy, no_cache).await,
     }
 }
@@ -956,41 +866,8 @@ mod tests {
     }
 
     #[test]
-    fn amd64_only_images_all_from_docker_hub() {
-        for (src, _org, _repo, _tag) in AMD64_ONLY_IMAGES {
-            assert!(
-                src.starts_with("docker.io/"),
-                "Expected docker.io prefix, got: {src}"
-            );
-        }
-    }
-
-    #[test]
-    fn amd64_only_images_all_have_latest_tag() {
-        for (src, _org, _repo, tag) in AMD64_ONLY_IMAGES {
-            assert_eq!(
-                *tag, "latest",
-                "Expected 'latest' tag for {src}, got: {tag}"
-            );
-        }
-    }
-
-    #[test]
-    fn amd64_only_images_non_empty() {
-        assert!(
-            !AMD64_ONLY_IMAGES.is_empty(),
-            "AMD64_ONLY_IMAGES should not be empty"
-        );
-    }
-
-    #[test]
-    fn amd64_only_images_org_is_studio() {
-        for (src, org, _repo, _tag) in AMD64_ONLY_IMAGES {
-            assert_eq!(
-                *org, "studio",
-                "Expected org 'studio' for {src}, got: {org}"
-            );
-        }
+    fn amd64_only_images_empty_after_lasuite_removal() {
+        assert!(AMD64_ONLY_IMAGES.is_empty());
     }
 
     #[test]
@@ -1007,22 +884,8 @@ mod tests {
     fn build_target_display_all_lowercase_or_hyphenated() {
         let targets = [
             BuildTarget::Proxy,
-            BuildTarget::Integration,
             BuildTarget::KratosAdmin,
-            BuildTarget::Meet,
-            BuildTarget::DocsFrontend,
-            BuildTarget::PeopleFrontend,
-            BuildTarget::People,
-            BuildTarget::Messages,
-            BuildTarget::MessagesBackend,
-            BuildTarget::MessagesFrontend,
-            BuildTarget::MessagesMtaIn,
-            BuildTarget::MessagesMtaOut,
-            BuildTarget::MessagesMpa,
-            BuildTarget::MessagesSocksProxy,
             BuildTarget::Tuwunel,
-            BuildTarget::Calendars,
-            BuildTarget::Projects,
             BuildTarget::Sol,
         ];
         for t in &targets {
@@ -1039,32 +902,4 @@ mod tests {
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
     }
 
-    #[test]
-    fn messages_components_non_empty() {
-        assert!(!builders::MESSAGES_COMPONENTS.is_empty());
-    }
-
-    #[test]
-    fn messages_components_dockerfiles_are_relative() {
-        for (_name, _image, dockerfile_rel, _target) in builders::MESSAGES_COMPONENTS {
-            assert!(
-                dockerfile_rel.ends_with("Dockerfile"),
-                "Expected Dockerfile suffix in: {dockerfile_rel}"
-            );
-            assert!(
-                !dockerfile_rel.starts_with('/'),
-                "Dockerfile path should be relative: {dockerfile_rel}"
-            );
-        }
-    }
-
-    #[test]
-    fn messages_components_names_match_build_targets() {
-        for (name, _image, _df, _target) in builders::MESSAGES_COMPONENTS {
-            assert!(
-                name.starts_with("messages-"),
-                "Component name should start with 'messages-': {name}"
-            );
-        }
-    }
 }

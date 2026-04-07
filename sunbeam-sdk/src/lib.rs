@@ -35,7 +35,5 @@ pub mod storage;
 pub mod media;
 #[cfg(feature = "monitoring")]
 pub mod monitoring;
-#[cfg(feature = "lasuite")]
-pub mod lasuite;
 #[cfg(feature = "build")]
 pub mod build;

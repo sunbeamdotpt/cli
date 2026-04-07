@@ -16,12 +16,6 @@ pub const SERVICES_TO_RESTART: &[(&str, &str)] = &[
     ("ory", "login-ui"),
     ("devtools", "gitea"),
     ("storage", "seaweedfs-filer"),
-    ("lasuite", "hive"),
-    ("lasuite", "people-backend"),
-    ("lasuite", "people-frontend"),
-    ("lasuite", "people-celery-worker"),
-    ("lasuite", "people-celery-beat"),
-    ("lasuite", "projects"),
     ("matrix", "tuwunel"),
     ("media", "livekit-server"),
 ];
@@ -446,13 +440,15 @@ mod tests {
         assert!(MANAGED_NS.contains(&"data"));
         assert!(MANAGED_NS.contains(&"devtools"));
         assert!(MANAGED_NS.contains(&"ingress"));
-        assert!(MANAGED_NS.contains(&"lasuite"));
         assert!(MANAGED_NS.contains(&"matrix"));
         assert!(MANAGED_NS.contains(&"media"));
+        assert!(MANAGED_NS.contains(&"stalwart"));
         assert!(MANAGED_NS.contains(&"storage"));
         assert!(MANAGED_NS.contains(&"monitoring"));
         assert!(MANAGED_NS.contains(&"vault-secrets-operator"));
-        assert_eq!(MANAGED_NS.len(), 10);
+        assert!(MANAGED_NS.contains(&"vpn"));
+        assert!(MANAGED_NS.contains(&"wfe"));
+        assert!(!MANAGED_NS.contains(&"lasuite"));
     }
 
     #[test]
@@ -462,10 +458,10 @@ mod tests {
         assert!(SERVICES_TO_RESTART.contains(&("ory", "login-ui")));
         assert!(SERVICES_TO_RESTART.contains(&("devtools", "gitea")));
         assert!(SERVICES_TO_RESTART.contains(&("storage", "seaweedfs-filer")));
-        assert!(SERVICES_TO_RESTART.contains(&("lasuite", "hive")));
         assert!(SERVICES_TO_RESTART.contains(&("matrix", "tuwunel")));
         assert!(SERVICES_TO_RESTART.contains(&("media", "livekit-server")));
-        assert_eq!(SERVICES_TO_RESTART.len(), 13);
+        assert!(!SERVICES_TO_RESTART.iter().any(|(ns, _)| *ns == "lasuite"));
+        assert_eq!(SERVICES_TO_RESTART.len(), 7);
     }
 
     #[test]
@@ -516,7 +512,7 @@ mod tests {
     #[test]
     fn test_restart_filter_all() {
         let matched: Vec<(&str, &str)> = SERVICES_TO_RESTART.to_vec();
-        assert_eq!(matched.len(), 13);
+        assert_eq!(matched.len(), 7);
     }
 
     #[test]
