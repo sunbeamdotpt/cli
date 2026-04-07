@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod control;
+pub mod daemon;
 pub mod derp;
 pub mod error;
 pub mod keys;
@@ -11,4 +12,5 @@ pub mod wg;
 pub(crate) mod proto;
 
 pub use config::VpnConfig;
+pub use daemon::{DaemonHandle, DaemonStatus, VpnDaemon};
 pub use error::{Error, Result};
