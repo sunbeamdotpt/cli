@@ -13,6 +13,9 @@ pub enum Error {
     #[error("DERP relay error: {0}")]
     Derp(String),
 
+    #[error("TLS error: {0}")]
+    Tls(String),
+
     #[error("authentication failed: {0}")]
     Auth(String),
 

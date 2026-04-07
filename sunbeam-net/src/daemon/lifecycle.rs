@@ -9,7 +9,7 @@ use crate::config::VpnConfig;
 use crate::control::MapUpdate;
 use crate::daemon::ipc::IpcServer;
 use crate::daemon::state::{DaemonHandle, DaemonStatus};
-use crate::derp::client::DerpClient;
+use crate::derp::client::{DerpClient, DerpTlsMode};
 use crate::proto::types::DerpMap;
 use crate::proxy::engine::{EngineCommand, NetworkEngine};
 use crate::wg::tunnel::{DecapAction, WgTunnel};
@@ -234,16 +234,35 @@ async fn run_session(
         }
     };
 
+    // The DERP endpoint we connect to is either pulled from the netmap's
+    // DerpMap (real Tailscale-style deployments), or — for embedded relays
+    // where the netmap returns a useless `host: ""`, port: 0` — derived
+    // from the coordination URL. In both cases, prefix the URL with the
+    // same scheme as the coordination URL so HTTPS coordination implies
+    // HTTPS DERP. The DerpClient strips the scheme back off internally.
+    let coord_scheme = if config.coordination_url.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
     let derp_endpoint = derp_map
         .as_ref()
         .and_then(pick_derp_node)
         .filter(|(host, port)| !host.is_empty() && *port != 0)
-        .or_else(|| coordination_host_port(&config.coordination_url));
+        .map(|(h, p)| format!("{coord_scheme}://{h}:{p}"))
+        .or_else(|| {
+            coordination_host_port(&config.coordination_url)
+                .map(|(h, p)| format!("{coord_scheme}://{h}:{p}"))
+        });
 
-    let _derp_task = if let Some((host, port)) = derp_endpoint {
-        let url = format!("{host}:{port}");
-        tracing::info!("connecting to DERP relay at {url}");
-        match DerpClient::connect(&url, keys).await {
+    let _derp_task = if let Some(url) = derp_endpoint {
+        let tls_mode = if config.derp_tls_insecure {
+            DerpTlsMode::InsecureSkipVerify
+        } else {
+            DerpTlsMode::Verify
+        };
+        tracing::info!("connecting to DERP relay at {url} (tls_mode={tls_mode:?})");
+        match DerpClient::connect_with_tls(&url, keys, tls_mode).await {
             Ok(client) => {
                 tracing::info!("DERP relay connected: {url}");
                 let derp_cancel = cancel.clone();
@@ -731,6 +750,7 @@ mod tests {
             control_socket: dir.path().join("test.sock"),
             hostname: "test-node".to_string(),
             server_public_key: Some([0xaa; 32]),
+            derp_tls_insecure: false,
         };
 
         let handle = VpnDaemon::start(config).await.unwrap();

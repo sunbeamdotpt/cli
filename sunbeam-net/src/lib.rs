@@ -8,6 +8,7 @@ pub mod error;
 pub mod keys;
 pub mod noise;
 pub mod proxy;
+pub mod tls;
 pub mod wg;
 pub(crate) mod proto;
 

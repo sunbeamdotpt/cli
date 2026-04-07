@@ -30,48 +30,89 @@ impl ControlClient {
     /// 4. Run `h2::client::handshake` over the encrypted stream
     /// 5. Spawn the h2 connection driver task
     pub async fn connect(config: &VpnConfig, keys: &NodeKeys) -> crate::Result<Self> {
-        // Parse host:port from the coordination URL.
         let addr = parse_coordination_addr(&config.coordination_url)?;
+        let use_tls = config.coordination_url.starts_with("https://");
+        let host = addr.split(':').next().unwrap_or(&addr).to_string();
 
-        tracing::debug!("connecting to coordination server at {addr}");
+        tracing::debug!("connecting to coordination server at {addr} (tls={use_tls})");
 
-        let mut tcp = TcpStream::connect(&addr)
-            .await
-            .map_err(|e| crate::Error::Control(format!("tcp connect to {addr}: {e}")))?;
+        let tls_mode = if config.derp_tls_insecure {
+            crate::tls::TlsMode::InsecureSkipVerify
+        } else {
+            crate::tls::TlsMode::Verify
+        };
 
         // Resolve the server's Noise public key.
         let server_public = match config.server_public_key {
             Some(key) => key,
-            None => fetch_server_key(&addr).await?,
+            None => fetch_server_key(&config.coordination_url, &addr, tls_mode).await?,
         };
-
-        // Noise IK handshake (controlbase protocol).
         let server_pub_key = x25519_dalek::PublicKey::from(server_public);
-        let result = noise::handshake::perform_handshake(
-            &mut tcp,
-            &keys.node_private,
-            &keys.node_public,
-            &server_pub_key,
-        )
-        .await?;
 
-        // Wrap in NoiseStream for transparent encryption.
-        // Pass leftover bytes from the handshake TCP buffer.
-        let mut noise_stream =
-            noise::stream::NoiseStream::new(tcp, result.tx_cipher, result.rx_cipher, result.leftover);
+        let tcp = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| crate::Error::Control(format!("tcp connect to {addr}: {e}")))?;
 
-        // Consume the early payload (EarlyNoise) before h2 starts.
-        // Headscale sends this immediately after the handshake.
-        let early = noise_stream.consume_early_payload().await
+        // Run the handshake either directly on the TCP stream (HTTP coordination)
+        // or on top of a TLS-wrapped stream (HTTPS coordination), then hand the
+        // resulting NoiseStream to h2.
+        if use_tls {
+            let mut tls = crate::tls::tls_wrap(tcp, &host, tls_mode).await?;
+            let result = noise::handshake::perform_handshake(
+                &mut tls,
+                &host,
+                &keys.node_private,
+                &keys.node_public,
+                &server_pub_key,
+            )
+            .await?;
+            let noise_stream = noise::stream::NoiseStream::new(
+                tls,
+                result.tx_cipher,
+                result.rx_cipher,
+                result.leftover,
+            );
+            Self::finish_h2_handshake(noise_stream).await
+        } else {
+            let mut tcp = tcp;
+            let result = noise::handshake::perform_handshake(
+                &mut tcp,
+                &host,
+                &keys.node_private,
+                &keys.node_public,
+                &server_pub_key,
+            )
+            .await?;
+            let noise_stream = noise::stream::NoiseStream::new(
+                tcp,
+                result.tx_cipher,
+                result.rx_cipher,
+                result.leftover,
+            );
+            Self::finish_h2_handshake(noise_stream).await
+        }
+    }
+
+    /// Common tail for `connect`: consume the early Noise payload, run the
+    /// h2 client handshake on top of the encrypted stream, and spawn the
+    /// connection driver. Generic over the underlying transport so it
+    /// works for both plain TCP and TLS-wrapped connections.
+    async fn finish_h2_handshake<S>(
+        mut noise_stream: noise::stream::NoiseStream<S>,
+    ) -> crate::Result<Self>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let early = noise_stream
+            .consume_early_payload()
+            .await
             .map_err(|e| crate::Error::Control(format!("early payload: {e}")))?;
         tracing::debug!("early payload consumed ({} bytes)", early.len());
 
-        // h2 client handshake over the encrypted stream.
         let (sender, connection) = h2::client::handshake(noise_stream)
             .await
             .map_err(|e| crate::Error::Control(format!("h2 handshake: {e}")))?;
 
-        // Spawn the connection driver — it must run for the lifetime of the client.
         let conn_task = tokio::spawn(async move {
             if let Err(e) = connection.await {
                 tracing::error!("h2 connection error: {e}");
@@ -226,25 +267,45 @@ fn parse_coordination_addr(url: &str) -> crate::Result<String> {
 ///
 /// Headscale/Tailscale returns JSON: `{"publicKey":"mkey:<hex>","legacyPublicKey":"mkey:..."}`.
 /// We parse the `publicKey` field and strip the `mkey:` prefix.
-async fn fetch_server_key(addr: &str) -> crate::Result<[u8; 32]> {
-    let mut tcp = TcpStream::connect(addr)
-        .await
-        .map_err(|e| crate::Error::Control(format!("connect to /key: {e}")))?;
-
+async fn fetch_server_key(
+    coordination_url: &str,
+    addr: &str,
+    tls_mode: crate::tls::TlsMode,
+) -> crate::Result<[u8; 32]> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let use_tls = coordination_url.starts_with("https://");
     let host = addr.split(':').next().unwrap_or(addr);
     let request = format!(
         "GET /key?v=69 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
     );
-    tcp.write_all(request.as_bytes())
-        .await
-        .map_err(|e| crate::Error::Control(format!("write /key request: {e}")))?;
 
-    let mut buf = Vec::with_capacity(4096);
-    tcp.read_to_end(&mut buf)
-        .await
-        .map_err(|e| crate::Error::Control(format!("read /key response: {e}")))?;
+    let buf = if use_tls {
+        let tcp = TcpStream::connect(addr)
+            .await
+            .map_err(|e| crate::Error::Control(format!("connect to /key: {e}")))?;
+        let mut tls = crate::tls::tls_wrap(tcp, host, tls_mode).await?;
+        tls.write_all(request.as_bytes())
+            .await
+            .map_err(|e| crate::Error::Control(format!("write /key request: {e}")))?;
+        let mut buf = Vec::with_capacity(4096);
+        tls.read_to_end(&mut buf)
+            .await
+            .map_err(|e| crate::Error::Control(format!("read /key response: {e}")))?;
+        buf
+    } else {
+        let mut tcp = TcpStream::connect(addr)
+            .await
+            .map_err(|e| crate::Error::Control(format!("connect to /key: {e}")))?;
+        tcp.write_all(request.as_bytes())
+            .await
+            .map_err(|e| crate::Error::Control(format!("write /key request: {e}")))?;
+        let mut buf = Vec::with_capacity(4096);
+        tcp.read_to_end(&mut buf)
+            .await
+            .map_err(|e| crate::Error::Control(format!("read /key response: {e}")))?;
+        buf
+    };
 
     let response = String::from_utf8_lossy(&buf);
 

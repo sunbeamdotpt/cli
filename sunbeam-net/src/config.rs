@@ -31,4 +31,8 @@ pub struct VpnConfig {
     /// The coordination server's Noise public key (32 bytes).
     /// If `None`, it will be fetched from the server's `/key` endpoint.
     pub server_public_key: Option<[u8; 32]>,
+    /// Skip TLS certificate verification when connecting to DERP relays
+    /// over `https://`. Only set this for test stacks with self-signed
+    /// certs — in production, leave it `false`.
+    pub derp_tls_insecure: bool,
 }

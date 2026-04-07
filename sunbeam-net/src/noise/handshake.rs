@@ -124,13 +124,22 @@ fn protocol_version_prologue(version: u16) -> Vec<u8> {
 
 /// Perform the TS2021 HTTP upgrade and controlbase Noise IK handshake.
 ///
+/// Generic over the underlying stream so it can be called with either a
+/// plain TcpStream (`http://...`) or a TLS-wrapped one (`https://...`).
+/// `host_header` is what we put in the HTTP `Host:` header — typically
+/// the hostname portion of the coordination URL.
+///
 /// Returns a [`HandshakeResult`] containing the transport ciphers.
-pub(crate) async fn perform_handshake(
-    stream: &mut TcpStream,
+pub(crate) async fn perform_handshake<S>(
+    stream: &mut S,
+    host_header: &str,
     machine_private: &StaticSecret,
     machine_public: &PublicKey,
     server_public: &PublicKey,
-) -> crate::Result<HandshakeResult> {
+) -> crate::Result<HandshakeResult>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let mut s = SymmetricState::initialize();
 
     // Prologue
@@ -165,13 +174,9 @@ pub(crate) async fn perform_handshake(
     let init_b64 = base64::engine::general_purpose::STANDARD.encode(&init);
 
     // Send HTTP upgrade
-    let peer = stream
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|_| "localhost".into());
     let upgrade_req = format!(
         "POST /ts2021 HTTP/1.1\r\n\
-         Host: {peer}\r\n\
+         Host: {host_header}\r\n\
          Upgrade: tailscale-control-protocol\r\n\
          Connection: upgrade\r\n\
          X-Tailscale-Handshake: {init_b64}\r\n\
@@ -404,6 +409,7 @@ mod tests {
         let mut client_stream = TcpStream::connect(addr).await.unwrap();
         let result = perform_handshake(
             &mut client_stream,
+            "localhost",
             &machine_private,
             &machine_public,
             &server_public,

@@ -222,25 +222,34 @@ impl NetworkEngine {
             }
         }
 
-        // smoltcp → local: read from smoltcp socket
+        // smoltcp → local: read from smoltcp socket. Errors here mean the
+        // socket has closed cleanly (FIN received and drained); the
+        // SynSent/Listen/etc transient states return Ok(0) instead.
         let mut tmp = [0u8; 8192];
         match vnet.tcp_recv(conn.handle, &mut tmp) {
             Ok(n) if n > 0 => {
+                tracing::trace!("bridge: smoltcp → buf {n} bytes");
                 conn.remote_buf.extend_from_slice(&tmp[..n]);
             }
-            Err(_) => {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!("bridge: smoltcp recv ended: {e}");
                 conn.remote_done = true;
             }
-            _ => {}
         }
 
         // Write buffered smoltcp data to local TCP
         if !conn.remote_buf.is_empty() {
             match conn.local.try_write(&conn.remote_buf) {
                 Ok(n) if n > 0 => {
+                    tracing::trace!("bridge: buf → local {n} bytes");
                     conn.remote_buf.drain(..n);
                 }
-                _ => {}
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => {
+                    tracing::debug!("bridge: local write error: {e}");
+                }
             }
         }
 
@@ -249,7 +258,12 @@ impl NetworkEngine {
             conn.remote_done = true;
         }
 
-        // Done when both sides are finished
-        conn.local_read_done && conn.remote_done && conn.local_buf.is_empty() && conn.remote_buf.is_empty()
+        // Done when the remote side has finished AND we've flushed all of
+        // its data to the local socket. We don't wait for the local side
+        // to half-close its write, because most clients (curl, kubectl,
+        // browsers) keep the write side open until they see EOF on the
+        // read side. Returning true here drops the local TcpStream, which
+        // closes the connection from our end and lets the client read EOF.
+        conn.remote_done && conn.remote_buf.is_empty()
     }
 }

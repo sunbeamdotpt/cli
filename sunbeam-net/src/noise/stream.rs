@@ -21,8 +21,11 @@ const MAX_PLAINTEXT_CHUNK: usize = MAX_FRAME_SIZE - TAG_SIZE;
 ///
 /// Implements `AsyncRead + AsyncWrite` so it can be used transparently by `h2`
 /// and other async I/O consumers.
-pub struct NoiseStream {
-    inner: Framed<TcpStream, NoiseFrameCodec>,
+///
+/// Generic over the underlying stream so it can wrap either a plain
+/// TcpStream or a TLS-wrapped one (`tokio_rustls::client::TlsStream`).
+pub struct NoiseStream<S = TcpStream> {
+    inner: Framed<S, NoiseFrameCodec>,
     tx_cipher: ChaCha20Poly1305,
     rx_cipher: ChaCha20Poly1305,
     read_nonce: AtomicU64,
@@ -35,11 +38,11 @@ pub struct NoiseStream {
 }
 
 // SAFETY: ChaCha20Poly1305 is Send, all other fields are Send.
-unsafe impl Send for NoiseStream {}
+unsafe impl<S: Send> Send for NoiseStream<S> {}
 
-impl Unpin for NoiseStream {}
+impl<S: Unpin> Unpin for NoiseStream<S> {}
 
-impl std::fmt::Debug for NoiseStream {
+impl<S> std::fmt::Debug for NoiseStream<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoiseStream")
             .field("read_nonce", &self.read_nonce.load(Ordering::Relaxed))
@@ -55,12 +58,15 @@ fn build_nonce(counter: u64) -> Nonce {
     Nonce::from(nonce)
 }
 
-impl NoiseStream {
-    /// Wrap a TCP stream with controlbase encryption using the given transport ciphers.
-    /// `leftover` contains any bytes already read from TCP that belong to the first
-    /// Noise transport record (from the handshake buffer overflow).
+impl<S> NoiseStream<S>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    /// Wrap a stream with controlbase encryption using the given transport ciphers.
+    /// `leftover` contains any bytes already read from the underlying stream that
+    /// belong to the first Noise transport record (from the handshake buffer overflow).
     pub fn new(
-        stream: TcpStream,
+        stream: S,
         tx_cipher: ChaCha20Poly1305,
         rx_cipher: ChaCha20Poly1305,
         leftover: Vec<u8>,
@@ -194,7 +200,10 @@ impl NoiseStream {
     }
 }
 
-impl AsyncRead for NoiseStream {
+impl<S> AsyncRead for NoiseStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -237,7 +246,10 @@ impl AsyncRead for NoiseStream {
     }
 }
 
-impl AsyncWrite for NoiseStream {
+impl<S> AsyncWrite for NoiseStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     fn poll_write(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,

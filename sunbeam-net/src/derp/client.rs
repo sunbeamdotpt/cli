@@ -2,18 +2,27 @@ use bytes::{BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
 #[cfg(test)]
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::framing::*;
 use crate::error::Error;
 
+/// A trait alias for the underlying transport — either a plain TcpStream
+/// (`derp://host` / `http://host`) or a TLS-wrapped one (`https://host`).
+trait DerpTransport: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> DerpTransport for T {}
+
 /// Client for a single DERP relay server.
 pub struct DerpClient {
-    inner: Framed<TcpStream, DerpFrameCodec>,
+    inner: Framed<Box<dyn DerpTransport>, DerpFrameCodec>,
     server_public: [u8; 32],
 }
+
+/// Re-export of the shared TLS mode under the DERP-specific name so
+/// existing call sites keep working.
+pub use crate::tls::TlsMode as DerpTlsMode;
 
 impl std::fmt::Debug for DerpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,30 +36,55 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+// TLS helpers live in `crate::tls` and are shared with the control client.
+
 impl DerpClient {
     /// Connect to a DERP server, perform HTTP upgrade and NaCl handshake.
     ///
-    /// `url` should be like `http://host:port` or `host:port`.
+    /// `url` accepts `http://host:port`, `https://host:port`, or bare
+    /// `host:port` (treated as plain HTTP). HTTPS uses standard webpki
+    /// certificate verification.
     pub async fn connect(
         url: &str,
         node_keys: &crate::keys::NodeKeys,
     ) -> crate::Result<Self> {
+        Self::connect_with_tls(url, node_keys, DerpTlsMode::Verify).await
+    }
+
+    /// Like [`connect`], but lets the caller pick a TLS verification
+    /// mode. Use this with `DerpTlsMode::InsecureSkipVerify` against test
+    /// servers with self-signed certs.
+    pub async fn connect_with_tls(
+        url: &str,
+        node_keys: &crate::keys::NodeKeys,
+        tls_mode: DerpTlsMode,
+    ) -> crate::Result<Self> {
         use crypto_box::aead::{Aead, AeadCore, OsRng};
         use crypto_box::{PublicKey, SalsaBox, SecretKey};
 
-        // Parse host:port from url
-        let addr = url
-            .strip_prefix("http://")
-            .or_else(|| url.strip_prefix("https://"))
-            .unwrap_or(url);
+        // Parse the URL into (scheme, addr).
+        let (use_tls, addr) = if let Some(rest) = url.strip_prefix("https://") {
+            (true, rest)
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            (false, rest)
+        } else {
+            (false, url)
+        };
 
         // TCP connect
-        let mut stream = TcpStream::connect(addr).await.map_err(|e| {
+        let tcp = TcpStream::connect(addr).await.map_err(|e| {
             Error::Derp(format!("failed to connect to DERP server {addr}: {e}"))
         })?;
 
-        // HTTP upgrade request
+        // Optionally wrap in TLS.
         let host = addr.split(':').next().unwrap_or(addr);
+        let mut stream: Box<dyn DerpTransport> = if use_tls {
+            Box::new(crate::tls::tls_wrap(tcp, host, tls_mode).await?)
+        } else {
+            Box::new(tcp)
+        };
+
+        // HTTP upgrade request
         let upgrade_req = format!(
             "GET /derp HTTP/1.1\r\n\
              Host: {host}\r\n\

@@ -177,16 +177,43 @@ impl VirtualNetwork {
     }
 
     /// Read data from a TCP socket.
+    ///
+    /// Returns `Ok(n)` with the number of bytes read (possibly 0 if no
+    /// data is available right now). Returns `Err(...)` only when the
+    /// socket has actually finished receiving (FIN seen, drained) — not
+    /// merely when the socket is in a transient state like SynSent.
     pub fn tcp_recv(
         &mut self,
         handle: TcpSocketHandle,
         buf: &mut [u8],
     ) -> crate::Result<usize> {
         let socket = self.sockets.get_mut::<tcp::Socket>(handle.0);
+        // Not ready to receive yet (SynSent, Listen, Closed) — return 0,
+        // don't propagate as a fatal error. The poll loop will retry.
+        if !socket.may_recv() {
+            // If recv side is fully closed (Finished), tell the caller so
+            // they stop polling.
+            if socket.state() == tcp::State::Closed
+                || socket.state() == tcp::State::CloseWait
+                || socket.state() == tcp::State::TimeWait
+                || socket.state() == tcp::State::Closing
+                || socket.state() == tcp::State::LastAck
+            {
+                // Recv side may still have buffered data; try one drain.
+                if socket.recv_queue() > 0 {
+                    return socket
+                        .recv_slice(buf)
+                        .map_err(|e| crate::Error::WireGuard(format!("TCP recv: {e:?}")));
+                }
+                return Err(crate::Error::WireGuard("TCP recv: closed".into()));
+            }
+            return Ok(0);
+        }
         socket
             .recv_slice(buf)
             .map_err(|e| crate::Error::WireGuard(format!("TCP recv: {e:?}")))
     }
+
 
     /// Write data to a TCP socket.
     pub fn tcp_send(
