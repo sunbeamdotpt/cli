@@ -84,6 +84,7 @@ wfe-yaml = { version = "1.6.3", registry = "sunbeam" }
 async-trait = "0.1"
 hostname = "0.4.2"
 whoami = "2.1.1"
+libc = "0.2.184"
 
 [dev-dependencies]
 wiremock = "0.6"

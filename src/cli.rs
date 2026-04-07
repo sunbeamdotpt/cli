@@ -173,8 +173,12 @@ pub enum Verb {
         service: String,
     },
 
-    /// Connect to the cluster VPN (foreground; Ctrl-C to disconnect).
-    Connect,
+    /// Connect to the cluster VPN (spawns a background daemon).
+    Connect {
+        /// Run the daemon in the foreground instead of detaching.
+        #[arg(long)]
+        foreground: bool,
+    },
 
     /// Disconnect from the cluster VPN.
     Disconnect,
@@ -184,6 +188,12 @@ pub enum Verb {
         #[command(subcommand)]
         action: VpnAction,
     },
+
+    /// Internal: run the VPN daemon in the foreground. Used by `connect`
+    /// when it spawns itself as a background process. Not part of the
+    /// public CLI surface.
+    #[command(name = "__vpn-daemon", hide = true)]
+    VpnDaemon,
 
     /// Self-update from latest mainline commit.
     Update,
@@ -1514,13 +1524,17 @@ pub async fn dispatch() -> Result<()> {
             crate::service_cmds::cmd_shell(&service).await
         }
 
-        Some(Verb::Connect) => crate::vpn_cmds::cmd_connect().await,
+        Some(Verb::Connect { foreground }) => {
+            crate::vpn_cmds::cmd_connect(foreground).await
+        }
 
         Some(Verb::Disconnect) => crate::vpn_cmds::cmd_disconnect().await,
 
         Some(Verb::Vpn { action }) => match action {
             VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
         },
+
+        Some(Verb::VpnDaemon) => crate::vpn_cmds::cmd_vpn_daemon().await,
 
         Some(Verb::Update) => crate::update::cmd_update().await,
 
