@@ -43,7 +43,7 @@ const PG_USERS: &[&str] = &[
     "stalwart",
 ];
 
-const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
+pub(crate) const SMTP_URI: &str = "smtp://stalwart.stalwart.svc.cluster.local:25/?skip_ssl_verify=true";
 
 // ── Key generation ──────────────────────────────────────────────────────────
 
@@ -442,18 +442,6 @@ pub async fn cmd_seed() -> Result<()> {
         .get("kratos-secrets-cookie")
         .cloned()
         .unwrap_or_default();
-    let hive_oidc_id = creds
-        .get("hive-oidc-client-id")
-        .cloned()
-        .unwrap_or_else(|| "hive-local".into());
-    let hive_oidc_sec = creds
-        .get("hive-oidc-client-secret")
-        .cloned()
-        .unwrap_or_default();
-    let django_secret = creds
-        .get("people-django-secret")
-        .cloned()
-        .unwrap_or_default();
     let gitea_admin_pass = creds
         .get("gitea-admin-password")
         .cloned()
@@ -670,31 +658,7 @@ pub async fn cmd_seed() -> Result<()> {
     )
     .await?;
 
-    k::ensure_ns("lasuite").await?;
-    k::create_secret(
-        "lasuite",
-        "seaweedfs-s3-credentials",
-        HashMap::from([
-            ("S3_ACCESS_KEY".into(), s3_access_key),
-            ("S3_SECRET_KEY".into(), s3_secret_key),
-        ]),
-    )
-    .await?;
-    k::create_secret(
-        "lasuite",
-        "hive-oidc",
-        HashMap::from([
-            ("client-id".into(), hive_oidc_id),
-            ("client-secret".into(), hive_oidc_sec),
-        ]),
-    )
-    .await?;
-    k::create_secret(
-        "lasuite",
-        "people-django-secret",
-        HashMap::from([("DJANGO_SECRET_KEY".into(), django_secret)]),
-    )
-    .await?;
+    let _ = (s3_access_key, s3_secret_key);
 
     k::ensure_ns("matrix").await?;
     k::ensure_ns("media").await?;
@@ -1091,7 +1055,7 @@ mod tests {
     fn test_smtp_uri() {
         assert_eq!(
             SMTP_URI,
-            "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true"
+            "smtp://stalwart.stalwart.svc.cluster.local:25/?skip_ssl_verify=true"
         );
     }
 

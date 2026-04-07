@@ -784,23 +784,23 @@ mod tests {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: meet-config
-  namespace: lasuite
+  name: stalwart-config
+  namespace: stalwart
 data:
   FOO: bar
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: meet-backend
-  namespace: lasuite
+  name: stalwart
+  namespace: stalwart
 spec:
   replicas: 1
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: lasuite
+  name: stalwart
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -822,14 +822,14 @@ spec:
 
     #[test]
     fn test_keeps_matching_namespace() {
-        let result = filter_by_namespace(MULTI_DOC, "lasuite");
-        assert!(result.contains("name: meet-config"));
-        assert!(result.contains("name: meet-backend"));
+        let result = filter_by_namespace(MULTI_DOC, "stalwart");
+        assert!(result.contains("name: stalwart-config"));
+        assert!(result.contains("name: stalwart\n"));
     }
 
     #[test]
     fn test_excludes_other_namespaces() {
-        let result = filter_by_namespace(MULTI_DOC, "lasuite");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart");
         assert!(!result.contains("namespace: ingress"));
         assert!(!result.contains("name: pingora-config"));
         assert!(!result.contains("name: pingora\n"));
@@ -837,7 +837,7 @@ spec:
 
     #[test]
     fn test_includes_namespace_resource_itself() {
-        let result = filter_by_namespace(MULTI_DOC, "lasuite");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart");
         assert!(result.contains("kind: Namespace"));
     }
 
@@ -846,7 +846,7 @@ spec:
         let result = filter_by_namespace(MULTI_DOC, "ingress");
         assert!(result.contains("name: pingora-config"));
         assert!(result.contains("name: pingora"));
-        assert!(!result.contains("namespace: lasuite"));
+        assert!(!result.contains("namespace: stalwart"));
     }
 
     #[test]
@@ -857,13 +857,13 @@ spec:
 
     #[test]
     fn test_empty_input_returns_empty() {
-        let result = filter_by_namespace("", "lasuite");
+        let result = filter_by_namespace("", "stalwart");
         assert!(result.trim().is_empty());
     }
 
     #[test]
     fn test_result_starts_with_separator() {
-        let result = filter_by_namespace(MULTI_DOC, "lasuite");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart");
         assert!(result.starts_with("---"));
     }
 
@@ -883,7 +883,7 @@ spec:
     #[test]
     fn test_single_doc_not_matching() {
         let doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: ory\n";
-        let result = filter_by_namespace(doc, "lasuite");
+        let result = filter_by_namespace(doc, "stalwart");
         assert!(result.trim().is_empty());
     }
 }

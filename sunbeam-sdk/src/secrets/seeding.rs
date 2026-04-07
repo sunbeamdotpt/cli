@@ -560,24 +560,6 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
         }
     }
 
-    // Seed resource server allowed audiences for La Suite external APIs.
-    // Combines the static sunbeam-cli client ID with dynamic service client IDs.
-    ok("Configuring La Suite resource server audiences...");
-    {
-        let mut rs_audiences = HashMap::new();
-        // sunbeam-cli is always static (OAuth2Client CRD name)
-        let mut audiences = vec!["sunbeam-cli".to_string()];
-        // Read the messages client ID from the oidc-messages secret if available
-        if let Ok(client_id) = crate::kube::kube_get_secret_field("lasuite", "oidc-messages", "CLIENT_ID").await {
-            audiences.push(client_id);
-        }
-        rs_audiences.insert(
-            "OIDC_RS_ALLOWED_AUDIENCES".to_string(),
-            audiences.join(","),
-        );
-        bao.kv_put("secret", "drive-rs-audiences", &rs_audiences).await?;
-    }
-
     // Patch gitea admin credentials into secret/sol for Sol's Gitea integration.
     // Uses kv_patch to preserve manually-set keys (matrix-access-token etc.).
     {
@@ -618,7 +600,7 @@ pub async fn seed_openbao() -> Result<Option<SeedResult>> {
         "auth/kubernetes/role/vso",
         &serde_json::json!({
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,stalwart,matrix,media,data,monitoring",
+            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe",
             "policies": "vso-reader",
             "ttl": "1h"
         }),

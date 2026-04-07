@@ -349,36 +349,6 @@ pub(super) async fn check_hydra_oidc(domain: &str, client: &reqwest::Client) -> 
     }
 }
 
-/// GET https://people.{domain}/ -> any response < 500 (302 to OIDC is fine).
-pub(super) async fn check_people(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://people.{domain}/");
-    match http_get(client, &url, None).await {
-        Ok((status, _)) => CheckResult {
-            name: "people".into(),
-            ns: "lasuite".into(),
-            svc: "people".into(),
-            passed: status < 500,
-            detail: format!("HTTP {status}"),
-        },
-        Err(e) => CheckResult::fail("people", "lasuite", "people", &e),
-    }
-}
-
-/// GET /api/v1.0/config/ -> any response < 500 (401 auth-required is fine).
-pub(super) async fn check_people_api(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://people.{domain}/api/v1.0/config/");
-    match http_get(client, &url, None).await {
-        Ok((status, _)) => CheckResult {
-            name: "people-api".into(),
-            ns: "lasuite".into(),
-            svc: "people".into(),
-            passed: status < 500,
-            detail: format!("HTTP {status}"),
-        },
-        Err(e) => CheckResult::fail("people-api", "lasuite", "people", &e),
-    }
-}
-
 /// kubectl exec livekit-server pod -- wget localhost:7880/ -> rc 0.
 pub(super) async fn check_livekit(_domain: &str, _client: &reqwest::Client) -> CheckResult {
     let kube_client = match get_client().await {

@@ -234,7 +234,7 @@ impl HttpTransport {
 /// constructing on first call via [`OnceCell`] (async-aware).
 ///
 /// Auth is resolved per-client:
-/// - SSO bearer (`get_token()`) — admin APIs, Matrix, La Suite, OpenSearch
+/// - SSO bearer (`get_token()`) — admin APIs, Matrix, OpenSearch
 /// - Gitea PAT (`get_gitea_token()`) — Gitea
 /// - None — Prometheus, Loki, S3, LiveKit
 pub struct SunbeamClient {
@@ -260,20 +260,6 @@ pub struct SunbeamClient {
     loki: OnceCell<crate::monitoring::LokiClient>,
     #[cfg(feature = "monitoring")]
     grafana: OnceCell<crate::monitoring::GrafanaClient>,
-    #[cfg(feature = "lasuite")]
-    people: OnceCell<crate::lasuite::PeopleClient>,
-    #[cfg(feature = "lasuite")]
-    docs: OnceCell<crate::lasuite::DocsClient>,
-    #[cfg(feature = "lasuite")]
-    meet: OnceCell<crate::lasuite::MeetClient>,
-    #[cfg(feature = "lasuite")]
-    drive: OnceCell<crate::lasuite::DriveClient>,
-    #[cfg(feature = "lasuite")]
-    messages: OnceCell<crate::lasuite::MessagesClient>,
-    #[cfg(feature = "lasuite")]
-    calendars: OnceCell<crate::lasuite::CalendarsClient>,
-    #[cfg(feature = "lasuite")]
-    find: OnceCell<crate::lasuite::FindClient>,
     bao: OnceCell<crate::openbao::BaoClient>,
 }
 
@@ -303,20 +289,6 @@ impl SunbeamClient {
             loki: OnceCell::new(),
             #[cfg(feature = "monitoring")]
             grafana: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            people: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            docs: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            meet: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            drive: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            messages: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            calendars: OnceCell::new(),
-            #[cfg(feature = "lasuite")]
-            find: OnceCell::new(),
             bao: OnceCell::new(),
         }
     }
@@ -430,70 +402,6 @@ impl SunbeamClient {
     pub async fn grafana(&self) -> Result<&crate::monitoring::GrafanaClient> {
         self.grafana.get_or_try_init(|| async {
             Ok(crate::monitoring::GrafanaClient::connect(&self.domain))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn people(&self) -> Result<&crate::lasuite::PeopleClient> {
-        // Ensure we have a valid token (triggers refresh if expired).
-        self.sso_token().await?;
-        self.people.get_or_try_init(|| async {
-            let url = format!("https://people.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::PeopleClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn docs(&self) -> Result<&crate::lasuite::DocsClient> {
-        self.sso_token().await?;
-        self.docs.get_or_try_init(|| async {
-            let url = format!("https://docs.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::DocsClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn meet(&self) -> Result<&crate::lasuite::MeetClient> {
-        self.sso_token().await?;
-        self.meet.get_or_try_init(|| async {
-            let url = format!("https://meet.{}/external-api/v1.0", self.domain);
-            Ok(crate::lasuite::MeetClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn drive(&self) -> Result<&crate::lasuite::DriveClient> {
-        self.sso_token().await?;
-        self.drive.get_or_try_init(|| async {
-            let url = format!("https://drive.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::DriveClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn messages(&self) -> Result<&crate::lasuite::MessagesClient> {
-        self.sso_token().await?;
-        self.messages.get_or_try_init(|| async {
-            let url = format!("https://mail.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::MessagesClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn calendars(&self) -> Result<&crate::lasuite::CalendarsClient> {
-        self.sso_token().await?;
-        self.calendars.get_or_try_init(|| async {
-            let url = format!("https://calendar.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::CalendarsClient::from_parts(url, AuthMethod::DynamicBearer))
-        }).await
-    }
-
-    #[cfg(feature = "lasuite")]
-    pub async fn find(&self) -> Result<&crate::lasuite::FindClient> {
-        self.sso_token().await?;
-        self.find.get_or_try_init(|| async {
-            let url = format!("https://find.{}/external_api/v1.0", self.domain);
-            Ok(crate::lasuite::FindClient::from_parts(url, AuthMethod::DynamicBearer))
         }).await
     }
 
