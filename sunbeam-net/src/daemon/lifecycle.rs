@@ -42,6 +42,11 @@ async fn run_daemon_loop(
     status: Arc<RwLock<DaemonStatus>>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
+    // Make sure the IPC control socket is cleaned up no matter how the
+    // daemon exits — otherwise `sunbeam vpn status` after a clean shutdown
+    // would see a stale socket file and report "stale socket".
+    let _socket_guard = SocketGuard::new(config.control_socket.clone());
+
     let keys = crate::keys::NodeKeys::load_or_generate(&config.state_dir)?;
     let mut attempt: u32 = 0;
     let max_backoff = Duration::from_secs(60);
@@ -84,6 +89,26 @@ async fn run_daemon_loop(
 
 enum SessionExit {
     Disconnected,
+}
+
+/// RAII guard that removes a Unix socket file when dropped. Used by
+/// `run_daemon_loop` to make sure the IPC control socket is cleaned up
+/// when the daemon exits, regardless of whether shutdown was triggered
+/// via DaemonHandle, IPC Stop, signal, or panic.
+struct SocketGuard {
+    path: std::path::PathBuf,
+}
+
+impl SocketGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Run a single VPN session. Returns when the session ends (error or shutdown).
