@@ -5,6 +5,7 @@ pub mod derp;
 pub mod error;
 pub mod keys;
 pub mod noise;
+pub mod wg;
 pub(crate) mod proto;
 
 pub use config::VpnConfig;
