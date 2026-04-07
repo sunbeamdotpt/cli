@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use tokio::net::UnixListener;
+use tokio_util::sync::CancellationToken;
 
 use super::state::DaemonStatus;
 
@@ -41,16 +42,28 @@ pub enum IpcResponse {
 pub(crate) struct IpcServer {
     listener: UnixListener,
     status: Arc<RwLock<DaemonStatus>>,
+    /// Cancellation token shared with the daemon loop. Cancelling this from
+    /// an IPC `Stop` request triggers graceful shutdown of the whole
+    /// daemon, the same as `DaemonHandle::shutdown()`.
+    daemon_shutdown: CancellationToken,
 }
 
 impl IpcServer {
     /// Bind a new IPC server at the given socket path.
-    pub fn new(socket_path: &Path, status: Arc<RwLock<DaemonStatus>>) -> crate::Result<Self> {
+    pub fn new(
+        socket_path: &Path,
+        status: Arc<RwLock<DaemonStatus>>,
+        daemon_shutdown: CancellationToken,
+    ) -> crate::Result<Self> {
         // Remove stale socket file if it exists.
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
             .map_err(|e| crate::Error::Io { context: "bind IPC socket".into(), source: e })?;
-        Ok(Self { listener, status })
+        Ok(Self {
+            listener,
+            status,
+            daemon_shutdown,
+        })
     }
 
     /// Accept and handle IPC connections until cancelled.
@@ -59,8 +72,9 @@ impl IpcServer {
             let (stream, _) = self.listener.accept().await
                 .map_err(|e| crate::Error::Io { context: "accept IPC".into(), source: e })?;
             let status = self.status.clone();
+            let shutdown = self.daemon_shutdown.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_ipc_connection(stream, &status).await {
+                if let Err(e) = handle_ipc_connection(stream, &status, &shutdown).await {
                     tracing::warn!("IPC error: {e}");
                 }
             });
@@ -68,9 +82,104 @@ impl IpcServer {
     }
 }
 
+/// Client for talking to a running VPN daemon over its Unix control socket.
+pub struct IpcClient {
+    socket_path: std::path::PathBuf,
+}
+
+impl IpcClient {
+    /// Build a client targeting the given control socket. No connection is
+    /// established until a request method is called.
+    pub fn new(socket_path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            socket_path: socket_path.into(),
+        }
+    }
+
+    /// Returns true if the control socket file exists. (Doesn't prove the
+    /// daemon is alive — only that something has bound there at some point.)
+    pub fn socket_exists(&self) -> bool {
+        self.socket_path.exists()
+    }
+
+    /// Send a single command and return the response.
+    pub async fn request(&self, cmd: IpcCommand) -> crate::Result<IpcResponse> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixStream;
+
+        let stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
+            crate::Error::Io {
+                context: format!("connect to {}", self.socket_path.display()),
+                source: e,
+            }
+        })?;
+        let (reader, mut writer) = stream.into_split();
+
+        let mut req_bytes = serde_json::to_vec(&cmd)?;
+        req_bytes.push(b'\n');
+        writer
+            .write_all(&req_bytes)
+            .await
+            .map_err(|e| crate::Error::Io {
+                context: "write IPC request".into(),
+                source: e,
+            })?;
+        writer
+            .shutdown()
+            .await
+            .map_err(|e| crate::Error::Io {
+                context: "shutdown IPC writer".into(),
+                source: e,
+            })?;
+
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        let n = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| crate::Error::Io {
+                context: "read IPC response".into(),
+                source: e,
+            })?;
+        if n == 0 {
+            return Err(crate::Error::Ipc(
+                "daemon closed the connection without responding".into(),
+            ));
+        }
+
+        let resp: IpcResponse = serde_json::from_str(line.trim())?;
+        Ok(resp)
+    }
+
+    /// Convenience: query the daemon's status.
+    pub async fn status(&self) -> crate::Result<DaemonStatus> {
+        match self.request(IpcCommand::Status).await? {
+            IpcResponse::Status(s) => Ok(s),
+            IpcResponse::Error(e) => Err(crate::Error::Ipc(e)),
+            other => Err(crate::Error::Ipc(format!(
+                "unexpected response to Status: {other:?}"
+            ))),
+        }
+    }
+
+    /// Convenience: tell the daemon to shut down. Returns once the daemon
+    /// has acknowledged the request — the daemon process may take a moment
+    /// longer to actually exit.
+    pub async fn stop(&self) -> crate::Result<()> {
+        match self.request(IpcCommand::Stop).await? {
+            IpcResponse::Ok => Ok(()),
+            IpcResponse::Error(e) => Err(crate::Error::Ipc(e)),
+            other => Err(crate::Error::Ipc(format!(
+                "unexpected response to Stop: {other:?}"
+            ))),
+        }
+    }
+}
+
 async fn handle_ipc_connection(
     stream: tokio::net::UnixStream,
     status: &Arc<RwLock<DaemonStatus>>,
+    daemon_shutdown: &CancellationToken,
 ) -> crate::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -88,11 +197,12 @@ async fn handle_ipc_connection(
             IpcResponse::Status(s.clone())
         }
         IpcCommand::Reconnect => {
-            // TODO: signal the daemon loop to reconnect
+            // TODO: implement targeted session reconnect (without dropping
+            // the daemon). For now treat it the same as a no-op.
             IpcResponse::Ok
         }
         IpcCommand::Stop => {
-            // TODO: signal the daemon loop to shut down
+            daemon_shutdown.cancel();
             IpcResponse::Ok
         }
     };
@@ -122,7 +232,7 @@ mod tests {
             derp_home: Some(1),
         }));
 
-        let server = IpcServer::new(&sock_path, status).unwrap();
+        let server = IpcServer::new(&sock_path, status, CancellationToken::new()).unwrap();
         let server_task = tokio::spawn(async move { server.run().await });
 
         // Give the server a moment to start accepting.
@@ -155,7 +265,7 @@ mod tests {
         let sock_path = dir.path().join("test.sock");
 
         let status = Arc::new(RwLock::new(DaemonStatus::Stopped));
-        let server = IpcServer::new(&sock_path, status).unwrap();
+        let server = IpcServer::new(&sock_path, status, CancellationToken::new()).unwrap();
         let server_task = tokio::spawn(async move { server.run().await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

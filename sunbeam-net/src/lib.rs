@@ -12,5 +12,5 @@ pub mod wg;
 pub(crate) mod proto;
 
 pub use config::VpnConfig;
-pub use daemon::{DaemonHandle, DaemonStatus, VpnDaemon};
+pub use daemon::{DaemonHandle, DaemonStatus, IpcClient, IpcCommand, IpcResponse, VpnDaemon};
 pub use error::{Error, Result};

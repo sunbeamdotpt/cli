@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use smoltcp::wire::IpAddress;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::config::VpnConfig;
 use crate::control::MapUpdate;
@@ -22,14 +22,17 @@ impl VpnDaemon {
     /// Returns a handle for status queries and shutdown.
     pub async fn start(config: VpnConfig) -> crate::Result<DaemonHandle> {
         let status = Arc::new(RwLock::new(DaemonStatus::Connecting));
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        // CancellationToken (rather than oneshot) so both DaemonHandle::shutdown
+        // and the IPC server can trigger it.
+        let shutdown = tokio_util::sync::CancellationToken::new();
 
         let status_clone = status.clone();
+        let shutdown_clone = shutdown.clone();
         let join = tokio::spawn(async move {
-            run_daemon_loop(config, status_clone, shutdown_rx).await
+            run_daemon_loop(config, status_clone, shutdown_clone).await
         });
 
-        Ok(DaemonHandle::with_daemon(shutdown_tx, status, join))
+        Ok(DaemonHandle::with_daemon(shutdown, status, join))
     }
 }
 
@@ -37,7 +40,7 @@ impl VpnDaemon {
 async fn run_daemon_loop(
     config: VpnConfig,
     status: Arc<RwLock<DaemonStatus>>,
-    mut shutdown_rx: oneshot::Receiver<()>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
     let keys = crate::keys::NodeKeys::load_or_generate(&config.state_dir)?;
     let mut attempt: u32 = 0;
@@ -46,12 +49,12 @@ async fn run_daemon_loop(
     loop {
         set_status(&status, DaemonStatus::Connecting);
 
-        let session = run_session(&config, &keys, &status);
+        let session = run_session(&config, &keys, &status, &shutdown);
         tokio::pin!(session);
 
         let session_result = tokio::select! {
             biased;
-            _ = &mut shutdown_rx => {
+            _ = shutdown.cancelled() => {
                 set_status(&status, DaemonStatus::Stopped);
                 return Ok(());
             }
@@ -69,7 +72,7 @@ async fn run_daemon_loop(
 
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => continue,
-                    _ = &mut shutdown_rx => {
+                    _ = shutdown.cancelled() => {
                         set_status(&status, DaemonStatus::Stopped);
                         return Ok(());
                     }
@@ -88,6 +91,7 @@ async fn run_session(
     config: &VpnConfig,
     keys: &crate::keys::NodeKeys,
     status: &Arc<RwLock<DaemonStatus>>,
+    daemon_shutdown: &tokio_util::sync::CancellationToken,
 ) -> std::result::Result<SessionExit, crate::Error> {
     // 1. Connect to coordination server
     set_status(status, DaemonStatus::Connecting);
@@ -233,7 +237,7 @@ async fn run_session(
     });
 
     // 11. Start IPC server
-    let ipc = IpcServer::new(&config.control_socket, status.clone())?;
+    let ipc = IpcServer::new(&config.control_socket, status.clone(), daemon_shutdown.clone())?;
 
     // Mark as ready
     let derp_home = derp_map.as_ref()

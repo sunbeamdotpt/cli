@@ -2,8 +2,8 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// Operational status of the VPN daemon.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -66,8 +66,9 @@ pub struct DaemonHandle {
     pub control_socket: PathBuf,
     /// Cached status (for IPC-based handles).
     pub status: DaemonStatus,
-    /// Shutdown signal sender (for in-process handles).
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Cancellation token shared with the daemon loop and the IPC server.
+    /// `shutdown()` cancels it; an IPC `Stop` command also cancels it.
+    shutdown: Option<CancellationToken>,
     /// Shared live status (for in-process handles).
     live_status: Option<Arc<RwLock<DaemonStatus>>>,
     /// Background task join handle.
@@ -88,7 +89,7 @@ impl Clone for DaemonHandle {
         Self {
             control_socket: self.control_socket.clone(),
             status: self.status.clone(),
-            shutdown_tx: None,
+            shutdown: self.shutdown.clone(),
             live_status: self.live_status.clone(),
             join: None,
         }
@@ -101,7 +102,7 @@ impl DaemonHandle {
         Self {
             control_socket,
             status: DaemonStatus::Stopped,
-            shutdown_tx: None,
+            shutdown: None,
             live_status: None,
             join: None,
         }
@@ -109,14 +110,14 @@ impl DaemonHandle {
 
     /// Create a handle for an in-process daemon with shutdown and status tracking.
     pub(crate) fn with_daemon(
-        shutdown_tx: oneshot::Sender<()>,
+        shutdown: CancellationToken,
         status: Arc<RwLock<DaemonStatus>>,
         join: JoinHandle<crate::Result<()>>,
     ) -> Self {
         Self {
             control_socket: PathBuf::new(),
             status: DaemonStatus::Starting,
-            shutdown_tx: Some(shutdown_tx),
+            shutdown: Some(shutdown),
             live_status: Some(status),
             join: Some(join),
         }
@@ -134,8 +135,8 @@ impl DaemonHandle {
 
     /// Signal the daemon to shut down and wait for it to finish.
     pub async fn shutdown(self) -> crate::Result<()> {
-        if let Some(tx) = self.shutdown_tx {
-            let _ = tx.send(());
+        if let Some(token) = self.shutdown {
+            token.cancel();
         }
         if let Some(join) = self.join {
             match join.await {
