@@ -448,36 +448,6 @@ async fn check_hydra_oidc(domain: &str, client: &reqwest::Client) -> CheckResult
     }
 }
 
-/// GET https://people.{domain}/ -> any response < 500 (302 to OIDC is fine).
-async fn check_people(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://people.{domain}/");
-    match http_get(client, &url, None).await {
-        Ok((status, _)) => CheckResult {
-            name: "people".into(),
-            ns: "lasuite".into(),
-            svc: "people".into(),
-            passed: status < 500,
-            detail: format!("HTTP {status}"),
-        },
-        Err(e) => CheckResult::fail("people", "lasuite", "people", &e),
-    }
-}
-
-/// GET /api/v1.0/config/ -> any response < 500 (401 auth-required is fine).
-async fn check_people_api(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://people.{domain}/api/v1.0/config/");
-    match http_get(client, &url, None).await {
-        Ok((status, _)) => CheckResult {
-            name: "people-api".into(),
-            ns: "lasuite".into(),
-            svc: "people".into(),
-            passed: status < 500,
-            detail: format!("HTTP {status}"),
-        },
-        Err(e) => CheckResult::fail("people-api", "lasuite", "people", &e),
-    }
-}
-
 /// kubectl exec livekit-server pod -- wget localhost:7880/ -> rc 0.
 async fn check_livekit(_domain: &str, _client: &reqwest::Client) -> CheckResult {
     let kube_client = match get_client().await {
@@ -572,16 +542,6 @@ fn check_registry() -> Vec<CheckEntry> {
             func: |d, c| Box::pin(check_hydra_oidc(d, c)),
             ns: "ory",
             svc: "hydra",
-        },
-        CheckEntry {
-            func: |d, c| Box::pin(check_people(d, c)),
-            ns: "lasuite",
-            svc: "people",
-        },
-        CheckEntry {
-            func: |d, c| Box::pin(check_people_api(d, c)),
-            ns: "lasuite",
-            svc: "people",
         },
         CheckEntry {
             func: |d, c| Box::pin(check_livekit(d, c)),
@@ -794,7 +754,7 @@ mod tests {
     #[test]
     fn test_check_registry_has_all_checks() {
         let registry = check_registry();
-        assert_eq!(registry.len(), 11);
+        assert_eq!(registry.len(), 9);
 
         // Verify order matches Python CHECKS list
         assert_eq!(registry[0].ns, "devtools");
@@ -813,12 +773,8 @@ mod tests {
         assert_eq!(registry[6].svc, "kratos");
         assert_eq!(registry[7].ns, "ory");
         assert_eq!(registry[7].svc, "hydra");
-        assert_eq!(registry[8].ns, "lasuite");
-        assert_eq!(registry[8].svc, "people");
-        assert_eq!(registry[9].ns, "lasuite");
-        assert_eq!(registry[9].svc, "people");
-        assert_eq!(registry[10].ns, "media");
-        assert_eq!(registry[10].svc, "livekit");
+        assert_eq!(registry[8].ns, "media");
+        assert_eq!(registry[8].svc, "livekit");
     }
 
     #[test]
@@ -938,7 +894,7 @@ mod tests {
         let registry = check_registry();
         let namespaces: std::collections::HashSet<&str> =
             registry.iter().map(|e| e.ns).collect();
-        for expected in &["devtools", "data", "storage", "ory", "lasuite", "media"] {
+        for expected in &["devtools", "data", "storage", "ory", "media"] {
             assert!(
                 namespaces.contains(expected),
                 "registry missing namespace: {expected}"
@@ -953,7 +909,7 @@ mod tests {
             registry.iter().map(|e| e.svc).collect();
         for expected in &[
             "gitea", "postgres", "valkey", "openbao", "seaweedfs", "kratos", "hydra",
-            "people", "livekit",
+            "livekit",
         ] {
             assert!(
                 services.contains(expected),
@@ -970,16 +926,6 @@ mod tests {
             .filter(|e| e.ns == "devtools" && e.svc == "gitea")
             .collect();
         assert_eq!(gitea.len(), 2);
-    }
-
-    #[test]
-    fn test_check_registry_lasuite_has_two_people_entries() {
-        let registry = check_registry();
-        let people: Vec<_> = registry
-            .iter()
-            .filter(|e| e.ns == "lasuite" && e.svc == "people")
-            .collect();
-        assert_eq!(people.len(), 2);
     }
 
     #[test]
@@ -1007,7 +953,7 @@ mod tests {
     #[test]
     fn test_no_target_runs_all() {
         let selected = filter_registry(None, None);
-        assert_eq!(selected.len(), 11);
+        assert_eq!(selected.len(), 9);
     }
 
     #[test]
@@ -1036,13 +982,6 @@ mod tests {
         let selected = filter_registry(Some("ory"), Some("hydra"));
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0], ("ory", "hydra"));
-    }
-
-    #[test]
-    fn test_svc_filter_people_returns_both() {
-        let selected = filter_registry(Some("lasuite"), Some("people"));
-        assert_eq!(selected.len(), 2);
-        assert!(selected.iter().all(|(ns, svc)| *ns == "lasuite" && *svc == "people"));
     }
 
     #[test]
