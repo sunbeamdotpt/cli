@@ -18,6 +18,10 @@ struct PeerTunnel {
     endpoint: Option<SocketAddr>,
     derp_region: Option<u16>,
     allowed_ips: Vec<IpNet>,
+    /// Local boringtun index assigned to this peer's tunnel. Used to route
+    /// inbound UDP packets back to the right peer via the receiver_index
+    /// field in WireGuard message types 2/3/4.
+    local_index: u32,
 }
 
 /// Result of encapsulating an outbound IP packet.
@@ -99,6 +103,7 @@ impl WgTunnel {
                     endpoint: parse_first_endpoint(&node.endpoints),
                     derp_region: parse_derp_region(&node.derp),
                     allowed_ips: parse_allowed_ips(&node.allowed_ips),
+                    local_index: index,
                 });
             }
         }
@@ -193,6 +198,29 @@ impl WgTunnel {
         }
 
         actions
+    }
+
+    /// Find a peer by the boringtun local index we assigned to it.
+    /// WireGuard message types 2/3/4 carry this in the receiver_index field.
+    pub fn find_peer_by_local_index(&self, idx: u32) -> Option<[u8; 32]> {
+        for (key, peer) in &self.peers {
+            if peer.local_index == idx {
+                return Some(*key);
+            }
+        }
+        None
+    }
+
+    /// Find a peer whose advertised endpoint matches the given socket addr.
+    /// Used as a fallback for inbound UDP packets that don't carry our index
+    /// (i.e. type-1 handshake initiations from peers we already know about).
+    pub fn find_peer_by_endpoint(&self, addr: SocketAddr) -> Option<[u8; 32]> {
+        for (key, peer) in &self.peers {
+            if peer.endpoint == Some(addr) {
+                return Some(*key);
+            }
+        }
+        None
     }
 
     /// Find which peer owns a given IP address.
