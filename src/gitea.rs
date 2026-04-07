@@ -288,8 +288,8 @@ async fn configure_oidc(pod: &str, _password: &str) -> Result<()> {
     }
 
     // Create new OIDC auth source
-    let oidc_id = kube_get_secret_field("lasuite", "oidc-gitea", "CLIENT_ID").await;
-    let oidc_secret = kube_get_secret_field("lasuite", "oidc-gitea", "CLIENT_SECRET").await;
+    let oidc_id = kube_get_secret_field("devtools", "oidc-gitea", "CLIENT_ID").await;
+    let oidc_secret = kube_get_secret_field("devtools", "oidc-gitea", "CLIENT_SECRET").await;
 
     match (oidc_id, oidc_secret) {
         (Ok(oidc_id), Ok(oidc_sec)) => {

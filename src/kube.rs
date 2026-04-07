@@ -403,7 +403,7 @@ pub async fn kube_rollout_restart(ns: &str, deployment: &str) -> Result<()> {
 /// Discover the active domain from cluster state.
 ///
 /// Tries the gitea-inline-config secret first (DOMAIN=src.<domain>),
-/// falls back to lasuite-oidc-provider configmap, then Lima VM IP.
+/// then falls back to the Lima VM IP for local development.
 #[allow(dead_code)]
 pub async fn get_domain() -> Result<String> {
     // 1. Gitea inline-config secret
@@ -420,25 +420,7 @@ pub async fn get_domain() -> Result<String> {
         }
     }
 
-    // 2. Fallback: lasuite-oidc-provider configmap
-    {
-        let client = get_client().await?;
-        let api: Api<k8s_openapi::api::core::v1::ConfigMap> =
-            Api::namespaced(client.clone(), "lasuite");
-        if let Ok(Some(cm)) = api.get_opt("lasuite-oidc-provider").await {
-            if let Some(data) = &cm.data {
-                if let Some(endpoint) = data.get("OIDC_OP_JWKS_ENDPOINT") {
-                    if let Some(rest) = endpoint.split("https://auth.").nth(1) {
-                        if let Some(domain) = rest.split('/').next() {
-                            return Ok(domain.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Local dev fallback: Lima VM IP
+    // 2. Local dev fallback: Lima VM IP
     let ip = get_lima_ip().await;
     Ok(format!("{ip}.sslip.io"))
 }
