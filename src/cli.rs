@@ -206,6 +206,22 @@ pub enum Verb {
 pub enum VpnAction {
     /// Show VPN tunnel status.
     Status,
+    /// Create a new pre-auth key for onboarding a new client.
+    CreateKey {
+        /// Headscale user the key belongs to (default: from CLI user).
+        #[arg(long, default_value = "sunbeam")]
+        user: String,
+        /// Make the key reusable across multiple registrations.
+        #[arg(long)]
+        reusable: bool,
+        /// Mark the key (and any node registered with it) ephemeral —
+        /// Headscale auto-deletes the node when its map stream drops.
+        #[arg(long)]
+        ephemeral: bool,
+        /// Key lifetime, in human-readable form (e.g. "1h", "30d").
+        #[arg(long, default_value = "30d")]
+        expiration: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1532,6 +1548,12 @@ pub async fn dispatch() -> Result<()> {
 
         Some(Verb::Vpn { action }) => match action {
             VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
+            VpnAction::CreateKey {
+                user,
+                reusable,
+                ephemeral,
+                expiration,
+            } => crate::vpn_cmds::cmd_vpn_create_key(&user, reusable, ephemeral, &expiration).await,
         },
 
         Some(Verb::VpnDaemon) => crate::vpn_cmds::cmd_vpn_daemon().await,

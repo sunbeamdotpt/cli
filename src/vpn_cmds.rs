@@ -187,8 +187,7 @@ async fn run_daemon_foreground() -> Result<()> {
         control_socket: state_dir.join("daemon.sock"),
         hostname,
         server_public_key: None,
-        // Production deployments use proper TLS — leave verification on.
-        derp_tls_insecure: false,
+        derp_tls_insecure: ctx.vpn_tls_insecure,
     };
 
     step(&format!("Connecting to {}", ctx.vpn_url));
@@ -277,6 +276,175 @@ pub async fn cmd_vpn_status() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Run `sunbeam vpn create-key` — call Headscale's REST API to mint a
+/// new pre-auth key for onboarding a new client.
+///
+/// Reads `vpn-url` and `vpn-api-key` from the active context. The user
+/// must have generated a Headscale API key out-of-band (typically via
+/// `headscale apikeys create` on the cluster) and stored it in the
+/// context config.
+pub async fn cmd_vpn_create_key(
+    user: &str,
+    reusable: bool,
+    ephemeral: bool,
+    expiration: &str,
+) -> Result<()> {
+    let ctx = active_context();
+    if ctx.vpn_url.is_empty() {
+        return Err(SunbeamError::Other(
+            "no vpn-url configured for this context".into(),
+        ));
+    }
+    if ctx.vpn_api_key.is_empty() {
+        return Err(SunbeamError::Other(
+            "no vpn-api-key configured — generate one with \
+             `kubectl exec -n vpn deploy/headscale -- headscale apikeys create` \
+             and add it to your context as vpn-api-key"
+                .into(),
+        ));
+    }
+
+    // Headscale's REST API mirrors its gRPC schema. Body fields use
+    // snake_case in the JSON request.
+    let body = serde_json::json!({
+        "user": user,
+        "reusable": reusable,
+        "ephemeral": ephemeral,
+        "expiration": expiration_to_rfc3339(expiration)?,
+    });
+
+    let endpoint = format!("{}/api/v1/preauthkey", ctx.vpn_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(ctx.vpn_tls_insecure)
+        .build()
+        .map_err(|e| SunbeamError::Other(format!("build http client: {e}")))?;
+
+    step(&format!("Creating pre-auth key on {}", ctx.vpn_url));
+    let resp = client
+        .post(&endpoint)
+        .bearer_auth(&ctx.vpn_api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| SunbeamError::Other(format!("POST {endpoint}: {e}")))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| SunbeamError::Other(format!("read response body: {e}")))?;
+
+    if !status.is_success() {
+        return Err(SunbeamError::Other(format!(
+            "headscale returned {status}: {text}"
+        )));
+    }
+
+    // Response shape: {"preAuthKey": {"key": "...", "user": "...", "reusable": ..., ...}}
+    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        SunbeamError::Other(format!("parse headscale response: {e}\nbody: {text}"))
+    })?;
+    let key = parsed
+        .get("preAuthKey")
+        .and_then(|p| p.get("key"))
+        .and_then(|k| k.as_str())
+        .ok_or_else(|| {
+            SunbeamError::Other(format!("no preAuthKey.key in response: {text}"))
+        })?;
+
+    ok(&format!("Pre-auth key for user '{user}':"));
+    println!("{key}");
+    println!();
+    println!("Add it to a context with:");
+    println!("  sunbeam config set --context <ctx> vpn-auth-key {key}");
+    Ok(())
+}
+
+/// Convert a human-friendly duration ("30d", "1h", "2w") into the RFC3339
+/// timestamp Headscale expects in pre-auth key requests.
+fn expiration_to_rfc3339(s: &str) -> Result<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(SunbeamError::Other("empty expiration".into()));
+    }
+    let (num, unit) = s.split_at(s.len() - 1);
+    let n: u64 = num
+        .parse()
+        .map_err(|_| SunbeamError::Other(format!("bad expiration '{s}': expected like '30d'")))?;
+    let secs = match unit {
+        "s" => n,
+        "m" => n * 60,
+        "h" => n * 3600,
+        "d" => n * 86_400,
+        "w" => n * 86_400 * 7,
+        other => {
+            return Err(SunbeamError::Other(format!(
+                "bad expiration unit '{other}': expected s/m/h/d/w"
+            )));
+        }
+    };
+    let when = std::time::SystemTime::now()
+        .checked_add(std::time::Duration::from_secs(secs))
+        .ok_or_else(|| SunbeamError::Other("expiration overflow".into()))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| SunbeamError::Other(format!("system time: {e}")))?
+        .as_secs();
+    // Format as RFC3339 manually using the same proleptic Gregorian
+    // approach as elsewhere in this crate. Headscale parses Go's
+    // time.RFC3339, which is `YYYY-MM-DDTHH:MM:SSZ`.
+    Ok(unix_to_rfc3339(when as i64))
+}
+
+/// Convert a unix timestamp (seconds since epoch) to an RFC3339 string.
+fn unix_to_rfc3339(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let day_secs = secs.rem_euclid(86_400);
+    let h = day_secs / 3600;
+    let m = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+    let (year, month, day) = days_to_ymd(days);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// Days since 1970-01-01 → (year, month, day). Proleptic Gregorian.
+fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
+    let mut y: i32 = 1970;
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let year_days: i64 = if leap { 366 } else { 365 };
+        if days < year_days {
+            break;
+        }
+        days -= year_days;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let mdays = [
+        31u32,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut mo = 1u32;
+    let mut days_u = days as u32;
+    for md in mdays {
+        if days_u < md {
+            break;
+        }
+        days_u -= md;
+        mo += 1;
+    }
+    (y, mo, days_u + 1)
 }
 
 /// Resolve the on-disk directory for VPN state (keys, control socket).
