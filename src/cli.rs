@@ -1,5 +1,5 @@
 use crate::error::{Result, SunbeamError};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 /// Sunbeam local dev stack manager.
 #[derive(Parser, Debug)]
@@ -78,29 +78,11 @@ pub enum Verb {
         target: Option<String>,
     },
 
-    /// Build an artifact.
-    Build {
-        /// What to build.
-        what: BuildTarget,
-        /// Push image to registry after building.
-        #[arg(long)]
-        push: bool,
-        /// Apply manifests and rollout restart after pushing (implies --push).
-        #[arg(long)]
-        deploy: bool,
-        /// Disable buildkitd layer cache.
-        #[arg(long)]
-        no_cache: bool,
-    },
-
     /// Functional service health checks.
     Check {
         /// namespace or namespace/name
         target: Option<String>,
     },
-
-    /// Mirror amd64-only La Suite images.
-    Mirror,
 
     /// Create Gitea orgs/repos; bootstrap services.
     Bootstrap,
@@ -312,54 +294,6 @@ pub enum PmAction {
     },
 }
 
-#[derive(Debug, Clone, ValueEnum)]
-pub enum BuildTarget {
-    Proxy,
-    Integration,
-    KratosAdmin,
-    Meet,
-    DocsFrontend,
-    PeopleFrontend,
-    People,
-    Messages,
-    MessagesBackend,
-    MessagesFrontend,
-    MessagesMtaIn,
-    MessagesMtaOut,
-    MessagesMpa,
-    MessagesSocksProxy,
-    Tuwunel,
-    Calendars,
-    Projects,
-    Sol,
-}
-
-impl std::fmt::Display for BuildTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            BuildTarget::Proxy => "proxy",
-            BuildTarget::Integration => "integration",
-            BuildTarget::KratosAdmin => "kratos-admin",
-            BuildTarget::Meet => "meet",
-            BuildTarget::DocsFrontend => "docs-frontend",
-            BuildTarget::PeopleFrontend => "people-frontend",
-            BuildTarget::People => "people",
-            BuildTarget::Messages => "messages",
-            BuildTarget::MessagesBackend => "messages-backend",
-            BuildTarget::MessagesFrontend => "messages-frontend",
-            BuildTarget::MessagesMtaIn => "messages-mta-in",
-            BuildTarget::MessagesMtaOut => "messages-mta-out",
-            BuildTarget::MessagesMpa => "messages-mpa",
-            BuildTarget::MessagesSocksProxy => "messages-socks-proxy",
-            BuildTarget::Tuwunel => "tuwunel",
-            BuildTarget::Calendars => "calendars",
-            BuildTarget::Projects => "projects",
-            BuildTarget::Sol => "sol",
-        };
-        write!(f, "{s}")
-    }
-}
-
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Set configuration values for the current context.
@@ -550,43 +484,6 @@ mod tests {
         }
     }
 
-    // 6. test_build_proxy
-    #[test]
-    fn test_build_proxy() {
-        let cli = parse(&["sunbeam", "build", "proxy"]);
-        match cli.verb {
-            Some(Verb::Build { what, push, deploy, no_cache }) => {
-                assert!(matches!(what, BuildTarget::Proxy));
-                assert!(!push);
-                assert!(!deploy);
-                assert!(!no_cache);
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    // 7. test_build_deploy_flag
-    #[test]
-    fn test_build_deploy_flag() {
-        let cli = parse(&["sunbeam", "build", "proxy", "--deploy"]);
-        match cli.verb {
-            Some(Verb::Build { deploy, push, no_cache, .. }) => {
-                assert!(deploy);
-                // clap does not imply --push; that logic is in dispatch()
-                assert!(!push);
-                assert!(!no_cache);
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    // 8. test_build_invalid_target
-    #[test]
-    fn test_build_invalid_target() {
-        let result = Cli::try_parse_from(&["sunbeam", "build", "notavalidtarget"]);
-        assert!(result.is_err());
-    }
-
     // 9. test_user_set_password
     #[test]
     fn test_user_set_password() {
@@ -742,73 +639,6 @@ mod tests {
         match cli.verb {
             Some(Verb::Check { target }) => assert_eq!(target.unwrap(), "devtools"),
             _ => panic!("expected Check"),
-        }
-    }
-
-    // 19. test_build_messages_components
-    #[test]
-    fn test_build_messages_backend() {
-        let cli = parse(&["sunbeam", "build", "messages-backend"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesBackend));
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    #[test]
-    fn test_build_messages_frontend() {
-        let cli = parse(&["sunbeam", "build", "messages-frontend"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesFrontend));
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    #[test]
-    fn test_build_messages_mta_in() {
-        let cli = parse(&["sunbeam", "build", "messages-mta-in"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesMtaIn));
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    #[test]
-    fn test_build_messages_mta_out() {
-        let cli = parse(&["sunbeam", "build", "messages-mta-out"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesMtaOut));
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    #[test]
-    fn test_build_messages_mpa() {
-        let cli = parse(&["sunbeam", "build", "messages-mpa"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesMpa));
-            }
-            _ => panic!("expected Build"),
-        }
-    }
-
-    #[test]
-    fn test_build_messages_socks_proxy() {
-        let cli = parse(&["sunbeam", "build", "messages-socks-proxy"]);
-        match cli.verb {
-            Some(Verb::Build { what, .. }) => {
-                assert!(matches!(what, BuildTarget::MessagesSocksProxy));
-            }
-            _ => panic!("expected Build"),
         }
     }
 
@@ -1223,16 +1053,9 @@ pub async fn dispatch() -> Result<()> {
             crate::services::cmd_restart(target.as_deref()).await
         }
 
-        Some(Verb::Build { what, push, deploy, no_cache }) => {
-            let push = push || deploy;
-            crate::images::cmd_build(&what, push, deploy, no_cache).await
-        }
-
         Some(Verb::Check { target }) => {
             crate::checks::cmd_check(target.as_deref()).await
         }
-
-        Some(Verb::Mirror) => crate::images::cmd_mirror().await,
 
         Some(Verb::Bootstrap) => {
             crate::output::step("Bootstrapping Gitea (workflow engine)...");
