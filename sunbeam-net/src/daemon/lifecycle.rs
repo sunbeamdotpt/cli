@@ -98,6 +98,12 @@ async fn run_session(
     set_status(status, DaemonStatus::Registering);
     let _reg = control.register(&config.auth_key, &config.hostname, keys).await?;
 
+    // 2a. Send a Lite endpoint update so Headscale persists our DiscoKey on
+    //     the node record. The streaming /machine/map handler doesn't
+    //     update DiscoKey at capability versions ≥ 68 — only the Lite path
+    //     does, and without it our peers can't see us in their netmaps.
+    control.lite_update(keys, &config.hostname, None).await?;
+
     // 3. Start map stream
     let mut map_stream = control.map_stream(keys, &config.hostname).await?;
 
@@ -119,8 +125,12 @@ async fn run_session(
 
     let peer_count = peers.len();
 
-    // 5. Initialize WireGuard tunnel with our WG private key
-    let mut wg_tunnel = WgTunnel::new(keys.wg_private.clone());
+    // 5. Initialize WireGuard tunnel. Tailscale uses the node_key as the
+    //    WireGuard static key — they are the same key, not separate. Peers
+    //    only know our node_public from the netmap, so boringtun must be
+    //    signing with the matching private key or peers will drop our
+    //    handshakes for failing mac1 validation.
+    let mut wg_tunnel = WgTunnel::new(keys.node_private.clone());
     wg_tunnel.update_peers(&peers);
 
     // 6. Set up NetworkEngine with our VPN IP
@@ -342,6 +352,7 @@ async fn run_wg_loop(
             incoming = derp_in_rx.recv() => {
                 match incoming {
                     Some((src_key, data)) => {
+                        tracing::trace!("WG ← DERP ({} bytes)", data.len());
                         let action = tunnel.decapsulate(&src_key, &data);
                         handle_decap(action, src_key, &to_engine, &derp_out_tx).await;
                     }
@@ -351,6 +362,7 @@ async fn run_wg_loop(
             incoming = udp_in_rx.recv() => {
                 match incoming {
                     Some((src_addr, data)) => {
+                        tracing::trace!("WG ← UDP {src_addr} ({} bytes)", data.len());
                         let Some(peer_key) = identify_udp_peer(&tunnel, src_addr, &data) else {
                             tracing::trace!("UDP packet from {src_addr}: no peer match");
                             continue;
@@ -371,22 +383,21 @@ async fn run_wg_loop(
     }
 }
 
-/// Dispatch a WG encap action to the appropriate transport.
+/// Dispatch a WG encap action to whichever transports it carries. We send
+/// over both UDP and DERP when both are populated; the remote peer dedupes
+/// duplicate ciphertexts via the WireGuard replay window.
 async fn dispatch_encap(
     action: crate::wg::tunnel::EncapAction,
     derp_out_tx: &mpsc::Sender<([u8; 32], Vec<u8>)>,
     udp_out_tx: &mpsc::Sender<(std::net::SocketAddr, Vec<u8>)>,
 ) {
-    match action {
-        crate::wg::tunnel::EncapAction::SendUdp { endpoint, data } => {
-            tracing::trace!("WG → UDP {endpoint} ({} bytes)", data.len());
-            let _ = udp_out_tx.send((endpoint, data)).await;
-        }
-        crate::wg::tunnel::EncapAction::SendDerp { dest_key, data } => {
-            tracing::trace!("WG → DERP ({} bytes)", data.len());
-            let _ = derp_out_tx.send((dest_key, data)).await;
-        }
-        crate::wg::tunnel::EncapAction::Nothing => {}
+    if let Some((endpoint, data)) = action.udp {
+        tracing::trace!("WG → UDP {endpoint} ({} bytes)", data.len());
+        let _ = udp_out_tx.send((endpoint, data)).await;
+    }
+    if let Some((dest_key, data)) = action.derp {
+        tracing::trace!("WG → DERP ({} bytes)", data.len());
+        let _ = derp_out_tx.send((dest_key, data)).await;
     }
 }
 
@@ -523,6 +534,7 @@ async fn run_derp_loop(
             incoming = client.recv_packet() => {
                 match incoming {
                     Ok((src_key, data)) => {
+                        tracing::trace!("DERP recv ({} bytes)", data.len());
                         if in_tx.send((src_key, data)).await.is_err() {
                             return;
                         }

@@ -25,13 +25,27 @@ struct PeerTunnel {
 }
 
 /// Result of encapsulating an outbound IP packet.
-pub(crate) enum EncapAction {
-    /// Send these bytes over UDP to the given endpoint.
-    SendUdp { endpoint: SocketAddr, data: Vec<u8> },
-    /// Send these bytes via DERP relay.
-    SendDerp { dest_key: [u8; 32], data: Vec<u8> },
-    /// Nothing to send (handshake pending, etc.)
-    Nothing,
+///
+/// May contain zero, one, or two transport hints. We always prefer to send
+/// over every available transport — boringtun's replay protection on the
+/// receiver dedupes any duplicates by counter, and going dual-path lets us
+/// transparently fall back when one direction is broken (e.g. peer's
+/// advertised UDP endpoint is on an unreachable RFC1918 network).
+pub(crate) struct EncapAction {
+    /// If set, send these bytes via UDP to the given endpoint.
+    pub udp: Option<(SocketAddr, Vec<u8>)>,
+    /// If set, send these bytes via DERP relay to the given peer key.
+    pub derp: Option<([u8; 32], Vec<u8>)>,
+}
+
+impl EncapAction {
+    pub fn nothing() -> Self {
+        Self { udp: None, derp: None }
+    }
+
+    pub fn is_nothing(&self) -> bool {
+        self.udp.is_none() && self.derp.is_none()
+    }
 }
 
 /// Result of decapsulating an inbound WireGuard packet.
@@ -113,12 +127,12 @@ impl WgTunnel {
     pub fn encapsulate(&mut self, dst_ip: IpAddr, payload: &[u8]) -> EncapAction {
         let peer_key = match self.find_peer_for_ip(dst_ip) {
             Some(k) => *k,
-            None => return EncapAction::Nothing,
+            None => return EncapAction::nothing(),
         };
 
         let peer = match self.peers.get_mut(&peer_key) {
             Some(p) => p,
-            None => return EncapAction::Nothing,
+            None => return EncapAction::nothing(),
         };
 
         let mut buf = vec![0u8; BUF_SIZE];
@@ -127,10 +141,10 @@ impl WgTunnel {
                 let packet = data.to_vec();
                 route_packet(peer, &peer_key, packet)
             }
-            TunnResult::Err(_) | TunnResult::Done => EncapAction::Nothing,
+            TunnResult::Err(_) | TunnResult::Done => EncapAction::nothing(),
             // These shouldn't happen during encapsulate, but handle gracefully.
             TunnResult::WriteToTunnelV4(_, _) | TunnResult::WriteToTunnelV6(_, _) => {
-                EncapAction::Nothing
+                EncapAction::nothing()
             }
         }
     }
@@ -242,18 +256,17 @@ impl WgTunnel {
     }
 }
 
-/// Decide how to route a WireGuard packet for a given peer.
+/// Decide how to route a WireGuard packet for a given peer. Returns both
+/// transports when both are available — the receiver dedupes via WG counter.
 fn route_packet(peer: &PeerTunnel, peer_key: &[u8; 32], data: Vec<u8>) -> EncapAction {
-    if let Some(endpoint) = peer.endpoint {
-        EncapAction::SendUdp { endpoint, data }
-    } else if peer.derp_region.is_some() {
-        EncapAction::SendDerp {
-            dest_key: *peer_key,
-            data,
-        }
-    } else {
-        EncapAction::Nothing
+    let mut action = EncapAction::nothing();
+    if peer.derp_region.is_some() {
+        action.derp = Some((*peer_key, data.clone()));
     }
+    if let Some(endpoint) = peer.endpoint {
+        action.udp = Some((endpoint, data));
+    }
+    action
 }
 
 /// Parse a "nodekey:<hex>" string into raw 32-byte key.

@@ -8,6 +8,10 @@ pub struct RegisterRequest {
     pub version: u16,
     pub node_key: String,
     pub old_node_key: String,
+    /// Curve25519 disco public key. Headscale persists this on the node
+    /// record and uses it for peer-to-peer discovery — if it's zero, peers
+    /// won't include us in their netmaps.
+    pub disco_key: String,
     pub auth: Option<AuthInfo>,
     pub hostinfo: HostInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,14 @@ pub struct MapRequest {
     pub node_key: String,
     pub disco_key: String,
     pub stream: bool,
+    /// "Lite update" flag — set together with `Stream: false` and
+    /// `ReadOnly: false` to make Headscale persist DiscoKey + endpoints
+    /// without sending a full netmap response (the "Lite endpoint update"
+    /// path in Headscale's poll.go).
+    #[serde(default)]
+    pub omit_peers: bool,
+    #[serde(default)]
+    pub read_only: bool,
     pub hostinfo: HostInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoints: Option<Vec<String>>,
@@ -237,6 +249,7 @@ mod tests {
             version: 74,
             node_key: "nodekey:aabb".into(),
             old_node_key: "".into(),
+            disco_key: "discokey:ccdd".into(),
             auth: Some(AuthInfo {
                 auth_key: Some("tskey-abc".into()),
             }),

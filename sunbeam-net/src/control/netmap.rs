@@ -155,6 +155,33 @@ impl super::client::ControlClient {
     /// Sends a `MapRequest` to `POST /machine/map` and returns a [`MapStream`]
     /// that yields successive [`MapUpdate`]s as the coordination server pushes
     /// network map changes.
+    /// Send a non-streaming "Lite endpoint update" to Headscale so it
+    /// persists our DiscoKey on the node record. Headscale's
+    /// `serveLongPoll()` (the streaming map handler) doesn't update
+    /// DiscoKey for capability versions ≥ 68 — only the Lite update path
+    /// does, gated on `Stream: false` + `OmitPeers: true` + `ReadOnly: false`.
+    /// Without this our peers see us as having a zero disco_key and never
+    /// add us to their netmaps.
+    pub async fn lite_update(
+        &mut self,
+        keys: &crate::keys::NodeKeys,
+        hostname: &str,
+        endpoints: Option<Vec<String>>,
+    ) -> crate::Result<()> {
+        let req = MapRequest {
+            version: 74,
+            node_key: keys.node_key_str(),
+            disco_key: keys.disco_key_str(),
+            stream: false,
+            omit_peers: true,
+            read_only: false,
+            hostinfo: super::register::build_hostinfo(hostname),
+            endpoints,
+        };
+        // Lite update returns an empty body.
+        self.post_json_no_response("/machine/map", &req).await
+    }
+
     pub async fn map_stream(
         &mut self,
         keys: &crate::keys::NodeKeys,
@@ -165,6 +192,8 @@ impl super::client::ControlClient {
             node_key: keys.node_key_str(),
             disco_key: keys.disco_key_str(),
             stream: true,
+            omit_peers: false,
+            read_only: false,
             hostinfo: super::register::build_hostinfo(hostname),
             endpoints: None,
         };

@@ -33,7 +33,7 @@ impl DerpClient {
     /// `url` should be like `http://host:port` or `host:port`.
     pub async fn connect(
         url: &str,
-        _node_key: &crate::keys::NodeKeys,
+        node_keys: &crate::keys::NodeKeys,
     ) -> crate::Result<Self> {
         use crypto_box::aead::{Aead, AeadCore, OsRng};
         use crypto_box::{PublicKey, SalsaBox, SecretKey};
@@ -128,26 +128,32 @@ impl DerpClient {
         let mut server_public = [0u8; 32];
         server_public.copy_from_slice(key_bytes);
 
-        // Generate ephemeral NaCl keypair for the handshake
-        let ephemeral_secret = SecretKey::generate(&mut OsRng);
-        let ephemeral_public = ephemeral_secret.public_key();
+        // The DERP relay needs to know our LONG-TERM node public key so it
+        // can route inbound packets addressed to us. Tailscale's protocol
+        // sends the node public key as the first 32 bytes of the ClientInfo
+        // frame, then a NaCl-sealed JSON blob signed with the node's
+        // long-term private key (so the server can verify ownership).
+        let node_secret_bytes: [u8; 32] = node_keys.node_private.to_bytes();
+        let node_public_bytes: [u8; 32] = *node_keys.node_public.as_bytes();
+        let node_secret = SecretKey::from(node_secret_bytes);
+        let node_public_nacl = PublicKey::from(node_public_bytes);
 
         // Build client info JSON
         let client_info = serde_json::json!({"version": 2});
         let client_info_bytes = serde_json::to_vec(&client_info)
             .map_err(|e| Error::Derp(format!("failed to serialize client info: {e}")))?;
 
-        // Seal with crypto_box: encrypt client info using our ephemeral key and server's public key
+        // Seal with crypto_box: encrypt with OUR long-term private + server public.
         let server_pk = PublicKey::from(server_public);
-        let salsa_box = SalsaBox::new(&server_pk, &ephemeral_secret);
+        let salsa_box = SalsaBox::new(&server_pk, &node_secret);
         let nonce = SalsaBox::generate_nonce(&mut OsRng);
         let sealed = salsa_box
             .encrypt(&nonce, client_info_bytes.as_slice())
             .map_err(|e| Error::Derp(format!("failed to seal client info: {e}")))?;
 
-        // ClientInfo frame: 32-byte ephemeral public key + nonce + sealed box
+        // ClientInfo frame: 32-byte long-term public key + nonce + sealed box
         let mut client_info_payload = BytesMut::new();
-        client_info_payload.extend_from_slice(ephemeral_public.as_bytes());
+        client_info_payload.extend_from_slice(node_public_nacl.as_bytes());
         client_info_payload.extend_from_slice(&nonce);
         client_info_payload.extend_from_slice(&sealed);
 

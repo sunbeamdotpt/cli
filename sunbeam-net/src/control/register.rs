@@ -17,6 +17,7 @@ impl super::client::ControlClient {
             version: 74, // capability version
             node_key: keys.node_key_str(),
             old_node_key: format!("nodekey:{}", "0".repeat(64)),
+            disco_key: keys.disco_key_str(),
             auth: Some(AuthInfo {
                 auth_key: Some(auth_key.to_string()),
             }),
@@ -68,6 +69,7 @@ mod tests {
             version: 74,
             node_key: keys.node_key_str(),
             old_node_key: String::new(),
+            disco_key: keys.disco_key_str(),
             auth: Some(AuthInfo {
                 auth_key: Some("tskey-auth-test123".to_string()),
             }),

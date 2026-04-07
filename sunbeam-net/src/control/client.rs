@@ -86,6 +86,58 @@ impl ControlClient {
         })
     }
 
+    /// Send a POST request with a JSON body and discard the response body.
+    /// Used for endpoints that return an empty 200 (e.g. Headscale's Lite
+    /// endpoint update).
+    pub(crate) async fn post_json_no_response<Req: serde::Serialize>(
+        &mut self,
+        path: &str,
+        body: &Req,
+    ) -> crate::Result<()> {
+        let body_bytes = serde_json::to_vec(body)?;
+        let request = http::Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(())
+            .map_err(|e| crate::Error::Control(e.to_string()))?;
+
+        let (response_future, mut send_stream) = self
+            .sender
+            .send_request(request, false)
+            .map_err(|e| crate::Error::Control(format!("send request: {e}")))?;
+
+        send_stream
+            .send_data(Bytes::from(body_bytes), true)
+            .map_err(|e| crate::Error::Control(format!("send body: {e}")))?;
+
+        let response = response_future
+            .await
+            .map_err(|e| crate::Error::Control(format!("response: {e}")))?;
+
+        let status = response.status();
+        let mut body = response.into_body();
+
+        // Drain the response body so flow control completes cleanly, but
+        // don't try to parse it.
+        let mut response_bytes = Vec::new();
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk.map_err(|e| crate::Error::Control(format!("read body: {e}")))?;
+            response_bytes.extend_from_slice(&chunk);
+            body.flow_control()
+                .release_capacity(chunk.len())
+                .map_err(|e| crate::Error::Control(format!("flow control: {e}")))?;
+        }
+
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&response_bytes);
+            return Err(crate::Error::Control(format!(
+                "{path} returned {status}: {text}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Send a POST request with a JSON body and parse a JSON response.
     pub(crate) async fn post_json<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
         &mut self,
