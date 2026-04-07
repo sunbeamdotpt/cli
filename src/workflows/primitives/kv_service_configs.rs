@@ -91,6 +91,14 @@ pub fn all_service_configs() -> Vec<Value> {
             {"key":"access-key-id","generator":"scw_config_access"},
             {"key":"secret-access-key","generator":"scw_config_secret"}
         ]}),
+        // Headscale API key — generated *out of band* via
+        // `kubectl exec -n vpn deploy/headscale -- headscale apikeys create`
+        // and pasted into vault. Seed leaves a placeholder slot so the
+        // path exists; replace with the real key before running
+        // `sunbeam vpn create-key`.
+        json!({"service":"headscale","fields":[
+            {"key":"api-key","generator":"static:"}
+        ]}),
     ]
 }
 
@@ -112,7 +120,7 @@ pub fn all_service_names() -> Vec<&'static str> {
         "hydra", "kratos", "seaweedfs", "gitea", "hive", "livekit",
         "people", "login-ui", "kratos-admin", "docs", "meet", "drive",
         "projects", "calendars", "messages", "collabora", "tuwunel",
-        "grafana", "scaleway-s3",
+        "grafana", "scaleway-s3", "headscale",
     ]
 }
 
@@ -130,9 +138,9 @@ mod tests {
 
     #[test]
     fn service_count() {
-        // 18 independent + 1 kratos-admin (dependent)
-        assert_eq!(all_service_configs().len(), 18);
-        assert_eq!(all_service_names().len(), 19);
+        // 19 independent + 1 kratos-admin (dependent)
+        assert_eq!(all_service_configs().len(), 19);
+        assert_eq!(all_service_names().len(), 20);
     }
 
     #[test]

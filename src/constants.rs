@@ -2,6 +2,7 @@
 
 pub const GITEA_ADMIN_USER: &str = "gitea_admin";
 
+/// Deprecated: prefer `registry::discover()` → `ServiceRegistry::namespaces()`.
 pub const MANAGED_NS: &[&str] = &[
     "data",
     "devtools",
@@ -13,4 +14,5 @@ pub const MANAGED_NS: &[&str] = &[
     "ory",
     "storage",
     "vault-secrets-operator",
+    "vpn",
 ];
