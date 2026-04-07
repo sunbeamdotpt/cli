@@ -187,6 +187,8 @@ async fn run_daemon_foreground() -> Result<()> {
         control_socket: state_dir.join("daemon.sock"),
         hostname,
         server_public_key: None,
+        // Production deployments use proper TLS — leave verification on.
+        derp_tls_insecure: false,
     };
 
     step(&format!("Connecting to {}", ctx.vpn_url));
