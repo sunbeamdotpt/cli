@@ -15,6 +15,10 @@ members = ["sunbeam-sdk", "sunbeam-net"]
 resolver = "3"
 
 [dependencies]
+# Workspace
+sunbeam-sdk = { path = "sunbeam-sdk" }
+sunbeam-net = { path = "sunbeam-net" }
+
 # Core
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -78,6 +82,8 @@ wfe-core = { version = "1.6.3", registry = "sunbeam", features = ["test-support"
 wfe-sqlite = { version = "1.6.3", registry = "sunbeam" }
 wfe-yaml = { version = "1.6.3", registry = "sunbeam" }
 async-trait = "0.1"
+hostname = "0.4.2"
+whoami = "2.1.1"
 
 [dev-dependencies]
 wiremock = "0.6"

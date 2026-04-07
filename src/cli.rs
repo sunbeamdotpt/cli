@@ -149,11 +149,62 @@ pub enum Verb {
         action: crate::workflows::cmd::WorkflowAction,
     },
 
+    /// Deploy service(s) — apply manifests + rollout restart.
+    Deploy {
+        /// Service name, category, or namespace (e.g. "hydra", "auth", "ory").
+        /// Use --all for everything.
+        target: Option<String>,
+        /// Deploy all services.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// View secrets for a service.
+    Secrets {
+        /// Service name (e.g. "hydra").
+        service: String,
+        #[command(subcommand)]
+        action: Option<SecretsAction>,
+    },
+
+    /// Interactive shell into a service.
+    Shell {
+        /// Service name (e.g. "postgres", "gitea").
+        service: String,
+    },
+
+    /// Connect to the cluster VPN (foreground; Ctrl-C to disconnect).
+    Connect,
+
+    /// Disconnect from the cluster VPN.
+    Disconnect,
+
+    /// VPN diagnostics and key management.
+    Vpn {
+        #[command(subcommand)]
+        action: VpnAction,
+    },
+
     /// Self-update from latest mainline commit.
     Update,
 
     /// Print version info.
     Version,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VpnAction {
+    /// Show VPN tunnel status.
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SecretsAction {
+    /// Get a specific secret field value.
+    Get {
+        /// Field name within the service's KV path.
+        key: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -861,6 +912,72 @@ mod tests {
         let result = Cli::try_parse_from(&["sunbeam", "workflow", "status"]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_deploy_no_target() {
+        let cli = parse(&["sunbeam", "deploy"]);
+        match cli.verb {
+            Some(Verb::Deploy { target, all }) => {
+                assert!(target.is_none());
+                assert!(!all);
+            }
+            _ => panic!("expected Deploy"),
+        }
+    }
+
+    #[test]
+    fn test_deploy_with_target() {
+        let cli = parse(&["sunbeam", "deploy", "hydra"]);
+        match cli.verb {
+            Some(Verb::Deploy { target, .. }) => assert_eq!(target.unwrap(), "hydra"),
+            _ => panic!("expected Deploy"),
+        }
+    }
+
+    #[test]
+    fn test_deploy_all() {
+        let cli = parse(&["sunbeam", "deploy", "--all"]);
+        match cli.verb {
+            Some(Verb::Deploy { all, .. }) => assert!(all),
+            _ => panic!("expected Deploy"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_list() {
+        let cli = parse(&["sunbeam", "secrets", "hydra"]);
+        match cli.verb {
+            Some(Verb::Secrets { service, action }) => {
+                assert_eq!(service, "hydra");
+                assert!(action.is_none());
+            }
+            _ => panic!("expected Secrets"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_get() {
+        let cli = parse(&["sunbeam", "secrets", "hydra", "get", "system-secret"]);
+        match cli.verb {
+            Some(Verb::Secrets { service, action }) => {
+                assert_eq!(service, "hydra");
+                match action {
+                    Some(SecretsAction::Get { key }) => assert_eq!(key, "system-secret"),
+                    _ => panic!("expected Get"),
+                }
+            }
+            _ => panic!("expected Secrets"),
+        }
+    }
+
+    #[test]
+    fn test_shell() {
+        let cli = parse(&["sunbeam", "shell", "postgres"]);
+        match cli.verb {
+            Some(Verb::Shell { service }) => assert_eq!(service, "postgres"),
+            _ => panic!("expected Shell"),
+        }
+    }
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
@@ -1375,6 +1492,35 @@ pub async fn dispatch() -> Result<()> {
             };
             crate::workflows::cmd::dispatch(&ctx_name, action).await
         }
+
+        Some(Verb::Deploy { target, all }) => {
+            if all || target.is_none() {
+                let is_production = !crate::config::active_context().ssh_host.is_empty();
+                let env_str = if is_production { "production" } else { "local" };
+                let domain = cli.domain.clone();
+                let email = cli.email.clone();
+                crate::manifests::cmd_apply(env_str, &domain, &email, "").await
+            } else {
+                let target = target.unwrap();
+                crate::service_cmds::cmd_deploy(&target, &cli.domain, &cli.email).await
+            }
+        }
+
+        Some(Verb::Secrets { service, action }) => {
+            crate::service_cmds::cmd_secrets(&service, action).await
+        }
+
+        Some(Verb::Shell { service }) => {
+            crate::service_cmds::cmd_shell(&service).await
+        }
+
+        Some(Verb::Connect) => crate::vpn_cmds::cmd_connect().await,
+
+        Some(Verb::Disconnect) => crate::vpn_cmds::cmd_disconnect().await,
+
+        Some(Verb::Vpn { action }) => match action {
+            VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
+        },
 
         Some(Verb::Update) => crate::update::cmd_update().await,
 
