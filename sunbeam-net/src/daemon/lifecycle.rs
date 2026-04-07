@@ -172,11 +172,29 @@ async fn run_session(
 
     let (engine, channels) = NetworkEngine::new(smoltcp_ip, 10)?;
 
-    // 7. Start TCP proxy that routes through the engine
+    // 7. Start TCP proxy that routes through the engine. If the user
+    //    configured cluster_api_host, look it up in the netmap and use
+    //    that peer's tailnet IP instead of the static cluster_api_addr.
     let cancel = tokio_util::sync::CancellationToken::new();
     let proxy_cmd_tx = channels.cmd_tx.clone();
     let proxy_bind = config.proxy_bind;
-    let cluster_addr = std::net::SocketAddr::new(config.cluster_api_addr, config.cluster_api_port);
+    let resolved_addr = config
+        .cluster_api_host
+        .as_deref()
+        .and_then(|host| resolve_peer_ip(host, &peers))
+        .unwrap_or(config.cluster_api_addr);
+    if let Some(ref host) = config.cluster_api_host {
+        if resolved_addr == config.cluster_api_addr {
+            tracing::warn!(
+                "cluster_api_host '{host}' did not match any netmap peer; \
+                 falling back to static cluster_api_addr {}",
+                config.cluster_api_addr
+            );
+        } else {
+            tracing::info!("resolved cluster_api_host '{host}' → {resolved_addr}");
+        }
+    }
+    let cluster_addr = std::net::SocketAddr::new(resolved_addr, config.cluster_api_port);
 
     // Proxy listener task: accepts local connections and sends them to the engine
     let proxy_cancel = cancel.clone();
@@ -578,6 +596,31 @@ async fn run_derp_loop(
     }
 }
 
+/// Look up a peer's tailnet IP from the netmap by hostname.
+///
+/// Tries (in order): exact hostname match, exact `name` (FQDN) match,
+/// then prefix match against `name`. Returns the first IPv4 address
+/// from the peer's `addresses` list, falling back to IPv6 only if
+/// there are no v4 entries.
+fn resolve_peer_ip(host: &str, peers: &[crate::proto::types::Node]) -> Option<IpAddr> {
+    let matched = peers
+        .iter()
+        .find(|p| p.hostinfo.hostname == host)
+        .or_else(|| peers.iter().find(|p| p.name == host))
+        .or_else(|| peers.iter().find(|p| p.name.starts_with(host)))?;
+
+    let addrs: Vec<IpAddr> = matched
+        .addresses
+        .iter()
+        .filter_map(|s| s.split('/').next()?.parse().ok())
+        .collect();
+    addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .copied()
+        .or_else(|| addrs.first().copied())
+}
+
 /// Pick the first DERP node from the map (any region, any node).
 fn pick_derp_node(derp_map: &DerpMap) -> Option<(String, u16)> {
     derp_map
@@ -684,6 +727,7 @@ mod tests {
             proxy_bind: "127.0.0.1:0".parse().unwrap(),
             cluster_api_addr: "10.0.0.1".parse().unwrap(),
             cluster_api_port: 6443,
+            cluster_api_host: None,
             control_socket: dir.path().join("test.sock"),
             hostname: "test-node".to_string(),
             server_public_key: Some([0xaa; 32]),

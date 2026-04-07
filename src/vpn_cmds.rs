@@ -171,11 +171,19 @@ async fn run_daemon_foreground() -> Result<()> {
         state_dir: state_dir.clone(),
         // Bind the local k8s proxy on 16579 — far enough away from common
         // conflicts (6443 = kube API, 16443 = sienna's SSH tunnel) that we
-        // shouldn't collide on dev machines. TODO: make this configurable
-        // and discoverable via IPC.
+        // shouldn't collide on dev machines. TODO: make this configurable.
         proxy_bind: "127.0.0.1:16579".parse().expect("static addr"),
+        // Static fallback if the netmap doesn't have the named host.
         cluster_api_addr: "100.64.0.1".parse().expect("static addr"),
         cluster_api_port: 6443,
+        // If the user set vpn-cluster-host in their context config, the
+        // daemon resolves it from the netmap and uses that peer's
+        // tailnet IP for the proxy backend.
+        cluster_api_host: if ctx.vpn_cluster_host.is_empty() {
+            None
+        } else {
+            Some(ctx.vpn_cluster_host.clone())
+        },
         control_socket: state_dir.join("daemon.sock"),
         hostname,
         server_public_key: None,

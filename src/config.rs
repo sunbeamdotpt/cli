@@ -65,6 +65,13 @@ pub struct Context {
     /// Stored in plain text — keep this file readable only by the user.
     #[serde(default, rename = "vpn-auth-key", skip_serializing_if = "String::is_empty")]
     pub vpn_auth_key: String,
+
+    /// Hostname of the cluster API server peer to look up in the netmap.
+    /// When set, the VPN daemon resolves this against the netmap's peer
+    /// list and proxies k8s API traffic to that peer's tailnet IP. When
+    /// empty, falls back to a static fallback address.
+    #[serde(default, rename = "vpn-cluster-host", skip_serializing_if = "String::is_empty")]
+    pub vpn_cluster_host: String,
 }
 
 // ---------------------------------------------------------------------------
