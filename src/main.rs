@@ -8,7 +8,6 @@ mod cluster;
 mod constants;
 mod config;
 mod gitea;
-mod images;
 mod kube;
 mod manifests;
 mod openbao;
