@@ -11,7 +11,7 @@ name = "sunbeam"
 path = "src/main.rs"
 
 [workspace]
-members = ["sunbeam-sdk"]
+members = ["sunbeam-sdk", "sunbeam-net"]
 resolver = "3"
 
 [dependencies]
