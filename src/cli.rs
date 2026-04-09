@@ -1,5 +1,6 @@
 use crate::error::{Result, SunbeamError};
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 /// Sunbeam local dev stack manager.
 #[derive(Parser, Debug)]
@@ -27,10 +28,168 @@ pub enum Verb {
     /// Full cluster bring-up.
     Up,
 
+    /// Manage sunbeam configuration.
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+
+    /// User/identity management.
+    User {
+        #[command(subcommand)]
+        action: Option<UserAction>,
+    },
+
+    /// Authenticate with Sunbeam (OAuth2 login via browser).
+    Auth {
+        #[command(subcommand)]
+        action: Option<AuthAction>,
+    },
+
+    /// Project management across Planka and Gitea.
+    Pm {
+        #[command(subcommand)]
+        action: Option<PmAction>,
+    },
+
+    /// Local workflow management (list, status, retry, cancel, run).
+    Workflow {
+        #[command(subcommand)]
+        action: crate::workflows::cmd::WorkflowAction,
+    },
+
+    /// Remote workflow management (via wfe-server).
+    Workflows {
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::wfectl::output::OutputFormat::Table, global = true)]
+        output: crate::wfectl::output::OutputFormat,
+        #[command(subcommand)]
+        action: crate::wfectl::WorkflowsCommand,
+    },
+
+    /// Service operations (deploy, logs, restart, exec, secrets, ...).
+    #[command(alias = "svc")]
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+
+    /// VPN management.
+    Vpn {
+        #[command(subcommand)]
+        action: VpnAction,
+    },
+
+    /// kubectl passthrough.
+    #[command(hide = true)]
+    K8s {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        kubectl_args: Vec<String>,
+    },
+
+    /// bao CLI passthrough (runs inside OpenBao pod with root token).
+    #[command(hide = true)]
+    Bao {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        bao_args: Vec<String>,
+    },
+
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Connectivity diagnostics.
+    Doctor,
+
+    /// Internal: run the VPN daemon in the foreground.
+    #[command(name = "__vpn-daemon", hide = true)]
+    VpnDaemon,
+
+    /// Self-update from latest mainline commit.
+    Update,
+
+    /// Print version info.
+    Version,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VpnAction {
+    /// Show VPN tunnel status.
+    Status,
+    /// Connect to the cluster VPN.
+    Connect {
+        /// Run the daemon in the foreground instead of detaching.
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Disconnect from the cluster VPN.
+    Disconnect,
+    /// Create a new pre-auth key for onboarding a new client.
+    CreateKey {
+        /// Headscale user the key belongs to (default: from CLI user).
+        #[arg(long, default_value = "sunbeam")]
+        user: String,
+        /// Make the key reusable across multiple registrations.
+        #[arg(long)]
+        reusable: bool,
+        /// Mark the key (and any node registered with it) ephemeral.
+        #[arg(long)]
+        ephemeral: bool,
+        /// Key lifetime, in human-readable form (e.g. "1h", "30d").
+        #[arg(long, default_value = "30d")]
+        expiration: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceAction {
     /// Pod health (optionally scoped).
     Status {
-        /// namespace or namespace/name
+        /// Service, namespace, or namespace/name.
         target: Option<String>,
+    },
+
+    /// kubectl logs for a service.
+    Logs {
+        /// Service or namespace/name.
+        target: String,
+        /// Stream logs.
+        #[arg(short, long)]
+        follow: bool,
+    },
+
+    /// Raw kubectl get for a pod (ns/name).
+    Get {
+        /// Service or namespace/name.
+        target: String,
+        /// Output format.
+        #[arg(short, long, default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
+        output: String,
+    },
+
+    /// Rolling restart of services.
+    Restart {
+        /// Service, namespace, or namespace/name.
+        target: Option<String>,
+    },
+
+    /// Functional service health checks.
+    Check {
+        /// Service, namespace, or namespace/name.
+        target: Option<String>,
+    },
+
+    /// Deploy service(s) — apply manifests + rollout restart.
+    Deploy {
+        /// Service name, category, or namespace (e.g. "hydra", "auth", "ory").
+        /// Use --all for everything.
+        target: Option<String>,
+        /// Deploy all services.
+        #[arg(long)]
+        all: bool,
     },
 
     /// kustomize build + domain subst + kubectl apply.
@@ -54,94 +213,7 @@ pub enum Verb {
     /// E2E VSO + OpenBao integration test.
     Verify,
 
-    /// kubectl logs for a service.
-    Logs {
-        /// namespace/name
-        target: String,
-        /// Stream logs.
-        #[arg(short, long)]
-        follow: bool,
-    },
-
-    /// Raw kubectl get for a pod (ns/name).
-    Get {
-        /// namespace/name
-        target: String,
-        /// Output format.
-        #[arg(short, long, default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
-        output: String,
-    },
-
-    /// Rolling restart of services.
-    Restart {
-        /// namespace or namespace/name
-        target: Option<String>,
-    },
-
-    /// Functional service health checks.
-    Check {
-        /// namespace or namespace/name
-        target: Option<String>,
-    },
-
-    /// Create Gitea orgs/repos; bootstrap services.
-    Bootstrap,
-
-    /// Manage sunbeam configuration.
-    Config {
-        #[command(subcommand)]
-        action: Option<ConfigAction>,
-    },
-
-    /// kubectl passthrough.
-    K8s {
-        /// arguments forwarded verbatim to kubectl
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        kubectl_args: Vec<String>,
-    },
-
-    /// bao CLI passthrough (runs inside OpenBao pod with root token).
-    Bao {
-        /// arguments forwarded verbatim to bao
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        bao_args: Vec<String>,
-    },
-
-    /// User/identity management.
-    User {
-        #[command(subcommand)]
-        action: Option<UserAction>,
-    },
-
-    /// Authenticate with Sunbeam (OAuth2 login via browser).
-    Auth {
-        #[command(subcommand)]
-        action: Option<AuthAction>,
-    },
-
-    /// Project management across Planka and Gitea.
-    Pm {
-        #[command(subcommand)]
-        action: Option<PmAction>,
-    },
-
-    /// Workflow management (list, status, retry, cancel, run).
-    Workflow {
-        #[command(subcommand)]
-        action: crate::workflows::cmd::WorkflowAction,
-    },
-
-    /// Deploy service(s) — apply manifests + rollout restart.
-    Deploy {
-        /// Service name, category, or namespace (e.g. "hydra", "auth", "ory").
-        /// Use --all for everything.
-        target: Option<String>,
-        /// Deploy all services.
-        #[arg(long)]
-        all: bool,
-    },
-
-    /// View secrets for a service.
+    /// View or get secrets for a service from OpenBao.
     Secrets {
         /// Service name (e.g. "hydra").
         service: String,
@@ -149,60 +221,56 @@ pub enum Verb {
         action: Option<SecretsAction>,
     },
 
-    /// Interactive shell into a service.
+    /// Interactive shell into a service pod.
     Shell {
         /// Service name (e.g. "postgres", "gitea").
         service: String,
     },
 
-    /// Connect to the cluster VPN (spawns a background daemon).
-    Connect {
-        /// Run the daemon in the foreground instead of detaching.
-        #[arg(long)]
-        foreground: bool,
+    /// Describe a service (kubectl describe on its deployment).
+    Describe {
+        /// Service name.
+        service: String,
     },
 
-    /// Disconnect from the cluster VPN.
-    Disconnect,
-
-    /// VPN diagnostics and key management.
-    Vpn {
-        #[command(subcommand)]
-        action: VpnAction,
+    /// Exec into a service pod.
+    Exec {
+        /// Service name.
+        service: String,
+        /// Container name (optional).
+        #[arg(short, long)]
+        container: Option<String>,
+        /// Command and arguments to run.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
     },
 
-    /// Internal: run the VPN daemon in the foreground. Used by `connect`
-    /// when it spawns itself as a background process. Not part of the
-    /// public CLI surface.
-    #[command(name = "__vpn-daemon", hide = true)]
-    VpnDaemon,
+    /// Port-forward to a service pod.
+    PortForward {
+        /// Service name.
+        service: String,
+        /// Port mapping (e.g. "8080:80", "8080").
+        ports: Vec<String>,
+    },
 
-    /// Self-update from latest mainline commit.
-    Update,
+    /// Scale a service deployment.
+    Scale {
+        /// Service name.
+        service: String,
+        /// Number of replicas.
+        replicas: u32,
+    },
 
-    /// Print version info.
-    Version,
-}
+    /// Show resource usage (CPU/memory) for a service's pods.
+    Top {
+        /// Service name.
+        service: String,
+    },
 
-#[derive(Subcommand, Debug)]
-pub enum VpnAction {
-    /// Show VPN tunnel status.
-    Status,
-    /// Create a new pre-auth key for onboarding a new client.
-    CreateKey {
-        /// Headscale user the key belongs to (default: from CLI user).
-        #[arg(long, default_value = "sunbeam")]
-        user: String,
-        /// Make the key reusable across multiple registrations.
-        #[arg(long)]
-        reusable: bool,
-        /// Mark the key (and any node registered with it) ephemeral —
-        /// Headscale auto-deletes the node when its map stream drops.
-        #[arg(long)]
-        ephemeral: bool,
-        /// Key lifetime, in human-readable form (e.g. "1h", "30d").
-        #[arg(long, default_value = "30d")]
-        expiration: String,
+    /// Edit a service's deployment manifest in-cluster.
+    Edit {
+        /// Service name.
+        service: String,
     },
 }
 
@@ -441,46 +509,42 @@ mod tests {
         assert!(matches!(cli.verb, Some(Verb::Up)));
     }
 
-    // 2. test_status_no_target
     #[test]
-    fn test_status_no_target() {
-        let cli = parse(&["sunbeam", "status"]);
+    fn test_service_status_no_target() {
+        let cli = parse(&["sunbeam", "service", "status"]);
         match cli.verb {
-            Some(Verb::Status { target }) => assert!(target.is_none()),
-            _ => panic!("expected Status"),
+            Some(Verb::Service { action: ServiceAction::Status { target } }) => assert!(target.is_none()),
+            _ => panic!("expected Service Status"),
         }
     }
 
-    // 3. test_status_with_namespace
     #[test]
-    fn test_status_with_namespace() {
-        let cli = parse(&["sunbeam", "status", "ory"]);
+    fn test_service_status_with_namespace() {
+        let cli = parse(&["sunbeam", "service", "status", "ory"]);
         match cli.verb {
-            Some(Verb::Status { target }) => assert_eq!(target.unwrap(), "ory"),
-            _ => panic!("expected Status"),
+            Some(Verb::Service { action: ServiceAction::Status { target } }) => assert_eq!(target.unwrap(), "ory"),
+            _ => panic!("expected Service Status"),
         }
     }
 
-    // 4. test_logs_no_follow
     #[test]
-    fn test_logs_no_follow() {
-        let cli = parse(&["sunbeam", "logs", "ory/kratos"]);
+    fn test_service_logs_no_follow() {
+        let cli = parse(&["sunbeam", "service", "logs", "ory/kratos"]);
         match cli.verb {
-            Some(Verb::Logs { target, follow }) => {
+            Some(Verb::Service { action: ServiceAction::Logs { target, follow } }) => {
                 assert_eq!(target, "ory/kratos");
                 assert!(!follow);
             }
-            _ => panic!("expected Logs"),
+            _ => panic!("expected Service Logs"),
         }
     }
 
-    // 5. test_logs_follow_short
     #[test]
-    fn test_logs_follow_short() {
-        let cli = parse(&["sunbeam", "logs", "ory/kratos", "-f"]);
+    fn test_service_logs_follow_short() {
+        let cli = parse(&["sunbeam", "service", "logs", "ory/kratos", "-f"]);
         match cli.verb {
-            Some(Verb::Logs { follow, .. }) => assert!(follow),
-            _ => panic!("expected Logs"),
+            Some(Verb::Service { action: ServiceAction::Logs { follow, .. } }) => assert!(follow),
+            _ => panic!("expected Service Logs"),
         }
     }
 
@@ -556,23 +620,21 @@ mod tests {
         }
     }
 
-    // 12. test_apply_no_namespace
     #[test]
-    fn test_apply_no_namespace() {
-        let cli = parse(&["sunbeam", "apply"]);
+    fn test_service_apply_no_namespace() {
+        let cli = parse(&["sunbeam", "service", "apply"]);
         match cli.verb {
-            Some(Verb::Apply { namespace, .. }) => assert!(namespace.is_none()),
-            _ => panic!("expected Apply"),
+            Some(Verb::Service { action: ServiceAction::Apply { namespace, .. } }) => assert!(namespace.is_none()),
+            _ => panic!("expected Service Apply"),
         }
     }
 
-    // 13. test_apply_with_namespace
     #[test]
-    fn test_apply_with_namespace() {
-        let cli = parse(&["sunbeam", "apply", "lasuite"]);
+    fn test_service_apply_with_namespace() {
+        let cli = parse(&["sunbeam", "service", "apply", "ory"]);
         match cli.verb {
-            Some(Verb::Apply { namespace, .. }) => assert_eq!(namespace.unwrap(), "lasuite"),
-            _ => panic!("expected Apply"),
+            Some(Verb::Service { action: ServiceAction::Apply { namespace, .. } }) => assert_eq!(namespace.unwrap(), "ory"),
+            _ => panic!("expected Service Apply"),
         }
     }
 
@@ -619,26 +681,24 @@ mod tests {
         assert!(cli.verb.is_none());
     }
 
-    // 17. test_get_json_output
     #[test]
-    fn test_get_json_output() {
-        let cli = parse(&["sunbeam", "get", "ory/kratos-abc", "-o", "json"]);
+    fn test_service_get_json_output() {
+        let cli = parse(&["sunbeam", "service", "get", "ory/kratos-abc", "-o", "json"]);
         match cli.verb {
-            Some(Verb::Get { target, output }) => {
+            Some(Verb::Service { action: ServiceAction::Get { target, output } }) => {
                 assert_eq!(target, "ory/kratos-abc");
                 assert_eq!(output, "json");
             }
-            _ => panic!("expected Get"),
+            _ => panic!("expected Service Get"),
         }
     }
 
-    // 18. test_check_with_target
     #[test]
-    fn test_check_with_target() {
-        let cli = parse(&["sunbeam", "check", "devtools"]);
+    fn test_service_check_with_target() {
+        let cli = parse(&["sunbeam", "service", "check", "devtools"]);
         match cli.verb {
-            Some(Verb::Check { target }) => assert_eq!(target.unwrap(), "devtools"),
-            _ => panic!("expected Check"),
+            Some(Verb::Service { action: ServiceAction::Check { target } }) => assert_eq!(target.unwrap(), "devtools"),
+            _ => panic!("expected Service Check"),
         }
     }
 
@@ -770,68 +830,118 @@ mod tests {
     }
 
     #[test]
-    fn test_deploy_no_target() {
-        let cli = parse(&["sunbeam", "deploy"]);
+    fn test_service_deploy_no_target() {
+        let cli = parse(&["sunbeam", "service", "deploy"]);
         match cli.verb {
-            Some(Verb::Deploy { target, all }) => {
+            Some(Verb::Service { action: ServiceAction::Deploy { target, all } }) => {
                 assert!(target.is_none());
                 assert!(!all);
             }
-            _ => panic!("expected Deploy"),
+            _ => panic!("expected Service Deploy"),
         }
     }
 
     #[test]
-    fn test_deploy_with_target() {
-        let cli = parse(&["sunbeam", "deploy", "hydra"]);
+    fn test_service_deploy_with_target() {
+        let cli = parse(&["sunbeam", "service", "deploy", "hydra"]);
         match cli.verb {
-            Some(Verb::Deploy { target, .. }) => assert_eq!(target.unwrap(), "hydra"),
-            _ => panic!("expected Deploy"),
+            Some(Verb::Service { action: ServiceAction::Deploy { target, .. } }) => {
+                assert_eq!(target.unwrap(), "hydra");
+            }
+            _ => panic!("expected Service Deploy"),
         }
     }
 
     #[test]
-    fn test_deploy_all() {
-        let cli = parse(&["sunbeam", "deploy", "--all"]);
+    fn test_service_deploy_all() {
+        let cli = parse(&["sunbeam", "service", "deploy", "--all"]);
         match cli.verb {
-            Some(Verb::Deploy { all, .. }) => assert!(all),
-            _ => panic!("expected Deploy"),
+            Some(Verb::Service { action: ServiceAction::Deploy { all, .. } }) => assert!(all),
+            _ => panic!("expected Service Deploy"),
         }
     }
 
     #[test]
-    fn test_secrets_list() {
-        let cli = parse(&["sunbeam", "secrets", "hydra"]);
+    fn test_service_secrets_list() {
+        let cli = parse(&["sunbeam", "service", "secrets", "hydra"]);
         match cli.verb {
-            Some(Verb::Secrets { service, action }) => {
+            Some(Verb::Service { action: ServiceAction::Secrets { service, action } }) => {
                 assert_eq!(service, "hydra");
                 assert!(action.is_none());
             }
-            _ => panic!("expected Secrets"),
+            _ => panic!("expected Service Secrets"),
         }
     }
 
     #[test]
-    fn test_secrets_get() {
-        let cli = parse(&["sunbeam", "secrets", "hydra", "get", "system-secret"]);
+    fn test_service_secrets_get() {
+        let cli = parse(&["sunbeam", "service", "secrets", "hydra", "get", "system-secret"]);
         match cli.verb {
-            Some(Verb::Secrets { service, action }) => {
+            Some(Verb::Service { action: ServiceAction::Secrets { service, action } }) => {
                 assert_eq!(service, "hydra");
                 match action {
                     Some(SecretsAction::Get { key }) => assert_eq!(key, "system-secret"),
                     _ => panic!("expected Get"),
                 }
             }
-            _ => panic!("expected Secrets"),
+            _ => panic!("expected Service Secrets"),
         }
     }
 
     #[test]
-    fn test_shell() {
-        let cli = parse(&["sunbeam", "shell", "postgres"]);
+    fn test_service_shell() {
+        let cli = parse(&["sunbeam", "service", "shell", "postgres"]);
         match cli.verb {
-            Some(Verb::Shell { service }) => assert_eq!(service, "postgres"),
-            _ => panic!("expected Shell"),
+            Some(Verb::Service { action: ServiceAction::Shell { service } }) => {
+                assert_eq!(service, "postgres");
+            }
+            _ => panic!("expected Service Shell"),
+        }
+    }
+
+    #[test]
+    fn test_service_describe() {
+        let cli = parse(&["sunbeam", "service", "describe", "hydra"]);
+        match cli.verb {
+            Some(Verb::Service { action: ServiceAction::Describe { service } }) => {
+                assert_eq!(service, "hydra");
+            }
+            _ => panic!("expected Service Describe"),
+        }
+    }
+
+    #[test]
+    fn test_service_scale() {
+        let cli = parse(&["sunbeam", "service", "scale", "hydra", "3"]);
+        match cli.verb {
+            Some(Verb::Service { action: ServiceAction::Scale { service, replicas } }) => {
+                assert_eq!(service, "hydra");
+                assert_eq!(replicas, 3);
+            }
+            _ => panic!("expected Service Scale"),
+        }
+    }
+
+    #[test]
+    fn test_service_port_forward() {
+        let cli = parse(&["sunbeam", "service", "port-forward", "hydra", "8080:80"]);
+        match cli.verb {
+            Some(Verb::Service { action: ServiceAction::PortForward { service, ports } }) => {
+                assert_eq!(service, "hydra");
+                assert_eq!(ports, vec!["8080:80"]);
+            }
+            _ => panic!("expected Service PortForward"),
+        }
+    }
+
+    #[test]
+    fn test_svc_alias() {
+        let cli = parse(&["sunbeam", "svc", "top", "hydra"]);
+        match cli.verb {
+            Some(Verb::Service { action: ServiceAction::Top { service } }) => {
+                assert_eq!(service, "hydra");
+            }
+            _ => panic!("expected Service Top via svc alias"),
         }
     }
 }
@@ -914,190 +1024,8 @@ pub async fn dispatch() -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Status { target }) => {
-            crate::services::cmd_status(target.as_deref()).await
-        }
-
-        Some(Verb::Apply {
-            namespace,
-            apply_all,
-            domain,
-            email,
-        }) => {
-            let is_production = !crate::config::active_context().ssh_host.is_empty();
-            let env_str = if is_production { "production" } else { "local" };
-            let domain = if domain.is_empty() {
-                cli.domain.clone()
-            } else {
-                domain
-            };
-            let email = if email.is_empty() {
-                cli.email.clone()
-            } else {
-                email
-            };
-            let ns = namespace.unwrap_or_default();
-
-            // Production full-apply requires --all or confirmation
-            if is_production && ns.is_empty() && !apply_all {
-                crate::output::warn(
-                    "This will apply ALL namespaces to production.",
-                );
-                eprint!("  Continue? [y/N] ");
-                let mut answer = String::new();
-                std::io::stdin().read_line(&mut answer)?;
-                if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
-                    println!("Aborted.");
-                    return Ok(());
-                }
-            }
-
-            crate::manifests::cmd_apply(&env_str, &domain, &email, &ns).await
-        }
-
-        Some(Verb::Seed) => {
-            crate::output::step("Seeding secrets (workflow engine)...");
-
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
-            };
-
-            let host = crate::workflows::host::create_host(&ctx_name).await?;
-            crate::workflows::seed::register(&host).await;
-
-            let step_ctx = crate::workflows::StepContext::from_active();
-            let initial_data = serde_json::json!({
-                "__ctx": step_ctx,
-            });
-
-            let instance = wfe::run_workflow_sync(
-                &host,
-                "seed",
-                2,
-                initial_data,
-                std::time::Duration::from_secs(900),
-            )
-            .await
-            .map_err(|e| SunbeamError::secrets(format!("seed workflow failed: {e}")))?;
-
-            crate::workflows::seed::print_summary(&instance);
-            crate::workflows::host::shutdown_host(host).await;
-
-            if instance.status != wfe_core::models::WorkflowStatus::Complete {
-                return Err(SunbeamError::secrets(format!(
-                    "seed workflow ended with status {:?}",
-                    instance.status
-                )));
-            }
-
-            Ok(())
-        }
-
-        Some(Verb::Verify) => {
-            crate::output::step("Verifying VSO -> OpenBao integration (workflow engine)...");
-
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
-            };
-
-            let host = crate::workflows::host::create_host(&ctx_name).await?;
-            crate::workflows::verify::register(&host).await;
-
-            let step_ctx = crate::workflows::StepContext::from_active();
-            let initial_data = serde_json::json!({
-                "__ctx": step_ctx,
-            });
-
-            let instance = wfe::run_workflow_sync(
-                &host,
-                "verify",
-                1,
-                initial_data,
-                std::time::Duration::from_secs(300),
-            )
-            .await
-            .map_err(|e| SunbeamError::Other(format!("verify workflow failed: {e}")))?;
-
-            crate::workflows::verify::print_summary(&instance);
-            crate::workflows::host::shutdown_host(host).await;
-
-            if instance.status != wfe_core::models::WorkflowStatus::Complete {
-                return Err(SunbeamError::Other(format!(
-                    "verify workflow ended with status {:?}",
-                    instance.status
-                )));
-            }
-
-            Ok(())
-        }
-
-        Some(Verb::Logs { target, follow }) => {
-            crate::services::cmd_logs(&target, follow).await
-        }
-
-        Some(Verb::Get { target, output }) => {
-            crate::services::cmd_get(&target, &output).await
-        }
-
-        Some(Verb::Restart { target }) => {
-            crate::services::cmd_restart(target.as_deref()).await
-        }
-
-        Some(Verb::Check { target }) => {
-            crate::checks::cmd_check(target.as_deref()).await
-        }
-
-        Some(Verb::Bootstrap) => {
-            crate::output::step("Bootstrapping Gitea (workflow engine)...");
-
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
-            };
-
-            let host = crate::workflows::host::create_host(&ctx_name).await?;
-            crate::workflows::bootstrap::register(&host).await;
-
-            let step_ctx = crate::workflows::StepContext::from_active();
-            let initial_data = serde_json::json!({
-                "__ctx": step_ctx,
-            });
-
-            let instance = wfe::run_workflow_sync(
-                &host,
-                "bootstrap",
-                1,
-                initial_data,
-                std::time::Duration::from_secs(300),
-            )
-            .await
-            .map_err(|e| SunbeamError::Other(format!("bootstrap workflow failed: {e}")))?;
-
-            crate::workflows::bootstrap::print_summary(&instance);
-            crate::workflows::host::shutdown_host(host).await;
-
-            if instance.status != wfe_core::models::WorkflowStatus::Complete {
-                return Err(SunbeamError::Other(format!(
-                    "bootstrap workflow ended with status {:?}",
-                    instance.status
-                )));
-            }
-
-            Ok(())
+        Some(Verb::Service { action }) => {
+            crate::service_cmds::dispatch(action, &cli.domain, &cli.email).await
         }
 
         Some(Verb::Config { action }) => match action {
@@ -1342,35 +1270,24 @@ pub async fn dispatch() -> Result<()> {
             crate::workflows::cmd::dispatch(&ctx_name, action).await
         }
 
-        Some(Verb::Deploy { target, all }) => {
-            if all || target.is_none() {
-                let is_production = !crate::config::active_context().ssh_host.is_empty();
-                let env_str = if is_production { "production" } else { "local" };
-                let domain = cli.domain.clone();
-                let email = cli.email.clone();
-                crate::manifests::cmd_apply(env_str, &domain, &email, "").await
-            } else {
-                let target = target.unwrap();
-                crate::service_cmds::cmd_deploy(&target, &cli.domain, &cli.email).await
+        Some(Verb::Workflows { output, action }) => {
+            let domain = crate::config::domain();
+            if domain.is_empty() {
+                return Err(SunbeamError::Config("domain not set — run `sunbeam config set --domain <domain>` first".into()));
             }
+            if let Err(e) = crate::wfectl::dispatch(action, output, domain).await {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+            Ok(())
         }
-
-        Some(Verb::Secrets { service, action }) => {
-            crate::service_cmds::cmd_secrets(&service, action).await
-        }
-
-        Some(Verb::Shell { service }) => {
-            crate::service_cmds::cmd_shell(&service).await
-        }
-
-        Some(Verb::Connect { foreground }) => {
-            crate::vpn_cmds::cmd_connect(foreground).await
-        }
-
-        Some(Verb::Disconnect) => crate::vpn_cmds::cmd_disconnect().await,
 
         Some(Verb::Vpn { action }) => match action {
             VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
+            VpnAction::Connect { foreground } => {
+                crate::vpn_cmds::cmd_connect(foreground).await
+            }
+            VpnAction::Disconnect => crate::vpn_cmds::cmd_disconnect().await,
             VpnAction::CreateKey {
                 user,
                 reusable,
@@ -1378,6 +1295,19 @@ pub async fn dispatch() -> Result<()> {
                 expiration,
             } => crate::vpn_cmds::cmd_vpn_create_key(&user, reusable, ephemeral, &expiration).await,
         },
+
+        Some(Verb::Completions { shell }) => {
+            use clap::CommandFactory;
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "sunbeam",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
+
+        Some(Verb::Doctor) => crate::doctor::cmd_doctor().await,
 
         Some(Verb::VpnDaemon) => crate::vpn_cmds::cmd_vpn_daemon().await,
 

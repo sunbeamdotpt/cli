@@ -3,6 +3,7 @@ mod error;
 
 mod auth;
 mod checks;
+mod doctor;
 mod cli;
 mod cluster;
 mod constants;
@@ -20,6 +21,7 @@ mod tools;
 mod update;
 mod users;
 mod vpn_cmds;
+mod wfectl;
 mod workflows;
 
 #[tokio::main]
