@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::constants::MANAGED_NS;
 
 /// Return only the YAML documents that belong to the given namespace.
 pub fn filter_by_namespace(manifests: &str, namespace: &str) -> String {
@@ -125,9 +124,20 @@ pub async fn cmd_apply(env: &str, domain: &str, email: &str, namespace: &str) ->
 
 /// Delete immutable resources that must be re-created on each apply.
 async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
+    let discovered: Vec<String>;
     let ns_list: Vec<&str> = match namespaces {
         Some(ns) => ns.iter().map(|s| s.as_str()).collect(),
-        None => MANAGED_NS.to_vec(),
+        None => {
+            discovered = match crate::kube::get_client().await {
+                Ok(client) => {
+                    let reg = sunbeam_sdk::registry::discover(client).await;
+                    reg.map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
+                        .unwrap_or_default()
+                }
+                Err(_) => Vec::new(),
+            };
+            discovered.iter().map(|s| s.as_str()).collect()
+        }
     };
 
     crate::output::ok("Cleaning up immutable Jobs and test Pods...");
@@ -243,7 +253,12 @@ async fn snapshot_configmaps() -> std::collections::HashMap<String, String> {
         Err(_) => return result,
     };
 
-    for ns in MANAGED_NS {
+    let reg = sunbeam_sdk::registry::discover(client).await;
+    let namespaces: Vec<String> = reg
+        .map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+
+    for ns in &namespaces {
         let cms: kube::api::Api<k8s_openapi::api::core::v1::ConfigMap> =
             kube::api::Api::namespaced(client.clone(), ns);
         if let Ok(cm_list) = cms.list(&kube::api::ListParams::default()).await {
@@ -599,8 +614,11 @@ pub async fn ensure_opensearch_ml() {
         .cloned()
         .unwrap_or_default();
 
-    let mut model_id: Option<String> = None;
-    let mut already_deployed = false;
+    // Categorise all matching models by state.
+    let mut deployed_ids: Vec<String> = Vec::new();
+    let mut deploying_ids: Vec<String> = Vec::new();
+    let mut registered_ids: Vec<String> = Vec::new();
+    let mut stale_ids: Vec<String> = Vec::new(); // FAILED, DEPLOY_FAILED, etc.
 
     for hit in &hits {
         let state = hit
@@ -609,123 +627,171 @@ pub async fn ensure_opensearch_ml() {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let id = hit.get("_id").and_then(|v| v.as_str()).unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
         match state {
-            "DEPLOYED" => {
-                model_id = Some(id.to_string());
-                already_deployed = true;
-                break;
-            }
-            "REGISTERED" | "DEPLOYING" => {
-                model_id = Some(id.to_string());
-            }
-            _ => {}
+            "DEPLOYED" => deployed_ids.push(id.to_string()),
+            "DEPLOYING" => deploying_ids.push(id.to_string()),
+            "REGISTERED" => registered_ids.push(id.to_string()),
+            _ => stale_ids.push(id.to_string()),
         }
     }
 
-    if !already_deployed {
-        if let Some(ref mid) = model_id {
-            // Registered but not deployed -- deploy it
-            crate::output::ok("Deploying OpenSearch ML model...");
-            os_api(
-                &format!("/_plugins/_ml/models/{mid}/_deploy"),
-                "POST",
-                None,
-            )
-            .await;
-            for _ in 0..30 {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                if let Some(r) =
-                    os_api(&format!("/_plugins/_ml/models/{mid}"), "GET", None).await
-                {
-                    if r.contains("\"DEPLOYED\"") {
-                        break;
-                    }
-                }
-            }
-        } else {
-            // Register from pre-trained hub
-            crate::output::ok("Registering OpenSearch ML model (all-mpnet-base-v2)...");
-            let reg_body = serde_json::json!({
-                "name": "huggingface/sentence-transformers/all-mpnet-base-v2",
-                "version": "1.0.1",
-                "model_format": "TORCH_SCRIPT",
-            });
-            let reg_resp = match os_api(
-                "/_plugins/_ml/models/_register",
-                "POST",
-                Some(&serde_json::to_string(&reg_body).unwrap()),
-            )
-            .await
-            {
-                Some(r) => r,
-                None => {
-                    crate::output::warn("Failed to register ML model -- skipping.");
-                    return;
-                }
-            };
+    // Pick the best model: first DEPLOYED, then first DEPLOYING, then first REGISTERED.
+    let best_id = deployed_ids.first()
+        .or(deploying_ids.first())
+        .or(registered_ids.first())
+        .cloned();
 
-            let task_id = serde_json::from_str::<serde_json::Value>(&reg_resp)
-                .ok()
-                .and_then(|v| v.get("task_id")?.as_str().map(String::from))
-                .unwrap_or_default();
-
-            if task_id.is_empty() {
-                crate::output::warn("No task_id from model registration -- skipping.");
-                return;
-            }
-
-            crate::output::ok("Waiting for model registration...");
-            let mut registered_id = None;
-            for _ in 0..60 {
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                if let Some(task_resp) =
-                    os_api(&format!("/_plugins/_ml/tasks/{task_id}"), "GET", None).await
-                {
-                    if let Ok(task) = serde_json::from_str::<serde_json::Value>(&task_resp) {
-                        match task.get("state").and_then(|v| v.as_str()).unwrap_or("") {
-                            "COMPLETED" => {
-                                registered_id = task
-                                    .get("model_id")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from);
-                                break;
-                            }
-                            "FAILED" => {
-                                crate::output::warn(&format!(
-                                    "ML model registration failed: {task_resp}"
-                                ));
-                                return;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            let Some(mid) = registered_id else {
-                crate::output::warn("ML model registration timed out.");
-                return;
-            };
-
-            crate::output::ok("Deploying ML model...");
-            os_api(
-                &format!("/_plugins/_ml/models/{mid}/_deploy"),
-                "POST",
-                None,
-            )
-            .await;
-            for _ in 0..30 {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                if let Some(r) =
-                    os_api(&format!("/_plugins/_ml/models/{mid}"), "GET", None).await
-                {
-                    if r.contains("\"DEPLOYED\"") {
-                        break;
-                    }
-                }
-            }
-            model_id = Some(mid);
+    // Clean up duplicates: everything that isn't the best model.
+    let mut to_clean: Vec<String> = stale_ids; // always clean FAILED/stale
+    if let Some(ref best) = best_id {
+        for id in &deployed_ids {
+            if id != best { to_clean.push(id.clone()); }
         }
+        for id in &deploying_ids {
+            if id != best { to_clean.push(id.clone()); }
+        }
+        for id in &registered_ids {
+            if id != best { to_clean.push(id.clone()); }
+        }
+    }
+
+    if !to_clean.is_empty() {
+        crate::output::step(&format!("Cleaning up {} stale ML model(s)...", to_clean.len()));
+        for stale in &to_clean {
+            // Undeploy first (safe to call even if not deployed)
+            os_api(&format!("/_plugins/_ml/models/{stale}/_undeploy"), "POST", None).await;
+            // Then delete
+            os_api(&format!("/_plugins/_ml/models/{stale}"), "DELETE", None).await;
+        }
+    }
+
+    let mut model_id: Option<String> = None;
+
+    if let Some(id) = best_id {
+        // Check current state of the chosen model.
+        let state = hits.iter()
+            .find(|h| h.get("_id").and_then(|v| v.as_str()) == Some(&id))
+            .and_then(|h| h.get("_source"))
+            .and_then(|s| s.get("model_state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match state {
+            "DEPLOYED" => {
+                // Nothing to do.
+                model_id = Some(id);
+            }
+            "DEPLOYING" => {
+                crate::output::ok("Model is deploying, waiting...");
+                model_id = Some(id.clone());
+                for _ in 0..30 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Some(r) = os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await {
+                        if r.contains("\"DEPLOYED\"") { break; }
+                    }
+                }
+            }
+            _ => {
+                // REGISTERED or other — deploy it.
+                crate::output::ok("Deploying OpenSearch ML model...");
+                model_id = Some(id.clone());
+                os_api(&format!("/_plugins/_ml/models/{id}/_deploy"), "POST", None).await;
+                for _ in 0..30 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if let Some(r) = os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await {
+                        if r.contains("\"DEPLOYED\"") { break; }
+                    }
+                }
+            }
+        }
+    }
+
+    if model_id.is_none() {
+        // No existing model found — register from pre-trained hub
+        crate::output::ok("Registering OpenSearch ML model (all-mpnet-base-v2)...");
+        let reg_body = serde_json::json!({
+            "name": "huggingface/sentence-transformers/all-mpnet-base-v2",
+            "version": "1.0.1",
+            "model_format": "TORCH_SCRIPT",
+        });
+        let reg_resp = match os_api(
+            "/_plugins/_ml/models/_register",
+            "POST",
+            Some(&serde_json::to_string(&reg_body).unwrap()),
+        )
+        .await
+        {
+            Some(r) => r,
+            None => {
+                crate::output::warn("Failed to register ML model -- skipping.");
+                return;
+            }
+        };
+
+        let task_id = serde_json::from_str::<serde_json::Value>(&reg_resp)
+            .ok()
+            .and_then(|v| v.get("task_id")?.as_str().map(String::from))
+            .unwrap_or_default();
+
+        if task_id.is_empty() {
+            crate::output::warn("No task_id from model registration -- skipping.");
+            return;
+        }
+
+        crate::output::ok("Waiting for model registration...");
+        let mut new_model_id = None;
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            if let Some(task_resp) =
+                os_api(&format!("/_plugins/_ml/tasks/{task_id}"), "GET", None).await
+            {
+                if let Ok(task) = serde_json::from_str::<serde_json::Value>(&task_resp) {
+                    match task.get("state").and_then(|v| v.as_str()).unwrap_or("") {
+                        "COMPLETED" => {
+                            new_model_id = task
+                                .get("model_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            break;
+                        }
+                        "FAILED" => {
+                            crate::output::warn(&format!(
+                                "ML model registration failed: {task_resp}"
+                            ));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let Some(mid) = new_model_id else {
+            crate::output::warn("ML model registration timed out.");
+            return;
+        };
+
+        crate::output::ok("Deploying ML model...");
+        os_api(
+            &format!("/_plugins/_ml/models/{mid}/_deploy"),
+            "POST",
+            None,
+        )
+        .await;
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if let Some(r) =
+                os_api(&format!("/_plugins/_ml/models/{mid}"), "GET", None).await
+            {
+                if r.contains("\"DEPLOYED\"") {
+                    break;
+                }
+            }
+        }
+        model_id = Some(mid);
     }
 
     let Some(model_id) = model_id else {
