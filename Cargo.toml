@@ -23,6 +23,7 @@ sunbeam-net = { path = "sunbeam-net" }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -77,10 +78,18 @@ chrono = { version = "0.4", features = ["serde"] }
 vaultrs = "0.8"
 
 # Workflow engine
-wfe = { version = "1.6.3", registry = "sunbeam" }
-wfe-core = { version = "1.6.3", registry = "sunbeam", features = ["test-support"] }
-wfe-sqlite = { version = "1.6.3", registry = "sunbeam" }
-wfe-yaml = { version = "1.6.3", registry = "sunbeam" }
+wfe = { version = "1.9.0", registry = "sunbeam" }
+wfe-core = { version = "1.9.0", registry = "sunbeam", features = ["test-support"] }
+wfe-sqlite = { version = "1.9.0", registry = "sunbeam" }
+wfe-yaml = { version = "1.9.0", registry = "sunbeam", features = ["rustlang", "buildkit", "containerd", "kubernetes"] }
+
+# WFE remote (gRPC client for wfe-server)
+wfe-server-protos = { version = "1.9.0", registry = "sunbeam" }
+tonic = { version = "0.14", features = ["tls-native-roots"] }
+prost-types = "0.14"
+prost = "0.14"
+comfy-table = "7"
+anyhow = "1"
 async-trait = "0.1"
 hostname = "0.4.2"
 whoami = "2.1.1"
