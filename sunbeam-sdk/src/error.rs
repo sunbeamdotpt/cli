@@ -29,7 +29,7 @@ pub enum SunbeamError {
     Kube {
         context: String,
         #[source]
-        source: Option<kube::Error>,
+        source: Option<Box<kube::Error>>,
     },
 
     /// Configuration error (missing config, invalid config, bad arguments).
@@ -110,7 +110,7 @@ impl From<kube::Error> for SunbeamError {
     fn from(e: kube::Error) -> Self {
         SunbeamError::Kube {
             context: e.to_string(),
-            source: Some(e),
+            source: Some(Box::new(e)),
         }
     }
 }
@@ -209,18 +209,9 @@ impl<T, E: Into<SunbeamError>> ResultExt<T> for std::result::Result<T, E> {
             let context = f();
             let inner = e.into();
             match inner {
-                SunbeamError::Kube { source, .. } => SunbeamError::Kube {
-                    context,
-                    source,
-                },
-                SunbeamError::Network { source, .. } => SunbeamError::Network {
-                    context,
-                    source,
-                },
-                SunbeamError::Io { source, .. } => SunbeamError::Io {
-                    context,
-                    source,
-                },
+                SunbeamError::Kube { source, .. } => SunbeamError::Kube { context, source },
+                SunbeamError::Network { source, .. } => SunbeamError::Network { context, source },
+                SunbeamError::Io { source, .. } => SunbeamError::Io { context, source },
                 SunbeamError::Secrets(msg) => SunbeamError::Secrets(format!("{context}: {msg}")),
                 SunbeamError::Config(msg) => SunbeamError::Config(format!("{context}: {msg}")),
                 SunbeamError::Build(msg) => SunbeamError::Build(format!("{context}: {msg}")),
@@ -316,7 +307,10 @@ mod tests {
             SunbeamError::tool("kustomize", "not found").exit_code(),
             exit::EXTERNAL_TOOL
         );
-        assert_eq!(SunbeamError::Other("oops".into()).exit_code(), exit::GENERAL);
+        assert_eq!(
+            SunbeamError::Other("oops".into()).exit_code(),
+            exit::GENERAL
+        );
     }
 
     #[test]

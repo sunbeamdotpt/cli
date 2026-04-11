@@ -1,0 +1,231 @@
+# Lima VM: Alpine + k3s + Cilium + nerdctl + BuildKit
+# Usage:
+#   limactl create --name sunbeam lima-sunbeam.yaml
+#   limactl start sunbeam
+#   export KUBECONFIG=$(limactl list sunbeam --format 'unix://{{.Dir}}/copied-from-guest/kubeconfig.yaml')
+
+minimumLimaVersion: "2.0.0"
+
+vmType: vz
+mountType: virtiofs
+cpus: 6
+memory: 24GiB
+disk: 60GiB
+
+images:
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-aarch64-uefi-cloudinit-r0.qcow2"
+    arch: "aarch64"
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-x86_64-uefi-cloudinit-r0.qcow2"
+    arch: "x86_64"
+
+mounts: []
+
+# containerd is managed by k3s
+containerd:
+  system: false
+  user: false
+
+provision:
+  # 1. Base packages (Alpine uses apk, not apt)
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eux
+      apk update
+      apk add --no-cache \
+        curl bash iptables ip6tables coreutils findutils grep \
+        openrc openssh pigz tar gzip
+
+  # 2. Mount propagation fix (Alpine/OpenRC doesn't set rshared by default; Cilium needs it for BPF)
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eux
+      # Make root and key mounts shared so containers can mount BPF/cgroup filesystems
+      mount --make-rshared /
+      # Persist across reboots via a local init script that runs before k3s
+      cat > /etc/init.d/mount-shared << 'EOF'
+      #!/sbin/openrc-run
+      name="mount-shared"
+      description="Set mount propagation to rshared for Cilium BPF"
+      depend() { before k3s; }
+      start() { mount --make-rshared /; }
+      EOF
+      chmod +x /etc/init.d/mount-shared
+      rc-update add mount-shared boot 2>/dev/null || true
+
+  # 3. Install k3s (no traefik, no servicelb, no flannel — Cilium will handle CNI)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if [ ! -f /usr/local/bin/k3s ]; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
+          --write-kubeconfig-mode=644 \
+          --disable=traefik \
+          --disable=servicelb \
+          --flannel-backend=none \
+          --disable-network-policy" sh -
+      fi
+
+  # 3. Install Cilium CLI
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v cilium >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && CLARCH="arm64" || CLARCH="amd64"
+      CILIUM_CLI_VERSION=$(curl -fsSL https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+      curl -fsSL "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin
+      chmod +x /usr/local/bin/cilium
+
+  # 4. Install Cilium into k3s
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      # Wait for k3s API to be ready
+      for i in $(seq 1 60); do
+        kubectl get nodes >/dev/null 2>&1 && break
+        sleep 2
+      done
+      # Install Cilium if not already present
+      if ! kubectl get ns cilium-system >/dev/null 2>&1; then
+        cilium install --set kubeProxyReplacement=true
+      fi
+      # Wait for Cilium to be ready (up to 5 min)
+      cilium status --wait --wait-duration 5m || true
+
+  # 5. Install nerdctl
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v nerdctl >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && NARCH="arm64" || NARCH="amd64"
+      NERDCTL_VERSION=$(curl -fsSL https://api.github.com/repos/containerd/nerdctl/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"v//' | sed 's/".*//')
+      curl -fsSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-${NARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin
+      chmod +x /usr/local/bin/nerdctl
+
+  # 6. Install host-level BuildKit daemon
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v buildkitd >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && BKARCH="arm64" || BKARCH="amd64"
+      BUILDKIT_VERSION=$(curl -fsSL https://api.github.com/repos/moby/buildkit/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"v//' | sed 's/".*//')
+      curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-${BKARCH}.tar.gz" \
+        | tar -xz -C /usr/local
+      chmod +x /usr/local/bin/buildkitd /usr/local/bin/buildctl
+
+  # 7. BuildKit OpenRC service (Alpine uses OpenRC, not systemd)
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eux
+      cat > /etc/init.d/buildkit << 'EOF'
+      #!/sbin/openrc-run
+      name="BuildKit"
+      description="BuildKit daemon"
+      command="/usr/local/bin/buildkitd"
+      command_args=""
+      command_background=true
+      pidfile="/run/${RC_SVCNAME}.pid"
+      output_log="/var/log/buildkit.log"
+      error_log="/var/log/buildkit.log"
+      EOF
+      chmod +x /etc/init.d/buildkit
+      rc-update add buildkit default 2>/dev/null || true
+      rc-service buildkit start 2>/dev/null || true
+      # Wait for socket and fix permissions so Lima can forward it
+      for i in $(seq 1 10); do
+        [ -S /run/buildkit/buildkitd.sock ] && break
+        sleep 1
+      done
+      chmod 666 /run/buildkit/buildkitd.sock 2>/dev/null || true
+
+  # 8. Deploy in-cluster BuildKit (DaemonSet)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      # Wait for nodes to be ready
+      for i in $(seq 1 60); do
+        kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True && break
+        sleep 3
+      done
+      # Deploy BuildKit as a DaemonSet if not already present
+      if ! kubectl get daemonset buildkitd -n buildkit >/dev/null 2>&1; then
+        kubectl create namespace buildkit 2>/dev/null || true
+        kubectl apply -n buildkit -f - << 'MANIFEST'
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: buildkitd
+      spec:
+        selector:
+          matchLabels:
+            app: buildkitd
+        template:
+          metadata:
+            labels:
+              app: buildkitd
+          spec:
+            containers:
+              - name: buildkitd
+                image: moby/buildkit:latest
+                args: []
+                securityContext:
+                  privileged: true
+                ports:
+                  - containerPort: 1234
+                    protocol: TCP
+                volumeMounts:
+                  - name: buildkit-state
+                    mountPath: /var/lib/buildkit
+            volumes:
+              - name: buildkit-state
+                emptyDir: {}
+      MANIFEST
+      fi
+
+probes:
+  - script: |
+      #!/bin/bash
+      set -eux
+      if ! timeout 30 bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+        echo >&2 "k3s is not ready yet"
+        exit 1
+      fi
+    hint: "Waiting for k3s kubeconfig"
+
+copyToHost:
+  - guest: "/etc/rancher/k3s/k3s.yaml"
+    host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+    deleteOnStop: true
+
+networks:
+  - lima: shared
+    interface: eth1
+
+portForwards:
+  # k3s API server
+  - guestPort: 6443
+    hostPort: 6443
+    proto: tcp
+  # BuildKit socket (host-level daemon)
+  - guestSocket: "/run/buildkit/buildkitd.sock"
+    hostSocket: "{{.Dir}}/buildkitd.sock"
+  # containerd socket (k3s-managed containerd)
+  - guestSocket: "/run/k3s/containerd/containerd.sock"
+    hostSocket: "{{.Dir}}/containerd.sock"

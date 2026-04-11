@@ -85,10 +85,8 @@ fn base_dir(override_dir: Option<&Path>) -> PathBuf {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(
-                            &dest,
-                            std::fs::Permissions::from_mode(0o600),
-                        );
+                        let _ =
+                            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600));
                     }
                 }
             }
@@ -120,6 +118,7 @@ pub fn keystore_exists_at(domain: &str, dir: &Path) -> bool {
     keystore_path_in(domain, Some(dir)).exists()
 }
 
+#[cfg(test)]
 fn keystore_exists_in(domain: &str, dir: Option<&Path>) -> bool {
     keystore_path_in(domain, dir).exists()
 }
@@ -302,8 +301,8 @@ fn load_keystore_in(domain: &str, override_dir: Option<&Path>) -> Result<VaultKe
         )));
     }
 
-    let data = std::fs::read(&path)
-        .map_err(|e| SunbeamError::Other(format!("reading keystore: {e}")))?;
+    let data =
+        std::fs::read(&path).map_err(|e| SunbeamError::Other(format!("reading keystore: {e}")))?;
 
     if data.is_empty() {
         return Err(SunbeamError::Other("vault keystore file is empty".into()));
@@ -515,7 +514,7 @@ mod tests {
         let ks = test_keystore("sunbeam.pt");
         save_keystore_in(&ks, Some(dir.path())).unwrap();
         let path = keystore_path_in("sunbeam.pt", Some(dir.path()));
-        std::fs::write(&path, &[0u8; 10]).unwrap(); // too short
+        std::fs::write(&path, [0u8; 10]).unwrap(); // too short
         let result = load_keystore_in("sunbeam.pt", Some(dir.path()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too short"));
@@ -526,7 +525,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = keystore_path_in("sunbeam.pt", Some(dir.path()));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &[]).unwrap();
+        std::fs::write(&path, []).unwrap();
         let result = load_keystore_in("sunbeam.pt", Some(dir.path()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
@@ -562,7 +561,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = load_keystore_in("nonexistent.example.com", Some(dir.path()));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no vault keystore"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no vault keystore")
+        );
     }
 
     #[test]
@@ -632,7 +636,12 @@ mod tests {
         save_keystore_in(&ks, Some(dir.path())).unwrap();
         let result = verify_vault_keys_in("sunbeam.pt", Some(dir.path()));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid threshold"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid threshold")
+        );
     }
 
     // -- Integration-style ---------------------------------------------------
