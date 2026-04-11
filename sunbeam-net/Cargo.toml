@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure Rust Headscale/Tailscale-compatible VPN client"
+publish = ["sunbeam"]
 
 [dependencies]
 # Async / tracing

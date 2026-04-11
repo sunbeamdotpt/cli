@@ -2,7 +2,7 @@ use flate2::read::GzDecoder;
 use std::env;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tar::Archive;
 
@@ -54,7 +54,7 @@ fn parse_target(target: &str) -> (String, String) {
     (os.to_string(), arch.to_string())
 }
 
-fn download_and_embed(tool: &str, version: &str, os: &str, arch: &str, out_dir: &PathBuf) {
+fn download_and_embed(tool: &str, version: &str, os: &str, arch: &str, out_dir: &Path) {
     let dest = out_dir.join(tool);
     if dest.exists() {
         return;
@@ -65,9 +65,7 @@ fn download_and_embed(tool: &str, version: &str, os: &str, arch: &str, out_dir: 
             "https://github.com/kubernetes-sigs/kustomize/releases/download/\
              kustomize%2F{version}/kustomize_{version}_{os}_{arch}.tar.gz"
         ),
-        "helm" => format!(
-            "https://get.helm.sh/helm-{version}-{os}-{arch}.tar.gz"
-        ),
+        "helm" => format!("https://get.helm.sh/helm-{version}-{os}-{arch}.tar.gz"),
         _ => panic!("Unknown tool: {tool}"),
     };
 
@@ -79,8 +77,8 @@ fn download_and_embed(tool: &str, version: &str, os: &str, arch: &str, out_dir: 
 
     eprintln!("cargo:warning=Downloading {tool} {version} for {os}/{arch}...");
 
-    let response = reqwest::blocking::get(&url)
-        .unwrap_or_else(|e| panic!("Failed to download {tool}: {e}"));
+    let response =
+        reqwest::blocking::get(&url).unwrap_or_else(|e| panic!("Failed to download {tool}: {e}"));
     let bytes = response
         .bytes()
         .unwrap_or_else(|e| panic!("Failed to read {tool} response: {e}"));
@@ -96,9 +94,7 @@ fn download_and_embed(tool: &str, version: &str, os: &str, arch: &str, out_dir: 
             .to_path_buf();
         if path.to_string_lossy() == extract_path {
             let mut data = Vec::new();
-            entry
-                .read_to_end(&mut data)
-                .expect("Failed to read binary");
+            entry.read_to_end(&mut data).expect("Failed to read binary");
             fs::write(&dest, &data).expect("Failed to write binary");
 
             #[cfg(unix)]

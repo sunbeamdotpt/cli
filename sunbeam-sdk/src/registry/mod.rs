@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use kube::api::{Api, ListParams};
 use kube::Client;
+use kube::api::{Api, ListParams};
 // ── Label / annotation keys ──────────────────────────────────────────
 
 const LABEL_SERVICE: &str = "sunbeam.pt/service";
@@ -92,7 +92,7 @@ const ALL_CATEGORIES: &[Category] = &[
 
 impl Category {
     /// Parse a category from a label value (case-insensitive).
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "auth" => Self::Auth,
             "data" => Self::Data,
@@ -157,7 +157,7 @@ pub enum HealthCheck {
 // ── ServiceRegistry ──────────────────────────────────────────────────
 
 /// In-memory registry of discovered services.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServiceRegistry {
     pub services: HashMap<String, ServiceDefinition>,
 }
@@ -165,9 +165,7 @@ pub struct ServiceRegistry {
 impl ServiceRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
-        Self {
-            services: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// All services, sorted by name.
@@ -184,14 +182,22 @@ impl ServiceRegistry {
 
     /// All services belonging to a given category, sorted by name.
     pub fn by_category(&self, cat: Category) -> Vec<&ServiceDefinition> {
-        let mut svcs: Vec<_> = self.services.values().filter(|s| s.category == cat).collect();
+        let mut svcs: Vec<_> = self
+            .services
+            .values()
+            .filter(|s| s.category == cat)
+            .collect();
         svcs.sort_by_key(|s| &s.name);
         svcs
     }
 
     /// All services in a given Kubernetes namespace, sorted by name.
     pub fn by_namespace(&self, ns: &str) -> Vec<&ServiceDefinition> {
-        let mut svcs: Vec<_> = self.services.values().filter(|s| s.namespace == ns).collect();
+        let mut svcs: Vec<_> = self
+            .services
+            .values()
+            .filter(|s| s.namespace == ns)
+            .collect();
         svcs.sort_by_key(|s| &s.name);
         svcs
     }
@@ -248,7 +254,11 @@ impl ServiceRegistry {
 
     /// Unique namespaces across all services, sorted.
     pub fn namespaces(&self) -> Vec<&str> {
-        let mut ns: Vec<&str> = self.services.values().map(|s| s.namespace.as_str()).collect();
+        let mut ns: Vec<&str> = self
+            .services
+            .values()
+            .map(|s| s.namespace.as_str())
+            .collect();
         ns.sort_unstable();
         ns.dedup();
         ns
@@ -278,20 +288,12 @@ pub async fn discover(client: &Client) -> crate::error::Result<ServiceRegistry> 
     .await?;
 
     // Query DaemonSets
-    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(
-        client,
-        &mut services,
-        "DaemonSet",
-    )
-    .await?;
+    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(client, &mut services, "DaemonSet")
+        .await?;
 
     // Query ConfigMaps (for virtual/external services)
-    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(
-        client,
-        &mut services,
-        "ConfigMap",
-    )
-    .await?;
+    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(client, &mut services, "ConfigMap")
+        .await?;
 
     Ok(ServiceRegistry { services })
 }
@@ -347,8 +349,7 @@ where
 
         // If this service already exists (e.g. multiple deployments), add the resource name
         if let Some(existing) = services.get_mut(&service_name) {
-            if (kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet")
-                && !is_virtual
+            if (kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet") && !is_virtual
             {
                 existing.deployments.push(resource_name.to_string());
             }
@@ -405,7 +406,7 @@ where
             ServiceDefinition {
                 name: service_name,
                 display_name,
-                category: Category::from_str(category_str),
+                category: Category::parse(category_str),
                 namespace: ns.to_string(),
                 deployments,
                 kv_path,
@@ -592,16 +593,16 @@ mod tests {
 
     #[test]
     fn test_category_from_str() {
-        assert_eq!(Category::from_str("auth"), Category::Auth);
-        assert_eq!(Category::from_str("Auth"), Category::Auth);
-        assert_eq!(Category::from_str("AUTH"), Category::Auth);
-        assert_eq!(Category::from_str("unknown_thing"), Category::Unknown);
+        assert_eq!(Category::parse("auth"), Category::Auth);
+        assert_eq!(Category::parse("Auth"), Category::Auth);
+        assert_eq!(Category::parse("AUTH"), Category::Auth);
+        assert_eq!(Category::parse("unknown_thing"), Category::Unknown);
     }
 
     #[test]
     fn test_category_roundtrip() {
         for cat in Category::all_categories() {
-            assert_eq!(Category::from_str(cat.name()), *cat);
+            assert_eq!(Category::parse(cat.name()), *cat);
         }
     }
 
@@ -691,8 +692,7 @@ mod tests {
         let mut reg = ServiceRegistry::new();
         reg.services
             .insert("a".into(), svc_with_ports("a", vec![80]));
-        reg.services
-            .insert("b".into(), svc_with_ports("b", vec![]));
+        reg.services.insert("b".into(), svc_with_ports("b", vec![]));
         assert_eq!(reg.aggregated_ports(), vec![80]);
     }
 

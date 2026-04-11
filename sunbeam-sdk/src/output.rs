@@ -5,8 +5,7 @@ use serde::Serialize;
 // OutputFormat
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     #[default]
     Table,
@@ -66,8 +65,7 @@ pub fn read_json_input(flag: Option<&str>) -> Result<serde_json::Value> {
         }
         Some(v) => v.to_string(),
     };
-    serde_json::from_str(&raw)
-        .map_err(|e| SunbeamError::Other(format!("invalid JSON input: {e}")))
+    serde_json::from_str(&raw).map_err(|e| SunbeamError::Other(format!("invalid JSON input: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -180,9 +178,19 @@ mod tests {
     #[test]
     fn test_render_list_table() {
         #[derive(Serialize)]
-        struct Item { name: String }
-        let items = vec![Item { name: "test".into() }];
-        render_list(&items, &["NAME"], |i| vec![i.name.clone()], OutputFormat::Table).unwrap();
+        struct Item {
+            name: String,
+        }
+        let items = vec![Item {
+            name: "test".into(),
+        }];
+        render_list(
+            &items,
+            &["NAME"],
+            |i| vec![i.name.clone()],
+            OutputFormat::Table,
+        )
+        .unwrap();
     }
 
     #[test]
