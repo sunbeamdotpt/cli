@@ -63,20 +63,32 @@ pub struct Context {
 
     /// VPN pre-auth key for registering with the coordination server.
     /// Stored in plain text — keep this file readable only by the user.
-    #[serde(default, rename = "vpn-auth-key", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "vpn-auth-key",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub vpn_auth_key: String,
 
     /// Hostname of the cluster API server peer to look up in the netmap.
     /// When set, the VPN daemon resolves this against the netmap's peer
     /// list and proxies k8s API traffic to that peer's tailnet IP. When
     /// empty, falls back to a static fallback address.
-    #[serde(default, rename = "vpn-cluster-host", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "vpn-cluster-host",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub vpn_cluster_host: String,
 
     /// Headscale API key for `sunbeam vpn create-key` and other admin
     /// commands. Generated once via `headscale apikeys create`. Stored
     /// in plain text — keep this file readable only by the user.
-    #[serde(default, rename = "vpn-api-key", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "vpn-api-key",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub vpn_api_key: String,
 
     /// Skip TLS certificate verification when talking to the VPN
@@ -85,6 +97,27 @@ pub struct Context {
     /// false for production.
     #[serde(default, rename = "vpn-tls-insecure", skip_serializing_if = "is_false")]
     pub vpn_tls_insecure: bool,
+
+    /// Cluster DNS server (`host:port`) reachable through the tunnel.
+    /// Typically `10.43.0.10:53` for k3s CoreDNS. Empty disables
+    /// domain-name resolution in the SOCKS proxy — only literal IPs
+    /// are then allowed as CONNECT destinations.
+    #[serde(
+        default,
+        rename = "vpn-dns-server",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub vpn_dns_server: String,
+
+    /// Comma-separated DNS search domains appended to bare names
+    /// that have no dot. Defaults to
+    /// `svc.cluster.local,cluster.local` when empty.
+    #[serde(
+        default,
+        rename = "vpn-dns-search",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub vpn_dns_search: String,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -105,7 +138,9 @@ pub fn set_active_context(ctx: Context) {
 /// Get the active context. Panics if not initialized (should never happen
 /// after dispatch starts).
 pub fn active_context() -> &'static Context {
-    ACTIVE_CONTEXT.get().expect("active context not initialized")
+    ACTIVE_CONTEXT
+        .get()
+        .expect("active context not initialized")
 }
 
 /// Get the domain from the active context. Returns empty string if not set.
@@ -129,7 +164,11 @@ pub fn sunbeam_dir() -> PathBuf {
 
 /// Context-specific directory: ~/.sunbeam/{context}/
 pub fn context_dir(context_name: &str) -> PathBuf {
-    let name = if context_name.is_empty() { "default" } else { context_name };
+    let name = if context_name.is_empty() {
+        "default"
+    } else {
+        context_name
+    };
     sunbeam_dir().join(name)
 }
 
@@ -218,9 +257,8 @@ pub fn load_config() -> SunbeamConfig {
 pub fn save_config(config: &SunbeamConfig) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_ctx(|| {
-            format!("Failed to create config directory: {}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_ctx(|| format!("Failed to create config directory: {}", parent.display()))?;
     }
     let content = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, content)
@@ -352,8 +390,7 @@ pub fn get_repo_root() -> PathBuf {
 pub fn clear_config() -> Result<()> {
     let path = config_path();
     if path.exists() {
-        std::fs::remove_file(&path)
-            .with_ctx(|| format!("Failed to remove {}", path.display()))?;
+        std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
         crate::output::ok(&format!("Configuration cleared from {}", path.display()));
     } else {
         crate::output::warn("No configuration file found to clear");
@@ -374,7 +411,10 @@ mod tests {
 
     #[test]
     fn test_derive_domain_from_host() {
-        assert_eq!(derive_domain_from_host("sienna@admin.sunbeam.pt"), "sunbeam.pt");
+        assert_eq!(
+            derive_domain_from_host("sienna@admin.sunbeam.pt"),
+            "sunbeam.pt"
+        );
         assert_eq!(derive_domain_from_host("user@62.210.145.138"), "145.138");
         assert_eq!(derive_domain_from_host("sunbeam.pt"), "sunbeam.pt");
         assert_eq!(derive_domain_from_host("localhost"), "");
@@ -471,11 +511,17 @@ mod tests {
         config.current_context = "staging".to_string();
         config.contexts.insert(
             "staging".to_string(),
-            Context { domain: "staging.example.com".to_string(), ..Default::default() },
+            Context {
+                domain: "staging.example.com".to_string(),
+                ..Default::default()
+            },
         );
         config.contexts.insert(
             "prod".to_string(),
-            Context { domain: "prod.example.com".to_string(), ..Default::default() },
+            Context {
+                domain: "prod.example.com".to_string(),
+                ..Default::default()
+            },
         );
         // --context prod overrides current-context "staging"
         let ctx = resolve_context(&config, "", Some("prod"), "");

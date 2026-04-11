@@ -46,7 +46,10 @@ pub async fn cmd_doctor() -> Result<()> {
             let ns: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(client.clone());
             match ns.list(&Default::default()).await {
                 Ok(list) => {
-                    ok(&format!("k8s API: reachable ({} namespaces)", list.items.len()));
+                    ok(&format!(
+                        "k8s API: reachable ({} namespaces)",
+                        list.items.len()
+                    ));
                 }
                 Err(e) => {
                     warn(&format!("k8s API: connected but list failed: {e}"));
@@ -66,7 +69,10 @@ pub async fn cmd_doctor() -> Result<()> {
         .unwrap_or_default()
         .join("sunbeam-vpn.sock");
     if vpn_sock.exists() {
-        ok(&format!("VPN daemon: socket exists at {}", vpn_sock.display()));
+        ok(&format!(
+            "VPN daemon: socket exists at {}",
+            vpn_sock.display()
+        ));
     } else {
         warn("VPN daemon: not running (no socket)");
     }
@@ -87,14 +93,11 @@ pub async fn cmd_doctor() -> Result<()> {
     }
 
     // 7. OpenBao
-    if let Some(pod) = crate::kube::find_pod_by_label(
-        "data",
-        "app.kubernetes.io/name=openbao,component=server",
-    )
-    .await
+    if let Some(pod) =
+        crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
+            .await
     {
-        match crate::kube::kube_exec("data", &pod, &["bao", "status", "-format=json"], None).await
-        {
+        match crate::kube::kube_exec("data", &pod, &["bao", "status", "-format=json"], None).await {
             Ok((0, out)) => {
                 let sealed = serde_json::from_str::<serde_json::Value>(&out)
                     .ok()

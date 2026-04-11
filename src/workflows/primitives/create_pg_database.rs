@@ -23,13 +23,14 @@ pub struct CreatePGDatabase;
 
 #[async_trait::async_trait]
 impl StepBody for CreatePGDatabase {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -38,22 +39,29 @@ impl StepBody for CreatePGDatabase {
             _ => return Ok(ExecutionResult::next()),
         };
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("CreatePGDatabase: missing step_config"))?;
-        let dbname = config.get("dbname")
+        let dbname = config
+            .get("dbname")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("CreatePGDatabase: missing dbname in step_config"))?;
-        let owner = config.get("owner")
+        let owner = config
+            .get("owner")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("CreatePGDatabase: missing owner in step_config"))?;
 
         let sql = create_db_sql(dbname, owner);
         // kube_exec runs the command inside a Kubernetes pod, not a local shell
         let _ = k::kube_exec(
-            "data", pg_pod,
+            "data",
+            pg_pod,
             &["psql", "-U", "postgres", "-c", &sql],
             Some("postgres"),
-        ).await;
+        )
+        .await;
 
         ok(&format!("PG database: {dbname} (owner: {owner})"));
         Ok(ExecutionResult::next())

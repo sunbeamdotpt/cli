@@ -3,10 +3,10 @@ pub mod data;
 pub mod host;
 pub mod primitives;
 
+pub mod bootstrap;
 pub mod seed;
 pub mod up;
 pub mod verify;
-pub mod bootstrap;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,10 +69,7 @@ impl StepContext {
 
     /// Build an OpenBao HTTP client from a local port and token.
     pub fn bao_client(&self, port: u16, token: &str) -> crate::openbao::BaoClient {
-        crate::openbao::BaoClient::with_token(
-            &format!("http://127.0.0.1:{port}"),
-            token,
-        )
+        crate::openbao::BaoClient::with_token(&format!("http://127.0.0.1:{port}"), token)
     }
 }
 
@@ -149,8 +146,7 @@ mod tests {
             "__ctx": ctx,
             "some_field": "value",
         });
-        let extracted: StepContext =
-            serde_json::from_value(wrapper["__ctx"].clone()).unwrap();
+        let extracted: StepContext = serde_json::from_value(wrapper["__ctx"].clone()).unwrap();
         assert_eq!(extracted.domain, "test.local");
     }
 

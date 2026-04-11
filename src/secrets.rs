@@ -7,8 +7,8 @@ use crate::error::{Result, ResultExt, SunbeamError};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams};
 use rand::RngCore;
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::RsaPrivateKey;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use tokio::net::TcpListener;
@@ -29,9 +29,11 @@ pub(crate) const PG_USERS: &[&str] = &[
     "stalwart",
     "headscale",
     "wfe",
+    "typst_editor",
 ];
 
-pub(crate) const SMTP_URI: &str = "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true";
+pub(crate) const SMTP_URI: &str =
+    "smtp://stalwart.stalwart.svc.cluster.local:25/?skip_ssl_verify=true";
 
 // ── Key generation ──────────────────────────────────────────────────────────
 
@@ -145,10 +147,14 @@ pub(crate) async fn port_forward(
                 Err(e) => {
                     consecutive_failures += 1;
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                        tracing::error!("Port-forward to {current_pod} failed {consecutive_failures} times, giving up: {e}");
+                        tracing::error!(
+                            "Port-forward to {current_pod} failed {consecutive_failures} times, giving up: {e}"
+                        );
                         break;
                     }
-                    tracing::warn!("Port-forward failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}), re-resolving pod: {e}");
+                    tracing::warn!(
+                        "Port-forward failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}), re-resolving pod: {e}"
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     // Re-resolve the pod in case it restarted with a new name
                     if let Ok(new_client) = k::get_client().await {
@@ -162,7 +168,11 @@ pub(crate) async fn port_forward(
                                     p.metadata
                                         .name
                                         .as_deref()
-                                        .map(|n| n.starts_with(current_pod.split('-').next().unwrap_or("")))
+                                        .map(|n| {
+                                            n.starts_with(
+                                                current_pod.split('-').next().unwrap_or(""),
+                                            )
+                                        })
                                         .unwrap_or(false)
                                 })
                                 .and_then(|p| p.metadata.name.clone())
@@ -296,9 +306,8 @@ pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
     }
     ok("vault PG user configured with ADMIN OPTION on all service roles.");
 
-    let conn_url = format!(
-        "postgresql://{{{{username}}}}:{{{{password}}}}@{pg_rw}/postgres?sslmode=disable"
-    );
+    let conn_url =
+        format!("postgresql://{{{{username}}}}:{{{{password}}}}@{pg_rw}/postgres?sslmode=disable");
 
     bao.write_db_config(
         "cnpg-postgres",
@@ -460,11 +469,12 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 7);
+        assert_eq!(PG_USERS.len(), 8);
         assert!(PG_USERS.contains(&"kratos"));
         assert!(PG_USERS.contains(&"hydra"));
         assert!(PG_USERS.contains(&"wfe"));
         assert!(PG_USERS.contains(&"headscale"));
+        assert!(PG_USERS.contains(&"typst_editor"));
     }
 
     #[test]
@@ -490,7 +500,7 @@ mod tests {
     fn test_smtp_uri() {
         assert_eq!(
             SMTP_URI,
-            "smtp://postfix.lasuite.svc.cluster.local:25/?skip_ssl_verify=true"
+            "smtp://stalwart.stalwart.svc.cluster.local:25/?skip_ssl_verify=true"
         );
     }
 
@@ -504,6 +514,7 @@ mod tests {
             "stalwart",
             "headscale",
             "wfe",
+            "typst_editor",
         ];
         assert_eq!(PG_USERS, &expected[..]);
     }

@@ -141,7 +141,7 @@ Rolling restart of services:
 ### Managed Namespaces
 
 ```
-["data", "devtools", "ingress", "lasuite", "media", "ory", "storage", "vault-secrets-operator"]
+["cert-manager", "data", "devtools", "ingress", "matrix", "media", "monitoring", "ory", "stalwart", "storage", "vault-secrets-operator", "vpn", "wfe"]
 ```
 
 ### Service Health Monitoring

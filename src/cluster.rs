@@ -14,16 +14,18 @@ pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) 
 
     loop {
         if Instant::now() > deadline {
-            return Err(SunbeamError::kube(format!("Timed out waiting for deployment {ns}/{deployment}")));
+            return Err(SunbeamError::kube(format!(
+                "Timed out waiting for deployment {ns}/{deployment}"
+            )));
         }
 
         match api.get_opt(deployment).await? {
             Some(dep) => {
                 if let Some(status) = &dep.status {
                     if let Some(conditions) = &status.conditions {
-                        let available = conditions.iter().any(|c| {
-                            c.type_ == "Available" && c.status == "True"
-                        });
+                        let available = conditions
+                            .iter()
+                            .any(|c| c.type_ == "Available" && c.status == "True");
                         if available {
                             return Ok(());
                         }

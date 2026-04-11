@@ -5,12 +5,12 @@ use wfe_core::builder::WorkflowBuilder;
 use wfe_core::models::WorkflowDefinition;
 
 use super::steps;
-use crate::workflows::primitives::{
-    CollectCredentials, CreateK8sSecret, CreatePGDatabase, CreatePGRole,
-    EnableVaultAuth, EnsureNamespace, SeedKVPath, WriteKVPath,
-    WriteVaultAuthConfig, WriteVaultPolicy, WriteVaultRole,
-};
 use crate::workflows::primitives::kv_service_configs;
+use crate::workflows::primitives::{
+    CollectCredentials, CreateK8sSecret, CreatePGDatabase, CreatePGRole, EnableVaultAuth,
+    EnsureNamespace, SeedKVPath, WriteKVPath, WriteVaultAuthConfig, WriteVaultPolicy,
+    WriteVaultRole,
+};
 use steps::postgres::pg_db_map;
 
 /// Build the seed workflow definition.
@@ -63,7 +63,7 @@ pub fn build() -> WorkflowDefinition {
         .name("write-vso-role")
         .config(json!({"mount": "kubernetes", "role": "vso", "config": {
             "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,lasuite,stalwart,matrix,media,data,monitoring,cert-manager",
+            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe",
             "policies": "vso-reader",
             "ttl": "1h"
         }}))
@@ -141,27 +141,6 @@ pub fn build() -> WorkflowDefinition {
                 b.wire_outcome(s1, s2, None);
             })
             .branch(|b| {
-                let ns = b.add_step_typed::<EnsureNamespace>("ensure-ns-lasuite",
-                    Some(json!({"namespace": "lasuite"})));
-                let s1 = b.add_step_typed::<CreateK8sSecret>("secret-lasuite-s3",
-                    Some(json!({"namespace":"lasuite","name":"seaweedfs-s3-credentials","data":{
-                        "S3_ACCESS_KEY":"s3-access-key",
-                        "S3_SECRET_KEY":"s3-secret-key"
-                    }})));
-                let s2 = b.add_step_typed::<CreateK8sSecret>("secret-hive-oidc",
-                    Some(json!({"namespace":"lasuite","name":"hive-oidc","data":{
-                        "client-id":"hive-oidc-client-id",
-                        "client-secret":"hive-oidc-client-secret"
-                    }})));
-                let s3 = b.add_step_typed::<CreateK8sSecret>("secret-people-django",
-                    Some(json!({"namespace":"lasuite","name":"people-django-secret","data":{
-                        "DJANGO_SECRET_KEY":"people-django-secret"
-                    }})));
-                b.wire_outcome(ns, s1, None);
-                b.wire_outcome(s1, s2, None);
-                b.wire_outcome(s2, s3, None);
-            })
-            .branch(|b| {
                 b.add_step_typed::<EnsureNamespace>("ensure-ns-matrix",
                     Some(json!({"namespace": "matrix"})));
             })
@@ -194,20 +173,28 @@ mod tests {
         assert_eq!(def.id, "seed");
         assert_eq!(def.version, 2);
         // More steps now due to parallel PG branches
-        assert!(def.steps.len() > 13, "expected >13 steps, got {}", def.steps.len());
+        assert!(
+            def.steps.len() > 13,
+            "expected >13 steps, got {}",
+            def.steps.len()
+        );
     }
 
     #[test]
     fn test_has_pg_role_and_db_steps() {
         let def = build();
-        let role_steps: Vec<_> = def.steps.iter()
+        let role_steps: Vec<_> = def
+            .steps
+            .iter()
             .filter(|s| s.step_type.contains("CreatePGRole"))
             .collect();
-        let db_steps: Vec<_> = def.steps.iter()
+        let db_steps: Vec<_> = def
+            .steps
+            .iter()
             .filter(|s| s.step_type.contains("CreatePGDatabase"))
             .collect();
-        assert_eq!(role_steps.len(), 7, "should have 7 CreatePGRole steps");
-        assert_eq!(db_steps.len(), 7, "should have 7 CreatePGDatabase steps");
+        assert_eq!(role_steps.len(), 8, "should have 8 CreatePGRole steps");
+        assert_eq!(db_steps.len(), 8, "should have 8 CreatePGDatabase steps");
     }
 
     #[test]
@@ -219,7 +206,10 @@ mod tests {
                 assert!(config.get("username").is_some());
             }
             if s.step_type.contains("CreatePGDatabase") {
-                let config = s.step_config.as_ref().expect("CreatePGDatabase missing config");
+                let config = s
+                    .step_config
+                    .as_ref()
+                    .expect("CreatePGDatabase missing config");
                 assert!(config.get("dbname").is_some());
                 assert!(config.get("owner").is_some());
             }

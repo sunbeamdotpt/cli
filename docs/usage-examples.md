@@ -75,7 +75,7 @@ sunbeam check ory/kratos
 
 ```bash
 # Apply only specific namespace
-sunbeam apply lasuite
+sunbeam apply devtools
 
 # Apply multiple namespaces individually
 sunbeam apply ingress
@@ -161,7 +161,7 @@ sunbeam apply --env production --domain sunbeam.pt
 sunbeam restart ory/kratos
 
 # Restart namespace instead of entire cluster
-sunbeam restart lasuite
+sunbeam restart ory
 ```
 
 **Monitor service health:**
@@ -185,7 +185,7 @@ sunbeam apply data
 
 # Then apply application layers
 sunbeam apply ory
-sunbeam apply lasuite
+sunbeam apply devtools
 ```
 
 **Handle webhook dependencies:**
@@ -322,8 +322,8 @@ sunbeam apply
 sunbeam seed
 
 # During development
-sunbeam restart lasuite/people-backend
-sunbeam logs lasuite/people-backend -f
+sunbeam restart ory/kratos
+sunbeam logs ory/kratos -f
 
 # End of day cleanup
 sunbeam down
@@ -352,7 +352,7 @@ sunbeam user recover newuser@company.com
 
 ```bash
 # Apply only what's needed
-sunbeam apply lasuite  # Instead of sunbeam apply
+sunbeam apply ory  # Instead of sunbeam apply
 
 # Restart only affected services
 sunbeam restart ory/kratos  # Instead of sunbeam restart
@@ -362,8 +362,8 @@ sunbeam restart ory/kratos  # Instead of sunbeam restart
 
 ```bash
 # Focus on specific areas
-sunbeam status lasuite
-sunbeam logs lasuite/people-backend
+sunbeam status ory
+sunbeam logs ory/kratos
 ```
 
 **Monitor resource usage:**
@@ -374,7 +374,7 @@ sunbeam k8s top nodes
 sunbeam k8s top pods -A
 
 # Check specific namespace
-sunbeam k8s top pods -n lasuite
+sunbeam k8s top pods -n ory
 ```
 
 ## Security Best Practices
@@ -431,7 +431,7 @@ sunbeam k8s get events -A --sort-by=.metadata.creationTimestamp
 ```bash
 # Check logs for errors
 sunbeam logs ory/kratos | grep ERROR
-sunbeam logs lasuite/people-backend | grep Exception
+sunbeam logs ory/hydra | grep Exception
 
 # Monitor specific services
 sunbeam logs ingress/nginx-ingress -f

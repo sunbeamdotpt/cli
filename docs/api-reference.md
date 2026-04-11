@@ -175,7 +175,7 @@ def parse_target(s: str | None) -> tuple[str | None, str | None]
 **Examples:**
 ```python
 parse_target("ory/kratos")    # ("ory", "kratos")
-parse_target("lasuite")       # ("lasuite", None)
+parse_target("devtools")      # ("devtools", None)
 parse_target(None)             # (None, None)
 ```
 

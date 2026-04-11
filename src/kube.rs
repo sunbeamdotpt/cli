@@ -1,4 +1,4 @@
-use crate::error::{Result, SunbeamError, ResultExt};
+use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Namespace, Secret};
@@ -105,14 +105,17 @@ pub async fn get_client() -> Result<&'static Client> {
         .get_or_try_init(|| async {
             ensure_tunnel().await?;
 
-            let kubeconfig = Kubeconfig::read().map_err(|e| SunbeamError::kube(format!("Failed to read kubeconfig: {e}")))?;
+            let kubeconfig = Kubeconfig::read()
+                .map_err(|e| SunbeamError::kube(format!("Failed to read kubeconfig: {e}")))?;
             let options = KubeConfigOptions {
                 context: Some(context().to_string()),
                 ..Default::default()
             };
             let config = Config::from_custom_kubeconfig(kubeconfig, &options)
                 .await
-                .map_err(|e| SunbeamError::kube(format!("Failed to build kube config from kubeconfig: {e}")))?;
+                .map_err(|e| {
+                    SunbeamError::kube(format!("Failed to build kube config from kubeconfig: {e}"))
+                })?;
             Client::try_from(config).ctx("Failed to create kube client")
         })
         .await
@@ -138,10 +141,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         let obj: serde_yaml::Value =
             serde_yaml::from_str(doc).ctx("Failed to parse YAML document")?;
 
-        let api_version = obj
-            .get("apiVersion")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let api_version = obj.get("apiVersion").and_then(|v| v.as_str()).unwrap_or("");
         let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("");
         let metadata = obj.get("metadata");
         let name = metadata
@@ -315,12 +315,7 @@ pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
     pod_list
         .items
         .iter()
-        .find(|p| {
-            p.status
-                .as_ref()
-                .and_then(|s| s.phase.as_deref())
-                == Some("Running")
-        })
+        .find(|p| p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running"))
         .and_then(|p| p.metadata.name.clone())
 }
 
@@ -350,17 +345,13 @@ pub async fn kube_exec(
         .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
 
     let stdout = {
-        let mut stdout_reader = attached
-            .stdout()
-            .ctx("No stdout stream from exec")?;
+        let mut stdout_reader = attached.stdout().ctx("No stdout stream from exec")?;
         let mut buf = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut stdout_reader, &mut buf).await?;
         String::from_utf8_lossy(&buf).to_string()
     };
 
-    let status = attached
-        .take_status()
-        .ctx("No status channel from exec")?;
+    let status = attached.take_status().ctx("No status channel from exec")?;
 
     // Wait for the status
     let exit_code = if let Some(status) = status.await {
@@ -394,9 +385,13 @@ pub async fn kube_rollout_restart(ns: &str, deployment: &str) -> Result<()> {
         }
     });
 
-    api.patch(deployment, &PatchParams::default(), &Patch::Strategic(patch))
-        .await
-        .with_ctx(|| format!("Failed to restart deployment {ns}/{deployment}"))?;
+    api.patch(
+        deployment,
+        &PatchParams::default(),
+        &Patch::Strategic(patch),
+    )
+    .await
+    .with_ctx(|| format!("Failed to restart deployment {ns}/{deployment}"))?;
     Ok(())
 }
 
@@ -561,15 +556,14 @@ async fn resolve_registry_ip(domain: &str) -> String {
 pub async fn cmd_k8s(kubectl_args: &[String]) -> Result<()> {
     ensure_tunnel().await?;
 
-    let status = tokio::process::Command::new("kubectl")
-        .arg(format!("--context={}", context()))
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.arg(format!("--context={}", context()))
         .args(kubectl_args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .await
-        .ctx("Failed to run kubectl")?;
+        .stderr(Stdio::inherit());
+    crate::vpn_env::inject_tokio_default(&mut cmd);
+    let status = cmd.status().await.ctx("Failed to run kubectl")?;
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
@@ -615,11 +609,13 @@ pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
     kubectl_args.extend(bao_args.iter().cloned());
 
     // Use kubectl for full TTY support
-    let status = tokio::process::Command::new("kubectl")
-        .args(&kubectl_args)
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.args(&kubectl_args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    crate::vpn_env::inject_tokio_default(&mut cmd);
+    let status = cmd
         .status()
         .await
         .ctx("Failed to run bao in OpenBao pod")?;
@@ -725,7 +721,10 @@ mod tests {
         //
         // In a fresh test binary SSH_HOST is unset, so ssh_host() returns "".
         let result = ensure_tunnel().await;
-        assert!(result.is_ok(), "ensure_tunnel should be a no-op when ssh_host is empty");
+        assert!(
+            result.is_ok(),
+            "ensure_tunnel should be a no-op when ssh_host is empty"
+        );
     }
 
     #[test]

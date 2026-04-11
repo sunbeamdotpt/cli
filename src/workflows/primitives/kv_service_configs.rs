@@ -2,7 +2,7 @@
 //!
 //! Used by workflow definitions to generate SeedKVPath + WriteKVPath parallel branches.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Returns the step_config for each service's SeedKVPath step.
 /// Order matters: seaweedfs must come before kratos-admin (dependency).
@@ -113,10 +113,12 @@ mod tests {
     fn kratos_admin_has_from_creds() {
         let cfg = kratos_admin_config();
         let fields = cfg["fields"].as_array().unwrap();
-        let s3_field = fields
-            .iter()
-            .find(|f| f["key"] == "s3-access-key")
-            .unwrap();
-        assert!(s3_field["generator"].as_str().unwrap().starts_with("from_creds:"));
+        let s3_field = fields.iter().find(|f| f["key"] == "s3-access-key").unwrap();
+        assert!(
+            s3_field["generator"]
+                .as_str()
+                .unwrap()
+                .starts_with("from_creds:")
+        );
     }
 }

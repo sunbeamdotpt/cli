@@ -4789,7 +4789,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sunbeam"
-version = "1.1.2"
+version = "2.0.0-rc2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4868,6 +4868,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smoltcp",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

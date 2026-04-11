@@ -127,7 +127,9 @@ pub async fn cmd_update() -> Result<()> {
     crate::output::ok(&format!("Current: {COMMIT}"));
     crate::output::ok(&format!("Latest:  {short_latest}"));
 
-    if latest_commit.starts_with(COMMIT) || COMMIT.starts_with(&latest_commit[..std::cmp::min(COMMIT.len(), latest_commit.len())]) {
+    if latest_commit.starts_with(COMMIT)
+        || COMMIT.starts_with(&latest_commit[..std::cmp::min(COMMIT.len(), latest_commit.len())])
+    {
         crate::output::ok("Already up to date.");
         return Ok(());
     }
@@ -188,9 +190,7 @@ pub async fn cmd_update() -> Result<()> {
     let current_exe = std::env::current_exe().ctx("Failed to determine current executable path")?;
     atomic_replace(&current_exe, &binary_bytes)?;
 
-    crate::output::ok(&format!(
-        "Updated sunbeam {COMMIT} -> {short_latest}"
-    ));
+    crate::output::ok(&format!("Updated sunbeam {COMMIT} -> {short_latest}"));
 
     // Update the cache so background check knows we are current
     let _ = write_cache(&UpdateCache {
@@ -216,7 +216,10 @@ pub async fn check_update_background() -> Option<String> {
             if age.num_seconds() < 3600 {
                 // Checked recently — just compare cached values
                 if cache.latest_commit.starts_with(COMMIT)
-                    || COMMIT.starts_with(&cache.latest_commit[..std::cmp::min(COMMIT.len(), cache.latest_commit.len())])
+                    || COMMIT.starts_with(
+                        &cache.latest_commit
+                            [..std::cmp::min(COMMIT.len(), cache.latest_commit.len())],
+                    )
                 {
                     return None; // up to date
                 }
@@ -392,7 +395,8 @@ mod tests {
 
     #[test]
     fn test_verify_checksum_mismatch() {
-        let checksums = "0000000000000000000000000000000000000000000000000000000000000000  sunbeam-test";
+        let checksums =
+            "0000000000000000000000000000000000000000000000000000000000000000  sunbeam-test";
         assert!(verify_checksum(b"hello", "sunbeam-test", checksums).is_err());
     }
 

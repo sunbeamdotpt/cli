@@ -288,11 +288,10 @@ mod planka_json {
                     .iter()
                     .filter(|cl| cl.card_id == self.id)
                     .filter_map(|cl| {
-                        inc.labels.iter().find(|l| l.id == cl.label_id).map(|l| {
-                            l.name
-                                .clone()
-                                .unwrap_or_else(|| cl.label_id.to_string())
-                        })
+                        inc.labels
+                            .iter()
+                            .find(|l| l.id == cl.label_id)
+                            .map(|l| l.name.clone().unwrap_or_else(|| cl.label_id.to_string()))
                     })
                     .collect(),
                 None => vec![],
@@ -310,7 +309,10 @@ mod planka_json {
                 labels,
                 created_at: self.created_at.unwrap_or_default(),
                 updated_at: self.updated_at.unwrap_or_default(),
-                url: format!("{web_base}/cards/{}", self.id.as_str().unwrap_or(&self.id.to_string())),
+                url: format!(
+                    "{web_base}/cards/{}",
+                    self.id.as_str().unwrap_or(&self.id.to_string())
+                ),
             }
         }
     }
@@ -492,9 +494,7 @@ impl PlankaClient {
             .await
             .map_err(|e| SunbeamError::network(format!("Planka card parse error: {e}")))?;
 
-        Ok(body
-            .item
-            .to_ticket(&self.base_url, body.included.as_ref()))
+        Ok(body.item.to_ticket(&self.base_url, body.included.as_ref()))
     }
 
     /// POST /api/lists/{list_id}/cards
@@ -599,13 +599,21 @@ impl PlankaClient {
             // Get current user via the token (decode JWT or call /api/users/me equivalent)
             // Planka doesn't have /api/users/me, but we can get user from any board membership
             let projects_url = format!("{}/projects", self.base_url);
-            if let Ok(resp) = self.http.get(&projects_url).bearer_auth(&self.token).send().await {
+            if let Ok(resp) = self
+                .http
+                .get(&projects_url)
+                .bearer_auth(&self.token)
+                .send()
+                .await
+            {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    if let Some(memberships) = body.get("included")
+                    if let Some(memberships) = body
+                        .get("included")
                         .and_then(|i| i.get("boardMemberships"))
                         .and_then(|b| b.as_array())
                     {
-                        if let Some(user_id) = memberships.first()
+                        if let Some(user_id) = memberships
+                            .first()
                             .and_then(|m| m.get("userId"))
                             .and_then(|v| v.as_str())
                         {
@@ -618,10 +626,13 @@ impl PlankaClient {
 
         // Search other users (note: Planka excludes current user from search results)
         let url = format!("{}/users/search", self.base_url);
-        let resp = self.http.get(&url)
+        let resp = self
+            .http
+            .get(&url)
             .bearer_auth(&self.token)
             .query(&[("query", query)])
-            .send().await
+            .send()
+            .await
             .map_err(|e| SunbeamError::network(format!("Planka user search: {e}")))?;
         let body: serde_json::Value = resp.json().await?;
         let users = body.get("items").and_then(|i| i.as_array());
@@ -923,13 +934,7 @@ impl GiteaClient {
     }
 
     /// POST /api/v1/repos/{org}/{repo}/issues
-    async fn create_issue(
-        &self,
-        org: &str,
-        repo: &str,
-        title: &str,
-        body: &str,
-    ) -> Result<Ticket> {
+    async fn create_issue(&self, org: &str, repo: &str, title: &str, body: &str) -> Result<Ticket> {
         let url = format!("{}/repos/{org}/{repo}/issues", self.base_url);
         let payload = serde_json::json!({
             "title": title,
@@ -1002,13 +1007,7 @@ impl GiteaClient {
     }
 
     /// POST /api/v1/repos/{org}/{repo}/issues/{index}/comments
-    async fn comment_issue(
-        &self,
-        org: &str,
-        repo: &str,
-        index: u64,
-        body: &str,
-    ) -> Result<()> {
+    async fn comment_issue(&self, org: &str, repo: &str, index: u64, body: &str) -> Result<()> {
         let url = format!(
             "{}/repos/{org}/{repo}/issues/{index}/comments",
             self.base_url
@@ -1035,20 +1034,11 @@ impl GiteaClient {
 
     /// POST /api/v1/repos/{org}/{repo}/issues/{index}/assignees
     #[allow(dead_code)]
-    async fn assign_issue(
-        &self,
-        org: &str,
-        repo: &str,
-        index: u64,
-        assignee: &str,
-    ) -> Result<()> {
+    async fn assign_issue(&self, org: &str, repo: &str, index: u64, assignee: &str) -> Result<()> {
         // Use PATCH on the issue itself — the /assignees endpoint requires
         // the user to be an explicit collaborator, while PATCH works for
         // any org member with write access.
-        let url = format!(
-            "{}/repos/{org}/{repo}/issues/{index}",
-            self.base_url
-        );
+        let url = format!("{}/repos/{org}/{repo}/issues/{index}", self.base_url);
         let payload = serde_json::json!({ "assignees": [assignee] });
 
         let resp = self
@@ -1132,7 +1122,11 @@ fn display_ticket_detail(t: &Ticket) {
 #[allow(dead_code)]
 pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
 
     let fetch_planka = source.is_none() || matches!(source, Some("planka" | "p"));
     let fetch_gitea = source.is_none() || matches!(source, Some("gitea" | "g"));
@@ -1184,7 +1178,11 @@ pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
 #[allow(dead_code)]
 pub async fn cmd_pm_show(id: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
     let ticket_ref = parse_ticket_id(id)?;
 
     let ticket = match ticket_ref {
@@ -1210,7 +1208,11 @@ pub async fn cmd_pm_show(id: &str) -> Result<()> {
 #[allow(dead_code)]
 pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
 
     let ticket = match source {
         "planka" | "p" => {
@@ -1218,9 +1220,16 @@ pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) 
 
             // Fetch all boards
             let projects_url = format!("{}/projects", client.base_url);
-            let resp = client.http.get(&projects_url).bearer_auth(&client.token).send().await?;
+            let resp = client
+                .http
+                .get(&projects_url)
+                .bearer_auth(&client.token)
+                .send()
+                .await?;
             let projects_body: serde_json::Value = resp.json().await?;
-            let boards = projects_body.get("included").and_then(|i| i.get("boards"))
+            let boards = projects_body
+                .get("included")
+                .and_then(|i| i.get("boards"))
                 .and_then(|b| b.as_array())
                 .ok_or_else(|| SunbeamError::config("No Planka boards found"))?;
 
@@ -1228,24 +1237,39 @@ pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) 
             let board = if target.is_empty() {
                 boards.first()
             } else {
-                boards.iter().find(|b| {
-                    let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    name.eq_ignore_ascii_case(target) || id == target
-                }).or_else(|| boards.first())
-            }.ok_or_else(|| SunbeamError::config("No Planka boards found"))?;
+                boards
+                    .iter()
+                    .find(|b| {
+                        let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        name.eq_ignore_ascii_case(target) || id == target
+                    })
+                    .or_else(|| boards.first())
+            }
+            .ok_or_else(|| SunbeamError::config("No Planka boards found"))?;
 
-            let board_id = board.get("id").and_then(|v| v.as_str())
+            let board_id = board
+                .get("id")
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| SunbeamError::config("Board has no ID"))?;
             let board_name = board.get("name").and_then(|n| n.as_str()).unwrap_or("?");
 
             // Fetch the board to get its lists, use the first list
             let board_url = format!("{}/boards/{board_id}", client.base_url);
-            let board_resp = client.http.get(&board_url).bearer_auth(&client.token).send().await?;
+            let board_resp = client
+                .http
+                .get(&board_url)
+                .bearer_auth(&client.token)
+                .send()
+                .await?;
             let board_body: serde_json::Value = board_resp.json().await?;
-            let list_id = board_body.get("included").and_then(|i| i.get("lists"))
-                .and_then(|l| l.as_array()).and_then(|a| a.first())
-                .and_then(|l| l.get("id")).and_then(|v| v.as_str())
+            let list_id = board_body
+                .get("included")
+                .and_then(|i| i.get("lists"))
+                .and_then(|l| l.as_array())
+                .and_then(|a| a.first())
+                .and_then(|l| l.get("id"))
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| SunbeamError::config(format!("No lists in board '{board_name}'")))?;
 
             client.create_card(board_id, list_id, title, body).await?
@@ -1279,7 +1303,11 @@ pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) 
 #[allow(dead_code)]
 pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {
@@ -1301,7 +1329,11 @@ pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
 #[allow(dead_code)]
 pub async fn cmd_pm_close(id: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {
@@ -1311,43 +1343,70 @@ pub async fn cmd_pm_close(id: &str) -> Result<()> {
             let ticket = client.get_card(&card_id).await?;
             // Try to find the board and its lists
             let url = format!("{}/cards/{card_id}", client.base_url);
-            let resp = client.http.get(&url).bearer_auth(&client.token).send().await
+            let resp = client
+                .http
+                .get(&url)
+                .bearer_auth(&client.token)
+                .send()
+                .await
                 .map_err(|e| SunbeamError::network(format!("Planka get card: {e}")))?;
             let body: serde_json::Value = resp.json().await?;
-            let board_id = body.get("item").and_then(|i| i.get("boardId"))
-                .and_then(|v| v.as_str()).unwrap_or("");
+            let board_id = body
+                .get("item")
+                .and_then(|i| i.get("boardId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
             if !board_id.is_empty() {
                 // Fetch the board to get its lists
                 let board_url = format!("{}/boards/{board_id}", client.base_url);
-                let board_resp = client.http.get(&board_url).bearer_auth(&client.token).send().await
+                let board_resp = client
+                    .http
+                    .get(&board_url)
+                    .bearer_auth(&client.token)
+                    .send()
+                    .await
                     .map_err(|e| SunbeamError::network(format!("Planka get board: {e}")))?;
                 let board_body: serde_json::Value = board_resp.json().await?;
-                let lists = board_body.get("included")
+                let lists = board_body
+                    .get("included")
                     .and_then(|i| i.get("lists"))
                     .and_then(|l| l.as_array());
 
                 if let Some(lists) = lists {
                     // Find a list named "Done", "Closed", "Complete", or similar
                     let done_list = lists.iter().find(|l| {
-                        let name = l.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
-                        name.contains("done") || name.contains("closed") || name.contains("complete")
+                        let name = l
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        name.contains("done")
+                            || name.contains("closed")
+                            || name.contains("complete")
                     });
 
                     if let Some(done_list) = done_list {
                         let list_id = done_list.get("id").and_then(|v| v.as_str()).unwrap_or("");
                         if !list_id.is_empty() {
-                            client.update_card(&card_id, &CardUpdate {
-                                list_id: Some(serde_json::json!(list_id)),
-                                ..Default::default()
-                            }).await?;
+                            client
+                                .update_card(
+                                    &card_id,
+                                    &CardUpdate {
+                                        list_id: Some(serde_json::json!(list_id)),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
                             output::ok(&format!("Moved p:{card_id} to Done."));
                             return Ok(());
                         }
                     }
                 }
             }
-            output::warn(&format!("Could not find a Done list for p:{card_id}. Move it manually."));
+            output::warn(&format!(
+                "Could not find a Done list for p:{card_id}. Move it manually."
+            ));
         }
         TicketRef::Gitea { org, repo, number } => {
             let client = GiteaClient::new(&domain).await?;
@@ -1363,7 +1422,11 @@ pub async fn cmd_pm_close(id: &str) -> Result<()> {
 #[allow(dead_code)]
 pub async fn cmd_pm_assign(id: &str, user: &str) -> Result<()> {
     let domain = crate::config::domain();
-    if domain.is_empty() { return Err(crate::error::SunbeamError::config("No domain configured. Run: sunbeam config set --domain sunbeam.pt")); }
+    if domain.is_empty() {
+        return Err(crate::error::SunbeamError::config(
+            "No domain configured. Run: sunbeam config set --domain sunbeam.pt",
+        ));
+    }
     let ticket_ref = parse_ticket_id(id)?;
 
     match ticket_ref {
@@ -1594,10 +1657,22 @@ mod tests {
             card_labels: vec![],
             labels: vec![],
             lists: vec![
-                List { id: serde_json::json!(1), name: "To Do".to_string() },
-                List { id: serde_json::json!(2), name: "In Progress".to_string() },
-                List { id: serde_json::json!(3), name: "Done".to_string() },
-                List { id: serde_json::json!(4), name: "Archived / Closed".to_string() },
+                List {
+                    id: serde_json::json!(1),
+                    name: "To Do".to_string(),
+                },
+                List {
+                    id: serde_json::json!(2),
+                    name: "In Progress".to_string(),
+                },
+                List {
+                    id: serde_json::json!(3),
+                    name: "Done".to_string(),
+                },
+                List {
+                    id: serde_json::json!(4),
+                    name: "Archived / Closed".to_string(),
+                },
             ],
             users: vec![],
         };
@@ -1656,9 +1731,6 @@ mod tests {
         assert_eq!(ticket.status, Status::Open);
         assert_eq!(ticket.assignees, vec!["dev1"]);
         assert_eq!(ticket.labels, vec!["bug"]);
-        assert_eq!(
-            ticket.url,
-            "https://src.example.com/studio/app/issues/42"
-        );
+        assert_eq!(ticket.url, "https://src.example.com/studio/app/issues/42");
     }
 }

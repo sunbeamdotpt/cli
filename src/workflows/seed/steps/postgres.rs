@@ -24,7 +24,9 @@ fn json_bool(data: &serde_json::Value, key: &str) -> bool {
 }
 
 fn json_str(data: &serde_json::Value, key: &str) -> Option<String> {
-    data.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    data.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 // ── Pure helpers (testable without K8s) ─────────────────────────────────────
@@ -39,6 +41,7 @@ pub(crate) fn pg_db_map() -> HashMap<&'static str, &'static str> {
         ("stalwart", "stalwart_db"),
         ("headscale", "headscale_db"),
         ("wfe", "wfe_db"),
+        ("typst_editor", "typst_editor_db"),
     ]
     .into_iter()
     .collect()
@@ -68,10 +71,7 @@ pub struct WaitForPostgres;
 
 #[async_trait::async_trait]
 impl StepBody for WaitForPostgres {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         if json_bool(&ctx.workflow.data, "skip_seed") {
             return Ok(ExecutionResult::next());
         }
@@ -91,14 +91,19 @@ impl StepBody for WaitForPostgres {
 
         for _ in 0..60 {
             if let Ok(cluster) = cnpg_api.get("postgres").await {
-                let phase = cluster.data
-                    .get("status").and_then(|s| s.get("phase"))
-                    .and_then(|p| p.as_str()).unwrap_or("");
+                let phase = cluster
+                    .data
+                    .get("status")
+                    .and_then(|s| s.get("phase"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
                 if phase == "Cluster in healthy state" {
                     let pods: Api<Pod> = Api::namespaced(client.clone(), "data");
                     let lp = ListParams::default().labels("cnpg.io/cluster=postgres,role=primary");
                     if let Ok(pod_list) = pods.list(&lp).await {
-                        if let Some(name) = pod_list.items.first()
+                        if let Some(name) = pod_list
+                            .items
+                            .first()
                             .and_then(|p| p.metadata.name.as_deref())
                         {
                             pg_pod = name.to_string();
@@ -133,10 +138,7 @@ pub struct ConfigureDatabaseEngine;
 
 #[async_trait::async_trait]
 impl StepBody for ConfigureDatabaseEngine {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
         if json_bool(data, "skip_seed") {
@@ -149,11 +151,17 @@ impl StepBody for ConfigureDatabaseEngine {
         };
         let ob_pod = match json_str(data, "ob_pod") {
             Some(p) => p,
-            None => { warn("Skipping DB engine config -- missing ob_pod."); return Ok(ExecutionResult::next()); }
+            None => {
+                warn("Skipping DB engine config -- missing ob_pod.");
+                return Ok(ExecutionResult::next());
+            }
         };
         let root_token = match json_str(data, "root_token") {
             Some(t) if !t.is_empty() => t,
-            _ => { warn("Skipping DB engine config -- missing root_token."); return Ok(ExecutionResult::next()); }
+            _ => {
+                warn("Skipping DB engine config -- missing root_token.");
+                return Ok(ExecutionResult::next());
+            }
         };
 
         match secrets::port_forward("data", &ob_pod, 8200).await {
@@ -207,20 +215,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_configure_db_engine_skip_seed() {
-        let instance = run_step::<ConfigureDatabaseEngine>(serde_json::json!({ "skip_seed": true })).await;
+        let instance =
+            run_step::<ConfigureDatabaseEngine>(serde_json::json!({ "skip_seed": true })).await;
         assert_eq!(instance.status, WorkflowStatus::Complete);
     }
 
     #[tokio::test]
     async fn test_configure_db_engine_no_pg_pod() {
-        let instance = run_step::<ConfigureDatabaseEngine>(serde_json::json!({ "skip_seed": false })).await;
+        let instance =
+            run_step::<ConfigureDatabaseEngine>(serde_json::json!({ "skip_seed": false })).await;
         assert_eq!(instance.status, WorkflowStatus::Complete);
     }
 
     #[test]
     fn test_pg_db_map_contains_all_users() {
         let map = pg_db_map();
-        assert_eq!(map.len(), 7);
+        assert_eq!(map.len(), 8);
         for user in crate::secrets::PG_USERS {
             assert!(map.contains_key(user), "pg_db_map missing key for: {user}");
         }
@@ -235,6 +245,9 @@ mod tests {
 
     #[test]
     fn test_create_db_sql_format() {
-        assert_eq!(create_db_sql("kratos_db", "kratos"), "CREATE DATABASE kratos_db OWNER kratos;");
+        assert_eq!(
+            create_db_sql("kratos_db", "kratos"),
+            "CREATE DATABASE kratos_db OWNER kratos;"
+        );
     }
 }

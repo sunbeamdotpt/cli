@@ -21,13 +21,14 @@ pub struct ApplyManifest;
 
 #[async_trait::async_trait]
 impl StepBody for ApplyManifest {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        let config = ctx.step.step_config.as_ref()
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("ApplyManifest: missing step_config"))?;
-        let namespace = config.get("namespace")
+        let namespace = config
+            .get("namespace")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("ApplyManifest: missing namespace in step_config"))?;
 
@@ -43,7 +44,8 @@ impl StepBody for ApplyManifest {
             domain
         };
 
-        let email = data.get("__ctx")
+        let email = data
+            .get("__ctx")
             .and_then(|c| c.get("acme_email"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
@@ -71,7 +73,13 @@ mod tests {
     fn missing_step_config_is_descriptive() {
         let err = step_err("ApplyManifest: missing step_config");
         let msg = err.to_string();
-        assert!(msg.contains("ApplyManifest"), "error should name the step: {msg}");
-        assert!(msg.contains("step_config"), "error should mention step_config: {msg}");
+        assert!(
+            msg.contains("ApplyManifest"),
+            "error should name the step: {msg}"
+        );
+        assert!(
+            msg.contains("step_config"),
+            "error should mention step_config: {msg}"
+        );
     }
 }

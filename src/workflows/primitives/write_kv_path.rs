@@ -26,23 +26,32 @@ pub struct WriteKVPath;
 
 #[async_trait::async_trait]
 impl StepBody for WriteKVPath {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("WriteKVPath: missing step_config"))?;
-        let service = config.get("service").and_then(|v| v.as_str())
+        let service = config
+            .get("service")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteKVPath: missing service"))?;
 
         let dirty_key = format!("dirty_{service}");
-        let is_dirty = data.get(&dirty_key).and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_dirty = data
+            .get(&dirty_key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !is_dirty {
             return Ok(ExecutionResult::next());
         }
@@ -61,14 +70,13 @@ impl StepBody for WriteKVPath {
         let path_data: HashMap<String, String> = serde_json::from_str(kv_json)
             .map_err(|e| step_err(format!("WriteKVPath({service}): bad kv_data: {e}")))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200).await
+        let pf = secrets::port_forward("data", ob_pod, 8200)
+            .await
             .map_err(|e| step_err(e.to_string()))?;
-        let bao = BaoClient::with_token(
-            &format!("http://127.0.0.1:{}", pf.local_port),
-            root_token,
-        );
+        let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
 
-        bao.kv_patch("secret", service, &path_data).await
+        bao.kv_patch("secret", service, &path_data)
+            .await
             .map_err(|e| step_err(format!("WriteKVPath({service}): {e}")))?;
 
         ok(&format!("KV write: {service}"));

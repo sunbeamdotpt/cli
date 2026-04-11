@@ -27,12 +27,11 @@ pub struct GetAdminPassword;
 
 #[async_trait::async_trait]
 impl StepBody for GetAdminPassword {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let step_ctx = data.ctx.as_ref()
+        let step_ctx = data
+            .ctx
+            .as_ref()
             .ok_or_else(|| step_err("missing __ctx in workflow data"))?;
 
         k::set_context(&step_ctx.kube_context, &step_ctx.ssh_host);
@@ -46,8 +45,7 @@ impl StepBody for GetAdminPassword {
             return Err(step_err("gitea-admin-credentials password not found"));
         }
 
-        let domain = k::get_domain().await
-            .map_err(|e| step_err(e.to_string()))?;
+        let domain = k::get_domain().await.map_err(|e| step_err(e.to_string()))?;
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({
@@ -66,10 +64,7 @@ pub struct WaitForGiteaPod;
 
 #[async_trait::async_trait]
 impl StepBody for WaitForGiteaPod {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         step("Waiting for Gitea pod...");
 
         let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
@@ -80,13 +75,17 @@ impl StepBody for WaitForGiteaPod {
             let lp = kube::api::ListParams::default().labels("app.kubernetes.io/name=gitea");
             if let Ok(pod_list) = pods.list(&lp).await {
                 for pod in &pod_list.items {
-                    let phase = pod.status.as_ref()
+                    let phase = pod
+                        .status
+                        .as_ref()
                         .and_then(|s| s.phase.as_deref())
                         .unwrap_or("");
                     if phase != "Running" {
                         continue;
                     }
-                    let ready = pod.status.as_ref()
+                    let ready = pod
+                        .status
+                        .as_ref()
                         .and_then(|s| s.container_statuses.as_ref())
                         .and_then(|cs| cs.first())
                         .map(|c| c.ready)
@@ -118,23 +117,29 @@ pub struct SetAdminPassword;
 
 #[async_trait::async_trait]
 impl StepBody for SetAdminPassword {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let pod = data.gitea_pod.as_deref()
+        let pod = data
+            .gitea_pod
+            .as_deref()
             .ok_or_else(|| step_err("gitea_pod not set"))?;
-        let password = data.gitea_admin_pass.as_deref()
+        let password = data
+            .gitea_admin_pass
+            .as_deref()
             .ok_or_else(|| step_err("gitea_admin_pass not set"))?;
 
         let (code, output) = k::kube_exec(
             "devtools",
             pod,
             &[
-                "gitea", "admin", "user", "change-password",
-                "--username", GITEA_ADMIN_USER,
-                "--password", password,
+                "gitea",
+                "admin",
+                "user",
+                "change-password",
+                "--username",
+                GITEA_ADMIN_USER,
+                "--password",
+                password,
                 "--must-change-password=false",
             ],
             Some("gitea"),
@@ -160,14 +165,15 @@ pub struct MarkAdminPrivate;
 
 #[async_trait::async_trait]
 impl StepBody for MarkAdminPrivate {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let pod = data.gitea_pod.as_deref()
+        let pod = data
+            .gitea_pod
+            .as_deref()
             .ok_or_else(|| step_err("gitea_pod not set"))?;
-        let password = data.gitea_admin_pass.as_deref()
+        let password = data
+            .gitea_admin_pass
+            .as_deref()
             .ok_or_else(|| step_err("gitea_admin_pass not set"))?;
 
         let body = serde_json::json!({
@@ -178,7 +184,8 @@ impl StepBody for MarkAdminPrivate {
         });
 
         let result = gitea_api(
-            pod, "PATCH",
+            pod,
+            "PATCH",
             &format!("/admin/users/{GITEA_ADMIN_USER}"),
             password,
             Some(&body),
@@ -203,14 +210,15 @@ pub struct CreateOrgs;
 
 #[async_trait::async_trait]
 impl StepBody for CreateOrgs {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let pod = data.gitea_pod.as_deref()
+        let pod = data
+            .gitea_pod
+            .as_deref()
             .ok_or_else(|| step_err("gitea_pod not set"))?;
-        let password = data.gitea_admin_pass.as_deref()
+        let password = data
+            .gitea_admin_pass
+            .as_deref()
             .ok_or_else(|| step_err("gitea_admin_pass not set"))?;
 
         let orgs = [
@@ -259,16 +267,18 @@ pub struct ConfigureOIDC;
 
 #[async_trait::async_trait]
 impl StepBody for ConfigureOIDC {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let pod = data.gitea_pod.as_deref()
+        let pod = data
+            .gitea_pod
+            .as_deref()
             .ok_or_else(|| step_err("gitea_pod not set"))?;
 
         let (_, auth_list_output) = k::kube_exec(
-            "devtools", pod, &["gitea", "admin", "auth", "list"], Some("gitea"),
+            "devtools",
+            pod,
+            &["gitea", "admin", "auth", "list"],
+            Some("gitea"),
         )
         .await
         .map_err(|e| step_err(e.to_string()))?;
@@ -307,9 +317,14 @@ impl StepBody for ConfigureOIDC {
                 "devtools",
                 pod,
                 &[
-                    "gitea", "admin", "auth", "update-oauth",
-                    "--id", &eid,
-                    "--name", "Sunbeam",
+                    "gitea",
+                    "admin",
+                    "auth",
+                    "update-oauth",
+                    "--id",
+                    &eid,
+                    "--name",
+                    "Sunbeam",
                 ],
                 Some("gitea"),
             )
@@ -317,7 +332,9 @@ impl StepBody for ConfigureOIDC {
             .map_err(|e| step_err(e.to_string()))?;
 
             if code == 0 {
-                ok(&format!("Renamed OIDC auth source (id={eid}) to 'Sunbeam'."));
+                ok(&format!(
+                    "Renamed OIDC auth source (id={eid}) to 'Sunbeam'."
+                ));
             } else {
                 warn(&format!("Rename failed: {stderr}"));
             }
@@ -330,22 +347,32 @@ impl StepBody for ConfigureOIDC {
 
         match (oidc_id, oidc_secret) {
             (Ok(oidc_id), Ok(oidc_sec)) => {
-                let discover_url =
-                    "http://hydra-public.ory.svc.cluster.local:4444/.well-known/openid-configuration";
+                let discover_url = "http://hydra-public.ory.svc.cluster.local:4444/.well-known/openid-configuration";
 
                 let (code, stderr) = k::kube_exec(
                     "devtools",
                     pod,
                     &[
-                        "gitea", "admin", "auth", "add-oauth",
-                        "--name", "Sunbeam",
-                        "--provider", "openidConnect",
-                        "--key", &oidc_id,
-                        "--secret", &oidc_sec,
-                        "--auto-discover-url", discover_url,
-                        "--scopes", "openid",
-                        "--scopes", "email",
-                        "--scopes", "profile",
+                        "gitea",
+                        "admin",
+                        "auth",
+                        "add-oauth",
+                        "--name",
+                        "Sunbeam",
+                        "--provider",
+                        "openidConnect",
+                        "--key",
+                        &oidc_id,
+                        "--secret",
+                        &oidc_sec,
+                        "--auto-discover-url",
+                        discover_url,
+                        "--scopes",
+                        "openid",
+                        "--scopes",
+                        "email",
+                        "--scopes",
+                        "profile",
                     ],
                     Some("gitea"),
                 )
@@ -375,10 +402,7 @@ pub struct PrintBootstrapResult;
 
 #[async_trait::async_trait]
 impl StepBody for PrintBootstrapResult {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
         let domain = data.domain.as_deref().unwrap_or("unknown");
         ok(&format!(
@@ -402,13 +426,20 @@ async fn gitea_api(
     let auth = format!("{GITEA_ADMIN_USER}:{password}");
 
     let mut args = vec![
-        "curl", "-s", "-X", method, &url, "-H", "Content-Type: application/json", "-u", &auth,
+        "curl",
+        "-s",
+        "-X",
+        method,
+        &url,
+        "-H",
+        "Content-Type: application/json",
+        "-u",
+        &auth,
     ];
 
     let data_str;
     if let Some(d) = data {
-        data_str = serde_json::to_string(d)
-            .map_err(|e| step_err(e.to_string()))?;
+        data_str = serde_json::to_string(d).map_err(|e| step_err(e.to_string()))?;
         args.push("-d");
         args.push(&data_str);
     }
@@ -425,25 +456,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_admin_password_is_default() { let _ = GetAdminPassword::default(); }
+    fn get_admin_password_is_default() {
+        let _ = GetAdminPassword::default();
+    }
 
     #[test]
-    fn wait_for_gitea_pod_is_default() { let _ = WaitForGiteaPod::default(); }
+    fn wait_for_gitea_pod_is_default() {
+        let _ = WaitForGiteaPod::default();
+    }
 
     #[test]
-    fn set_admin_password_is_default() { let _ = SetAdminPassword::default(); }
+    fn set_admin_password_is_default() {
+        let _ = SetAdminPassword::default();
+    }
 
     #[test]
-    fn mark_admin_private_is_default() { let _ = MarkAdminPrivate::default(); }
+    fn mark_admin_private_is_default() {
+        let _ = MarkAdminPrivate::default();
+    }
 
     #[test]
-    fn create_orgs_is_default() { let _ = CreateOrgs::default(); }
+    fn create_orgs_is_default() {
+        let _ = CreateOrgs::default();
+    }
 
     #[test]
-    fn configure_oidc_is_default() { let _ = ConfigureOIDC::default(); }
+    fn configure_oidc_is_default() {
+        let _ = ConfigureOIDC::default();
+    }
 
     #[test]
-    fn print_bootstrap_result_is_default() { let _ = PrintBootstrapResult::default(); }
+    fn print_bootstrap_result_is_default() {
+        let _ = PrintBootstrapResult::default();
+    }
 
     #[test]
     fn test_constants() {

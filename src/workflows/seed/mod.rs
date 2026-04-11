@@ -9,17 +9,28 @@ use crate::output;
 /// Register all seed workflow steps and the workflow definition with a host.
 pub async fn register(host: &wfe::WorkflowHost) {
     // Primitive steps (config-driven, reusable)
-    host.register_step::<crate::workflows::primitives::CreatePGRole>().await;
-    host.register_step::<crate::workflows::primitives::CreatePGDatabase>().await;
-    host.register_step::<crate::workflows::primitives::EnsureNamespace>().await;
-    host.register_step::<crate::workflows::primitives::CreateK8sSecret>().await;
-    host.register_step::<crate::workflows::primitives::EnableVaultAuth>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultAuthConfig>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultPolicy>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultRole>().await;
-    host.register_step::<crate::workflows::primitives::SeedKVPath>().await;
-    host.register_step::<crate::workflows::primitives::WriteKVPath>().await;
-    host.register_step::<crate::workflows::primitives::CollectCredentials>().await;
+    host.register_step::<crate::workflows::primitives::CreatePGRole>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CreatePGDatabase>()
+        .await;
+    host.register_step::<crate::workflows::primitives::EnsureNamespace>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CreateK8sSecret>()
+        .await;
+    host.register_step::<crate::workflows::primitives::EnableVaultAuth>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultAuthConfig>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultPolicy>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultRole>()
+        .await;
+    host.register_step::<crate::workflows::primitives::SeedKVPath>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteKVPath>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CollectCredentials>()
+        .await;
 
     // Seed-specific steps
     host.register_step::<steps::FindOpenBaoPod>().await;
@@ -157,7 +168,8 @@ mod tests {
     #[tokio::test]
     async fn test_print_summary_with_missing_step_names() {
         // Construct a synthetic instance with no step names to exercise fallback
-        let mut instance = wfe_core::models::WorkflowInstance::new("test", 1, serde_json::json!({}));
+        let mut instance =
+            wfe_core::models::WorkflowInstance::new("test", 1, serde_json::json!({}));
         let mut ep = wfe_core::models::ExecutionPointer::new(0);
         ep.step_name = None;
         ep.status = wfe_core::models::PointerStatus::Complete;
@@ -170,7 +182,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_print_summary_with_missing_times() {
-        let mut instance = wfe_core::models::WorkflowInstance::new("test", 1, serde_json::json!({}));
+        let mut instance =
+            wfe_core::models::WorkflowInstance::new("test", 1, serde_json::json!({}));
         let mut ep = wfe_core::models::ExecutionPointer::new(0);
         ep.step_name = Some("test-step".to_string());
         ep.status = wfe_core::models::PointerStatus::Complete;

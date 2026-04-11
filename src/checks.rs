@@ -4,8 +4,8 @@ use crate::error::Result;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use k8s_openapi::api::core::v1::Pod;
-use kube::api::{Api, ListParams};
 use kube::ResourceExt;
+use kube::api::{Api, ListParams};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
@@ -62,10 +62,7 @@ fn build_http_client() -> Result<reqwest::Client> {
         .timeout(Duration::from_secs(5));
 
     // Try mkcert root CA
-    if let Ok(output) = std::process::Command::new("mkcert")
-        .arg("-CAROOT")
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("mkcert").arg("-CAROOT").output() {
         if output.status.success() {
             let ca_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let ca_file = std::path::Path::new(&ca_root).join("rootCA.pem");
@@ -126,9 +123,12 @@ async fn check_gitea_version(domain: &str, client: &reqwest::Client) -> CheckRes
                 .unwrap_or_else(|| "?".into());
             CheckResult::ok("gitea-version", "devtools", "gitea", &format!("v{ver}"))
         }
-        Ok((status, _)) => {
-            CheckResult::fail("gitea-version", "devtools", "gitea", &format!("HTTP {status}"))
-        }
+        Ok((status, _)) => CheckResult::fail(
+            "gitea-version",
+            "devtools",
+            "gitea",
+            &format!("HTTP {status}"),
+        ),
         Err(e) => CheckResult::fail("gitea-version", "devtools", "gitea", &e),
     }
 }
@@ -143,8 +143,7 @@ async fn check_gitea_auth(domain: &str, client: &reqwest::Client) -> CheckResult
             u
         }
     };
-    let password =
-        kube_secret("devtools", "gitea-admin-credentials", "password").await;
+    let password = kube_secret("devtools", "gitea-admin-credentials", "password").await;
     if password.is_empty() {
         return CheckResult::fail(
             "gitea-auth",
@@ -154,8 +153,7 @@ async fn check_gitea_auth(domain: &str, client: &reqwest::Client) -> CheckResult
         );
     }
 
-    let creds =
-        base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    let creds = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
     let auth_hdr = format!("Basic {creds}");
     let url = format!("https://src.{domain}/api/v1/user");
 
@@ -191,8 +189,7 @@ async fn check_postgres(_domain: &str, _client: &reqwest::Client) -> CheckResult
         plural: "clusters".into(),
     };
 
-    let api: Api<kube::api::DynamicObject> =
-        Api::namespaced_with(kube_client.clone(), "data", &ar);
+    let api: Api<kube::api::DynamicObject> = Api::namespaced_with(kube_client.clone(), "data", &ar);
 
     match api.get_opt("postgres").await {
         Ok(Some(obj)) => {
@@ -288,10 +285,7 @@ async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult 
                         .get("initialized")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    let sealed = data
-                        .get("sealed")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                    let sealed = data.get("sealed").and_then(|v| v.as_bool()).unwrap_or(true);
                     let passed = init && !sealed;
                     CheckResult {
                         name: "openbao".into(),
@@ -332,9 +326,8 @@ fn s3_auth_headers_at(
     let datestamp = now.format("%Y%m%d").to_string();
 
     let payload_hash = hex_encode(&Sha256::digest(b""));
-    let canonical = format!(
-        "GET\n/\n\nhost:{host}\nx-amz-date:{amzdate}\n\nhost;x-amz-date\n{payload_hash}"
-    );
+    let canonical =
+        format!("GET\n/\n\nhost:{host}\nx-amz-date:{amzdate}\n\nhost;x-amz-date\n{payload_hash}");
     let credential_scope = format!("{datestamp}/us-east-1/s3/aws4_request");
     let canonical_hash = hex_encode(&Sha256::digest(canonical.as_bytes()));
     let string_to_sign =
@@ -346,10 +339,7 @@ fn s3_auth_headers_at(
         mac.finalize().into_bytes().to_vec()
     }
 
-    let k = hmac_sign(
-        format!("AWS4{secret_key}").as_bytes(),
-        datestamp.as_bytes(),
-    );
+    let k = hmac_sign(format!("AWS4{secret_key}").as_bytes(), datestamp.as_bytes());
     let k = hmac_sign(&k, b"us-east-1");
     let k = hmac_sign(&k, b"s3");
     let k = hmac_sign(&k, b"aws4_request");
@@ -368,10 +358,8 @@ fn s3_auth_headers_at(
 
 /// GET https://s3.{domain}/ with S3 credentials -> 200 list-buckets response.
 async fn check_seaweedfs(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let access_key =
-        kube_secret("storage", "seaweedfs-s3-credentials", "S3_ACCESS_KEY").await;
-    let secret_key =
-        kube_secret("storage", "seaweedfs-s3-credentials", "S3_SECRET_KEY").await;
+    let access_key = kube_secret("storage", "seaweedfs-s3-credentials", "S3_ACCESS_KEY").await;
+    let secret_key = kube_secret("storage", "seaweedfs-s3-credentials", "S3_SECRET_KEY").await;
 
     if access_key.is_empty() || secret_key.is_empty() {
         return CheckResult::fail(
@@ -393,9 +381,7 @@ async fn check_seaweedfs(domain: &str, client: &reqwest::Client) -> CheckResult 
     )
     .await
     {
-        Ok((200, _)) => {
-            CheckResult::ok("seaweedfs", "storage", "seaweedfs", "S3 authenticated")
-        }
+        Ok((200, _)) => CheckResult::ok("seaweedfs", "storage", "seaweedfs", "S3 authenticated"),
         Ok((status, _)) => CheckResult::fail(
             "seaweedfs",
             "storage",
@@ -414,8 +400,7 @@ async fn check_kratos(domain: &str, client: &reqwest::Client) -> CheckResult {
             let ok_flag = status == 200;
             let mut detail = format!("HTTP {status}");
             if !ok_flag && !body.is_empty() {
-                let body_str: String =
-                    String::from_utf8_lossy(&body).chars().take(80).collect();
+                let body_str: String = String::from_utf8_lossy(&body).chars().take(80).collect();
                 detail = format!("{detail}: {body_str}");
             }
             CheckResult {
@@ -493,7 +478,9 @@ async fn check_livekit(_domain: &str, _client: &reqwest::Client) -> CheckResult 
 type CheckFn = for<'a> fn(
     &'a str,
     &'a reqwest::Client,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = CheckResult> + Send + 'a>>;
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = CheckResult> + Send + 'a>,
+>;
 
 struct CheckEntry {
     func: CheckFn,
@@ -797,8 +784,7 @@ mod tests {
     #[test]
     fn test_check_registry_filter_no_match() {
         let all = check_registry();
-        let filtered: Vec<&CheckEntry> =
-            all.iter().filter(|e| e.ns == "nonexistent").collect();
+        let filtered: Vec<&CheckEntry> = all.iter().filter(|e| e.ns == "nonexistent").collect();
         assert!(filtered.is_empty());
     }
 
@@ -892,8 +878,7 @@ mod tests {
     #[test]
     fn test_check_registry_expected_namespaces() {
         let registry = check_registry();
-        let namespaces: std::collections::HashSet<&str> =
-            registry.iter().map(|e| e.ns).collect();
+        let namespaces: std::collections::HashSet<&str> = registry.iter().map(|e| e.ns).collect();
         for expected in &["devtools", "data", "storage", "ory", "media"] {
             assert!(
                 namespaces.contains(expected),
@@ -905,10 +890,15 @@ mod tests {
     #[test]
     fn test_check_registry_expected_services() {
         let registry = check_registry();
-        let services: std::collections::HashSet<&str> =
-            registry.iter().map(|e| e.svc).collect();
+        let services: std::collections::HashSet<&str> = registry.iter().map(|e| e.svc).collect();
         for expected in &[
-            "gitea", "postgres", "valkey", "openbao", "seaweedfs", "kratos", "hydra",
+            "gitea",
+            "postgres",
+            "valkey",
+            "openbao",
+            "seaweedfs",
+            "kratos",
+            "hydra",
             "livekit",
         ] {
             assert!(
@@ -1043,8 +1033,7 @@ mod tests {
         //    Canonical request for GET / with empty body:
         //      GET\n/\n\nhost:examplebucket.s3.amazonaws.com\n
         //      x-amz-date:20130524T000000Z\n\nhost;x-amz-date\n<sha256("")>
-        let payload_hash =
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let canonical = format!(
             "GET\n/\n\nhost:{host}\nx-amz-date:{amzdate}\n\nhost;x-amz-date\n{payload_hash}"
         );
@@ -1052,29 +1041,23 @@ mod tests {
 
         // 3. Verify the string to sign
         let credential_scope = "20130524/us-east-1/s3/aws4_request";
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{amzdate}\n{credential_scope}\n{canonical_hash}"
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amzdate}\n{credential_scope}\n{canonical_hash}");
 
         // 4. Compute the expected signing key and signature to pin the value.
         fn hmac_sign(key: &[u8], msg: &[u8]) -> Vec<u8> {
-            let mut mac =
-                HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+            let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
             mac.update(msg);
             mac.finalize().into_bytes().to_vec()
         }
 
-        let k = hmac_sign(
-            format!("AWS4{secret_key}").as_bytes(),
-            b"20130524",
-        );
+        let k = hmac_sign(format!("AWS4{secret_key}").as_bytes(), b"20130524");
         let k = hmac_sign(&k, b"us-east-1");
         let k = hmac_sign(&k, b"s3");
         let k = hmac_sign(&k, b"aws4_request");
 
         let expected_sig = {
-            let mut mac =
-                HmacSha256::new_from_slice(&k).expect("HMAC accepts any key length");
+            let mut mac = HmacSha256::new_from_slice(&k).expect("HMAC accepts any key length");
             mac.update(string_to_sign.as_bytes());
             hex_encode(&mac.finalize().into_bytes())
         };
@@ -1103,7 +1086,10 @@ mod tests {
         let (auth2, date2) = s3_auth_headers("AK", "SK", "host");
         // If both calls happen within the same second, they must be identical.
         if date1 == date2 {
-            assert_eq!(auth1, auth2, "same inputs at same time must produce same signature");
+            assert_eq!(
+                auth1, auth2,
+                "same inputs at same time must produce same signature"
+            );
         }
     }
 

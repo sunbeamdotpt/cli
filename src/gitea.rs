@@ -80,12 +80,7 @@ async fn wait_for_gitea_pod() -> Result<Option<String>> {
                     .unwrap_or(false);
 
                 if ready {
-                    let name = pod
-                        .metadata
-                        .name
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_string();
+                    let name = pod.metadata.name.as_deref().unwrap_or("").to_string();
                     if !name.is_empty() {
                         return Ok(Some(name));
                     }
@@ -138,7 +133,15 @@ async fn gitea_api(
     let auth = format!("{GITEA_ADMIN_USER}:{password}");
 
     let mut args = vec![
-        "curl", "-s", "-X", method, &url, "-H", "Content-Type: application/json", "-u", &auth,
+        "curl",
+        "-s",
+        "-X",
+        method,
+        &url,
+        "-H",
+        "Content-Type: application/json",
+        "-u",
+        &auth,
     ];
 
     let data_str;
@@ -220,8 +223,13 @@ async fn create_orgs(pod: &str, password: &str) -> Result<()> {
 /// Configure Hydra as the OIDC authentication source.
 async fn configure_oidc(pod: &str, _password: &str) -> Result<()> {
     // List existing auth sources
-    let (_, auth_list_output) =
-        kube_exec("devtools", pod, &["gitea", "admin", "auth", "list"], Some("gitea")).await?;
+    let (_, auth_list_output) = kube_exec(
+        "devtools",
+        pod,
+        &["gitea", "admin", "auth", "list"],
+        Some("gitea"),
+    )
+    .await?;
 
     let mut existing_id: Option<String> = None;
     let mut exact_ok = false;
@@ -240,15 +248,9 @@ async fn configure_oidc(pod: &str, _password: &str) -> Result<()> {
             break;
         }
 
-        let src_type = if parts.len() > 2 {
-            parts[2].trim()
-        } else {
-            ""
-        };
+        let src_type = if parts.len() > 2 { parts[2].trim() } else { "" };
 
-        if src_name == "Sunbeam Auth"
-            || (src_name.starts_with("Sunbeam") && src_type == "OAuth2")
-        {
+        if src_name == "Sunbeam Auth" || (src_name.starts_with("Sunbeam") && src_type == "OAuth2") {
             existing_id = Some(src_id.to_string());
         }
     }
@@ -406,13 +408,14 @@ mod tests {
         // Simulate an "already exists" response
         let json_str = r#"{"message": "organization already exists"}"#;
         let val: Value = serde_json::from_str(json_str).unwrap();
-        assert!(val
-            .get("message")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_lowercase()
-            .contains("already"));
+        assert!(
+            val.get("message")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("already")
+        );
     }
 
     #[test]

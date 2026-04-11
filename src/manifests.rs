@@ -75,8 +75,7 @@ pub async fn cmd_apply(env: &str, domain: &str, email: &str, namespace: &str) ->
     pre_apply_cleanup(ns_list.as_deref()).await;
 
     let before = snapshot_configmaps().await;
-    let mut manifests =
-        crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
 
     if !namespace.is_empty() {
         manifests = filter_by_namespace(&manifests, namespace);
@@ -90,13 +89,13 @@ pub async fn cmd_apply(env: &str, domain: &str, email: &str, namespace: &str) ->
 
     // First pass: may emit errors for resources that depend on webhooks not yet running
     if let Err(e) = crate::kube::kube_apply(&manifests).await {
-        crate::output::warn(&format!("First apply pass had errors (may be expected): {e}"));
+        crate::output::warn(&format!(
+            "First apply pass had errors (may be expected): {e}"
+        ));
     }
 
     // If cert-manager is in the overlay, wait for its webhook then re-apply
-    let cert_manager_present = overlay
-        .join("../../base/cert-manager")
-        .exists();
+    let cert_manager_present = overlay.join("../../base/cert-manager").exists();
 
     if cert_manager_present && namespace.is_empty() {
         if wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await {
@@ -263,10 +262,7 @@ async fn snapshot_configmaps() -> std::collections::HashMap<String, String> {
             kube::api::Api::namespaced(client.clone(), ns);
         if let Ok(cm_list) = cms.list(&kube::api::ListParams::default()).await {
             for cm in cm_list.items {
-                if let (Some(name), Some(rv)) = (
-                    &cm.metadata.name,
-                    &cm.metadata.resource_version,
-                ) {
+                if let (Some(name), Some(rv)) = (&cm.metadata.name, &cm.metadata.resource_version) {
                     result.insert(format!("{ns}/{name}"), rv.clone());
                 }
             }
@@ -338,8 +334,7 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
     crate::output::ok(&format!(
         "Waiting for {ns}/{svc} webhook (up to {timeout_secs}s)..."
     ));
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
@@ -381,9 +376,7 @@ async fn apply_mkcert_ca_configmap() {
         .await;
 
     let caroot_path = match caroot {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => {
             crate::output::warn("mkcert not found -- skipping gitea-mkcert-ca ConfigMap.");
             return;
@@ -419,21 +412,19 @@ async fn apply_mkcert_ca_configmap() {
 
 /// Patch the tuwunel OAuth2Client redirect URI with the actual client_id.
 async fn patch_tuwunel_oauth2_redirect(domain: &str) {
-    let client_id = match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID")
-        .await
-    {
-        Ok(id) if !id.is_empty() => id,
-        _ => {
-            crate::output::warn(
-                "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
-            );
-            return;
-        }
-    };
+    let client_id =
+        match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID").await {
+            Ok(id) if !id.is_empty() => id,
+            _ => {
+                crate::output::warn(
+                    "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
+                );
+                return;
+            }
+        };
 
-    let redirect_uri = format!(
-        "https://messages.{domain}/_matrix/client/unstable/login/sso/callback/{client_id}"
-    );
+    let redirect_uri =
+        format!("https://messages.{domain}/_matrix/client/unstable/login/sso/callback/{client_id}");
 
     // Patch the OAuth2Client CRD via kube-rs
     let client = match crate::kube::get_client().await {
@@ -504,16 +495,16 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
 
 /// Inject OpenSearch model_id into matrix/opensearch-ml-config ConfigMap.
 pub async fn inject_opensearch_model_id() {
-    let pipe_resp =
-        match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await {
-            Some(r) => r,
-            None => {
-                crate::output::warn(
-                    "OpenSearch ingest pipeline not found -- skipping model_id injection.",
-                );
-                return;
-            }
-        };
+    let pipe_resp = match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await
+    {
+        Some(r) => r,
+        None => {
+            crate::output::warn(
+                "OpenSearch ingest pipeline not found -- skipping model_id injection.",
+            );
+            return;
+        }
+    };
 
     let model_id = serde_json::from_str::<serde_json::Value>(&pipe_resp)
         .ok()
@@ -531,9 +522,7 @@ pub async fn inject_opensearch_model_id() {
         });
 
     let Some(model_id) = model_id else {
-        crate::output::warn(
-            "No model_id in ingest pipeline -- tuwunel hybrid search unavailable.",
-        );
+        crate::output::warn("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
         return;
     };
 
@@ -639,7 +628,8 @@ pub async fn ensure_opensearch_ml() {
     }
 
     // Pick the best model: first DEPLOYED, then first DEPLOYING, then first REGISTERED.
-    let best_id = deployed_ids.first()
+    let best_id = deployed_ids
+        .first()
         .or(deploying_ids.first())
         .or(registered_ids.first())
         .cloned();
@@ -648,21 +638,35 @@ pub async fn ensure_opensearch_ml() {
     let mut to_clean: Vec<String> = stale_ids; // always clean FAILED/stale
     if let Some(ref best) = best_id {
         for id in &deployed_ids {
-            if id != best { to_clean.push(id.clone()); }
+            if id != best {
+                to_clean.push(id.clone());
+            }
         }
         for id in &deploying_ids {
-            if id != best { to_clean.push(id.clone()); }
+            if id != best {
+                to_clean.push(id.clone());
+            }
         }
         for id in &registered_ids {
-            if id != best { to_clean.push(id.clone()); }
+            if id != best {
+                to_clean.push(id.clone());
+            }
         }
     }
 
     if !to_clean.is_empty() {
-        crate::output::step(&format!("Cleaning up {} stale ML model(s)...", to_clean.len()));
+        crate::output::step(&format!(
+            "Cleaning up {} stale ML model(s)...",
+            to_clean.len()
+        ));
         for stale in &to_clean {
             // Undeploy first (safe to call even if not deployed)
-            os_api(&format!("/_plugins/_ml/models/{stale}/_undeploy"), "POST", None).await;
+            os_api(
+                &format!("/_plugins/_ml/models/{stale}/_undeploy"),
+                "POST",
+                None,
+            )
+            .await;
             // Then delete
             os_api(&format!("/_plugins/_ml/models/{stale}"), "DELETE", None).await;
         }
@@ -672,7 +676,8 @@ pub async fn ensure_opensearch_ml() {
 
     if let Some(id) = best_id {
         // Check current state of the chosen model.
-        let state = hits.iter()
+        let state = hits
+            .iter()
             .find(|h| h.get("_id").and_then(|v| v.as_str()) == Some(&id))
             .and_then(|h| h.get("_source"))
             .and_then(|s| s.get("model_state"))
@@ -689,8 +694,12 @@ pub async fn ensure_opensearch_ml() {
                 model_id = Some(id.clone());
                 for _ in 0..30 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    if let Some(r) = os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await {
-                        if r.contains("\"DEPLOYED\"") { break; }
+                    if let Some(r) =
+                        os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await
+                    {
+                        if r.contains("\"DEPLOYED\"") {
+                            break;
+                        }
                     }
                 }
             }
@@ -701,8 +710,12 @@ pub async fn ensure_opensearch_ml() {
                 os_api(&format!("/_plugins/_ml/models/{id}/_deploy"), "POST", None).await;
                 for _ in 0..30 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    if let Some(r) = os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await {
-                        if r.contains("\"DEPLOYED\"") { break; }
+                    if let Some(r) =
+                        os_api(&format!("/_plugins/_ml/models/{id}"), "GET", None).await
+                    {
+                        if r.contains("\"DEPLOYED\"") {
+                            break;
+                        }
                     }
                 }
             }
@@ -775,17 +788,10 @@ pub async fn ensure_opensearch_ml() {
         };
 
         crate::output::ok("Deploying ML model...");
-        os_api(
-            &format!("/_plugins/_ml/models/{mid}/_deploy"),
-            "POST",
-            None,
-        )
-        .await;
+        os_api(&format!("/_plugins/_ml/models/{mid}/_deploy"), "POST", None).await;
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            if let Some(r) =
-                os_api(&format!("/_plugins/_ml/models/{mid}"), "GET", None).await
-            {
+            if let Some(r) = os_api(&format!("/_plugins/_ml/models/{mid}"), "GET", None).await {
                 if r.contains("\"DEPLOYED\"") {
                     break;
                 }

@@ -9,7 +9,7 @@ use crate::error::SunbeamError;
 use crate::kube as k;
 use crate::openbao::BaoClient;
 use crate::output::{ok, warn};
-use crate::secrets::{self, KratosIdentity, KratosRecovery, ADMIN_USERNAME};
+use crate::secrets::{self, ADMIN_USERNAME, KratosIdentity, KratosRecovery};
 use crate::workflows::data::SeedData;
 
 // ── Pure helpers (testable without K8s) ─────────────────────────────────────
@@ -44,10 +44,7 @@ pub struct SeedKratosAdminIdentity;
 
 #[async_trait::async_trait]
 impl StepBody for SeedKratosAdminIdentity {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: SeedData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -76,30 +73,28 @@ impl StepBody for SeedKratosAdminIdentity {
             "Ensuring Kratos admin identity ({admin_email})..."
         ));
 
-        let pf_bao = secrets::port_forward("data", &ob_pod, 8200).await
+        let pf_bao = secrets::port_forward("data", &ob_pod, 8200)
+            .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
         let bao_url = format!("http://127.0.0.1:{}", pf_bao.local_port);
         let bao = BaoClient::with_token(&bao_url, &root_token);
 
         let result: std::result::Result<(String, String, String), SunbeamError> = async {
-            let pf = match secrets::port_forward_svc(
-                "ory",
-                "app.kubernetes.io/name=kratos-admin",
-                80,
-            )
-            .await
-            {
-                Ok(pf) => pf,
-                Err(_) => {
-                    secrets::port_forward_svc("ory", "app.kubernetes.io/name=kratos", 4434)
-                        .await
-                        .map_err(|e| {
-                            SunbeamError::Other(format!(
-                                "Could not port-forward to Kratos admin API: {e}"
-                            ))
-                        })?
-                }
-            };
+            let pf =
+                match secrets::port_forward_svc("ory", "app.kubernetes.io/name=kratos-admin", 80)
+                    .await
+                {
+                    Ok(pf) => pf,
+                    Err(_) => {
+                        secrets::port_forward_svc("ory", "app.kubernetes.io/name=kratos", 4434)
+                            .await
+                            .map_err(|e| {
+                                SunbeamError::Other(format!(
+                                    "Could not port-forward to Kratos admin API: {e}"
+                                ))
+                            })?
+                    }
+                };
             let base = format!("http://127.0.0.1:{}", pf.local_port);
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
@@ -197,10 +192,7 @@ pub struct PrintSeedOutputs;
 
 #[async_trait::async_trait]
 impl StepBody for PrintSeedOutputs {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: SeedData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -371,7 +363,10 @@ mod tests {
             "admin_identity_id": "id-uuid-here",
         });
         let data: SeedData = serde_json::from_value(json).unwrap();
-        assert_eq!(data.recovery_link.as_deref(), Some("https://example.com/recovery"));
+        assert_eq!(
+            data.recovery_link.as_deref(),
+            Some("https://example.com/recovery")
+        );
         assert_eq!(data.recovery_code.as_deref(), Some("abc123"));
         assert_eq!(data.admin_identity_id.as_deref(), Some("id-uuid-here"));
     }
