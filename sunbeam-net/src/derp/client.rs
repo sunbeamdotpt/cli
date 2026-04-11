@@ -270,6 +270,12 @@ impl DerpClient {
                 .ok_or(Error::ConnectionClosed)?
                 .map_err(|e| Error::Derp(format!("failed to read frame: {e}")))?;
 
+            tracing::trace!(
+                "DERP frame in: type=0x{:02x} len={}",
+                frame.frame_type,
+                frame.payload.len()
+            );
+
             match frame.frame_type {
                 FRAME_RECV_PACKET => {
                     if frame.payload.len() < 32 {

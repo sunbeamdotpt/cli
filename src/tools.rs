@@ -27,7 +27,8 @@ fn cache_dir() -> PathBuf {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+                        let _ =
+                            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
                     }
                 }
             }
@@ -54,8 +55,7 @@ fn extract_embedded(data: &[u8], name: &str) -> Result<PathBuf> {
         }
     }
 
-    std::fs::write(&dest, data)
-        .with_ctx(|| format!("Failed to write {}", dest.display()))?;
+    std::fs::write(&dest, data).with_ctx(|| format!("Failed to write {}", dest.display()))?;
 
     #[cfg(unix)]
     {
@@ -144,7 +144,11 @@ mod tests {
             "ensure_kustomize path should end with 'kustomize', got: {}",
             path.display()
         );
-        assert!(path.exists(), "kustomize binary should exist at: {}", path.display());
+        assert!(
+            path.exists(),
+            "kustomize binary should exist at: {}",
+            path.display()
+        );
     }
 
     #[test]
@@ -155,21 +159,31 @@ mod tests {
             "ensure_helm path should end with 'helm', got: {}",
             path.display()
         );
-        assert!(path.exists(), "helm binary should exist at: {}", path.display());
+        assert!(
+            path.exists(),
+            "helm binary should exist at: {}",
+            path.display()
+        );
     }
 
     #[test]
     fn ensure_kustomize_is_idempotent() {
         let path1 = ensure_kustomize().expect("first call should succeed");
         let path2 = ensure_kustomize().expect("second call should succeed");
-        assert_eq!(path1, path2, "ensure_kustomize should return the same path on repeated calls");
+        assert_eq!(
+            path1, path2,
+            "ensure_kustomize should return the same path on repeated calls"
+        );
     }
 
     #[test]
     fn ensure_helm_is_idempotent() {
         let path1 = ensure_helm().expect("first call should succeed");
         let path2 = ensure_helm().expect("second call should succeed");
-        assert_eq!(path1, path2, "ensure_helm should return the same path on repeated calls");
+        assert_eq!(
+            path1, path2,
+            "ensure_helm should return the same path on repeated calls"
+        );
     }
 
     #[test]

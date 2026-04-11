@@ -22,7 +22,6 @@ pub struct Cli {
     pub verb: Option<Verb>,
 }
 
-
 #[derive(Subcommand, Debug)]
 pub enum Verb {
     /// Full cluster bring-up.
@@ -492,7 +491,6 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
         .map_err(|_| format!("Invalid date: '{s}' (expected YYYY-MM-DD)"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,7 +511,9 @@ mod tests {
     fn test_service_status_no_target() {
         let cli = parse(&["sunbeam", "service", "status"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Status { target } }) => assert!(target.is_none()),
+            Some(Verb::Service {
+                action: ServiceAction::Status { target },
+            }) => assert!(target.is_none()),
             _ => panic!("expected Service Status"),
         }
     }
@@ -522,7 +522,9 @@ mod tests {
     fn test_service_status_with_namespace() {
         let cli = parse(&["sunbeam", "service", "status", "ory"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Status { target } }) => assert_eq!(target.unwrap(), "ory"),
+            Some(Verb::Service {
+                action: ServiceAction::Status { target },
+            }) => assert_eq!(target.unwrap(), "ory"),
             _ => panic!("expected Service Status"),
         }
     }
@@ -531,7 +533,9 @@ mod tests {
     fn test_service_logs_no_follow() {
         let cli = parse(&["sunbeam", "service", "logs", "ory/kratos"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Logs { target, follow } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Logs { target, follow },
+            }) => {
                 assert_eq!(target, "ory/kratos");
                 assert!(!follow);
             }
@@ -543,7 +547,9 @@ mod tests {
     fn test_service_logs_follow_short() {
         let cli = parse(&["sunbeam", "service", "logs", "ory/kratos", "-f"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Logs { follow, .. } }) => assert!(follow),
+            Some(Verb::Service {
+                action: ServiceAction::Logs { follow, .. },
+            }) => assert!(follow),
             _ => panic!("expected Service Logs"),
         }
     }
@@ -551,9 +557,17 @@ mod tests {
     // 9. test_user_set_password
     #[test]
     fn test_user_set_password() {
-        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com", "hunter2"]);
+        let cli = parse(&[
+            "sunbeam",
+            "user",
+            "set-password",
+            "admin@example.com",
+            "hunter2",
+        ]);
         match cli.verb {
-            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
+            Some(Verb::User {
+                action: Some(UserAction::SetPassword { target, password }),
+            }) => {
                 assert_eq!(target, "admin@example.com");
                 assert_eq!(password, Some("hunter2".to_string()));
             }
@@ -565,7 +579,9 @@ mod tests {
     fn test_user_set_password_no_password() {
         let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com"]);
         match cli.verb {
-            Some(Verb::User { action: Some(UserAction::SetPassword { target, password }) }) => {
+            Some(Verb::User {
+                action: Some(UserAction::SetPassword { target, password }),
+            }) => {
                 assert_eq!(target, "admin@example.com");
                 assert!(password.is_none());
             }
@@ -578,9 +594,17 @@ mod tests {
     fn test_user_onboard_basic() {
         let cli = parse(&["sunbeam", "user", "onboard", "a@b.com"]);
         match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard {
-                email, name, schema, no_email, notify, ..
-            }) }) => {
+            Some(Verb::User {
+                action:
+                    Some(UserAction::Onboard {
+                        email,
+                        name,
+                        schema,
+                        no_email,
+                        notify,
+                        ..
+                    }),
+            }) => {
                 assert_eq!(email, "a@b.com");
                 assert_eq!(name, "");
                 assert_eq!(schema, "employee");
@@ -595,17 +619,42 @@ mod tests {
     #[test]
     fn test_user_onboard_full() {
         let cli = parse(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--name", "A B", "--schema", "default", "--no-email",
-            "--job-title", "Engineer", "--department", "Dev",
-            "--office-location", "Paris", "--hire-date", "2026-01-15",
-            "--manager", "boss@b.com",
+            "sunbeam",
+            "user",
+            "onboard",
+            "a@b.com",
+            "--name",
+            "A B",
+            "--schema",
+            "default",
+            "--no-email",
+            "--job-title",
+            "Engineer",
+            "--department",
+            "Dev",
+            "--office-location",
+            "Paris",
+            "--hire-date",
+            "2026-01-15",
+            "--manager",
+            "boss@b.com",
         ]);
         match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard {
-                email, name, schema, no_email, job_title,
-                department, office_location, hire_date, manager, ..
-            }) }) => {
+            Some(Verb::User {
+                action:
+                    Some(UserAction::Onboard {
+                        email,
+                        name,
+                        schema,
+                        no_email,
+                        job_title,
+                        department,
+                        office_location,
+                        hire_date,
+                        manager,
+                        ..
+                    }),
+            }) => {
                 assert_eq!(email, "a@b.com");
                 assert_eq!(name, "A B");
                 assert_eq!(schema, "default");
@@ -624,7 +673,9 @@ mod tests {
     fn test_service_apply_no_namespace() {
         let cli = parse(&["sunbeam", "service", "apply"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Apply { namespace, .. } }) => assert!(namespace.is_none()),
+            Some(Verb::Service {
+                action: ServiceAction::Apply { namespace, .. },
+            }) => assert!(namespace.is_none()),
             _ => panic!("expected Service Apply"),
         }
     }
@@ -633,7 +684,9 @@ mod tests {
     fn test_service_apply_with_namespace() {
         let cli = parse(&["sunbeam", "service", "apply", "ory"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Apply { namespace, .. } }) => assert_eq!(namespace.unwrap(), "ory"),
+            Some(Verb::Service {
+                action: ServiceAction::Apply { namespace, .. },
+            }) => assert_eq!(namespace.unwrap(), "ory"),
             _ => panic!("expected Service Apply"),
         }
     }
@@ -642,12 +695,21 @@ mod tests {
     #[test]
     fn test_config_set() {
         let cli = parse(&[
-            "sunbeam", "config", "set",
-            "--host", "user@example.com",
-            "--infra-dir", "/path/to/infra",
+            "sunbeam",
+            "config",
+            "set",
+            "--host",
+            "user@example.com",
+            "--infra-dir",
+            "/path/to/infra",
         ]);
         match cli.verb {
-            Some(Verb::Config { action: Some(ConfigAction::Set { host, infra_dir, .. }) }) => {
+            Some(Verb::Config {
+                action:
+                    Some(ConfigAction::Set {
+                        host, infra_dir, ..
+                    }),
+            }) => {
                 assert_eq!(host, "user@example.com");
                 assert_eq!(infra_dir, "/path/to/infra");
             }
@@ -660,7 +722,9 @@ mod tests {
     fn test_config_get() {
         let cli = parse(&["sunbeam", "config", "get"]);
         match cli.verb {
-            Some(Verb::Config { action: Some(ConfigAction::Get) }) => {}
+            Some(Verb::Config {
+                action: Some(ConfigAction::Get),
+            }) => {}
             _ => panic!("expected Config Get"),
         }
     }
@@ -669,7 +733,9 @@ mod tests {
     fn test_config_clear() {
         let cli = parse(&["sunbeam", "config", "clear"]);
         match cli.verb {
-            Some(Verb::Config { action: Some(ConfigAction::Clear) }) => {}
+            Some(Verb::Config {
+                action: Some(ConfigAction::Clear),
+            }) => {}
             _ => panic!("expected Config Clear"),
         }
     }
@@ -685,7 +751,9 @@ mod tests {
     fn test_service_get_json_output() {
         let cli = parse(&["sunbeam", "service", "get", "ory/kratos-abc", "-o", "json"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Get { target, output } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Get { target, output },
+            }) => {
                 assert_eq!(target, "ory/kratos-abc");
                 assert_eq!(output, "json");
             }
@@ -697,7 +765,9 @@ mod tests {
     fn test_service_check_with_target() {
         let cli = parse(&["sunbeam", "service", "check", "devtools"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Check { target } }) => assert_eq!(target.unwrap(), "devtools"),
+            Some(Verb::Service {
+                action: ServiceAction::Check { target },
+            }) => assert_eq!(target.unwrap(), "devtools"),
             _ => panic!("expected Service Check"),
         }
     }
@@ -706,11 +776,17 @@ mod tests {
     #[test]
     fn test_hire_date_valid() {
         let cli = parse(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--hire-date", "2026-01-15",
+            "sunbeam",
+            "user",
+            "onboard",
+            "a@b.com",
+            "--hire-date",
+            "2026-01-15",
         ]);
         match cli.verb {
-            Some(Verb::User { action: Some(UserAction::Onboard { hire_date, .. }) }) => {
+            Some(Verb::User {
+                action: Some(UserAction::Onboard { hire_date, .. }),
+            }) => {
                 assert_eq!(hire_date, "2026-01-15");
             }
             _ => panic!("expected User Onboard"),
@@ -720,8 +796,12 @@ mod tests {
     #[test]
     fn test_hire_date_invalid() {
         let result = Cli::try_parse_from(&[
-            "sunbeam", "user", "onboard", "a@b.com",
-            "--hire-date", "not-a-date",
+            "sunbeam",
+            "user",
+            "onboard",
+            "a@b.com",
+            "--hire-date",
+            "not-a-date",
         ]);
         assert!(result.is_err());
     }
@@ -733,7 +813,10 @@ mod tests {
         let cli = parse(&["sunbeam", "workflow", "list"]);
         match cli.verb {
             Some(Verb::Workflow { action }) => {
-                assert!(matches!(action, crate::workflows::cmd::WorkflowAction::List { .. }));
+                assert!(matches!(
+                    action,
+                    crate::workflows::cmd::WorkflowAction::List { .. }
+                ));
             }
             _ => panic!("expected Workflow List"),
         }
@@ -833,7 +916,9 @@ mod tests {
     fn test_service_deploy_no_target() {
         let cli = parse(&["sunbeam", "service", "deploy"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Deploy { target, all } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Deploy { target, all },
+            }) => {
                 assert!(target.is_none());
                 assert!(!all);
             }
@@ -845,7 +930,9 @@ mod tests {
     fn test_service_deploy_with_target() {
         let cli = parse(&["sunbeam", "service", "deploy", "hydra"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Deploy { target, .. } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Deploy { target, .. },
+            }) => {
                 assert_eq!(target.unwrap(), "hydra");
             }
             _ => panic!("expected Service Deploy"),
@@ -856,7 +943,9 @@ mod tests {
     fn test_service_deploy_all() {
         let cli = parse(&["sunbeam", "service", "deploy", "--all"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Deploy { all, .. } }) => assert!(all),
+            Some(Verb::Service {
+                action: ServiceAction::Deploy { all, .. },
+            }) => assert!(all),
             _ => panic!("expected Service Deploy"),
         }
     }
@@ -865,7 +954,9 @@ mod tests {
     fn test_service_secrets_list() {
         let cli = parse(&["sunbeam", "service", "secrets", "hydra"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Secrets { service, action } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Secrets { service, action },
+            }) => {
                 assert_eq!(service, "hydra");
                 assert!(action.is_none());
             }
@@ -875,9 +966,18 @@ mod tests {
 
     #[test]
     fn test_service_secrets_get() {
-        let cli = parse(&["sunbeam", "service", "secrets", "hydra", "get", "system-secret"]);
+        let cli = parse(&[
+            "sunbeam",
+            "service",
+            "secrets",
+            "hydra",
+            "get",
+            "system-secret",
+        ]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Secrets { service, action } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Secrets { service, action },
+            }) => {
                 assert_eq!(service, "hydra");
                 match action {
                     Some(SecretsAction::Get { key }) => assert_eq!(key, "system-secret"),
@@ -892,7 +992,9 @@ mod tests {
     fn test_service_shell() {
         let cli = parse(&["sunbeam", "service", "shell", "postgres"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Shell { service } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Shell { service },
+            }) => {
                 assert_eq!(service, "postgres");
             }
             _ => panic!("expected Service Shell"),
@@ -903,7 +1005,9 @@ mod tests {
     fn test_service_describe() {
         let cli = parse(&["sunbeam", "service", "describe", "hydra"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Describe { service } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Describe { service },
+            }) => {
                 assert_eq!(service, "hydra");
             }
             _ => panic!("expected Service Describe"),
@@ -914,7 +1018,9 @@ mod tests {
     fn test_service_scale() {
         let cli = parse(&["sunbeam", "service", "scale", "hydra", "3"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Scale { service, replicas } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Scale { service, replicas },
+            }) => {
                 assert_eq!(service, "hydra");
                 assert_eq!(replicas, 3);
             }
@@ -926,7 +1032,9 @@ mod tests {
     fn test_service_port_forward() {
         let cli = parse(&["sunbeam", "service", "port-forward", "hydra", "8080:80"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::PortForward { service, ports } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::PortForward { service, ports },
+            }) => {
                 assert_eq!(service, "hydra");
                 assert_eq!(ports, vec!["8080:80"]);
             }
@@ -938,7 +1046,9 @@ mod tests {
     fn test_svc_alias() {
         let cli = parse(&["sunbeam", "svc", "top", "hydra"]);
         match cli.verb {
-            Some(Verb::Service { action: ServiceAction::Top { service } }) => {
+            Some(Verb::Service {
+                action: ServiceAction::Top { service },
+            }) => {
                 assert_eq!(service, "hydra");
             }
             _ => panic!("expected Service Top via svc alias"),
@@ -952,12 +1062,7 @@ pub async fn dispatch() -> Result<()> {
 
     // Resolve the active context from config + CLI flags (like kubectl)
     let config = crate::config::load_config();
-    let active = crate::config::resolve_context(
-        &config,
-        "",
-        cli.context.as_deref(),
-        &cli.domain,
-    );
+    let active = crate::config::resolve_context(&config, "", cli.context.as_deref(), &cli.domain);
 
     // Initialize kube context from the resolved context
     let kube_ctx_str = if active.kube_context.is_empty() {
@@ -1083,8 +1188,12 @@ pub async fn dispatch() -> Result<()> {
             Some(ConfigAction::UseContext { name }) => {
                 let mut config = crate::config::load_config();
                 if !config.contexts.contains_key(&name) {
-                    crate::output::warn(&format!("Context '{name}' does not exist. Creating empty context."));
-                    config.contexts.insert(name.clone(), crate::config::Context::default());
+                    crate::output::warn(&format!(
+                        "Context '{name}' does not exist. Creating empty context."
+                    ));
+                    config
+                        .contexts
+                        .insert(name.clone(), crate::config::Context::default());
                 }
                 config.current_context = name.clone();
                 crate::config::save_config(&config)?;
@@ -1125,48 +1234,30 @@ pub async fn dispatch() -> Result<()> {
             Some(ConfigAction::Clear) => crate::config::clear_config(),
         },
 
-        Some(Verb::K8s { kubectl_args }) => {
-            crate::kube::cmd_k8s(&kubectl_args).await
-        }
+        Some(Verb::K8s { kubectl_args }) => crate::kube::cmd_k8s(&kubectl_args).await,
 
-        Some(Verb::Bao { bao_args }) => {
-            crate::kube::cmd_bao(&bao_args).await
-        }
+        Some(Verb::Bao { bao_args }) => crate::kube::cmd_bao(&bao_args).await,
 
         Some(Verb::User { action }) => match action {
             None => {
                 use clap::CommandFactory;
                 let mut cmd = Cli::command();
-                let sub = cmd
-                    .find_subcommand_mut("user")
-                    .expect("user subcommand");
+                let sub = cmd.find_subcommand_mut("user").expect("user subcommand");
                 sub.print_help()?;
                 println!();
                 Ok(())
             }
-            Some(UserAction::List { search }) => {
-                crate::users::cmd_user_list(&search).await
-            }
-            Some(UserAction::Get { target }) => {
-                crate::users::cmd_user_get(&target).await
-            }
+            Some(UserAction::List { search }) => crate::users::cmd_user_list(&search).await,
+            Some(UserAction::Get { target }) => crate::users::cmd_user_get(&target).await,
             Some(UserAction::Create {
                 email,
                 name,
                 schema,
             }) => crate::users::cmd_user_create(&email, &name, &schema).await,
-            Some(UserAction::Delete { target }) => {
-                crate::users::cmd_user_delete(&target).await
-            }
-            Some(UserAction::Recover { target }) => {
-                crate::users::cmd_user_recover(&target).await
-            }
-            Some(UserAction::Disable { target }) => {
-                crate::users::cmd_user_disable(&target).await
-            }
-            Some(UserAction::Enable { target }) => {
-                crate::users::cmd_user_enable(&target).await
-            }
+            Some(UserAction::Delete { target }) => crate::users::cmd_user_delete(&target).await,
+            Some(UserAction::Recover { target }) => crate::users::cmd_user_recover(&target).await,
+            Some(UserAction::Disable { target }) => crate::users::cmd_user_disable(&target).await,
+            Some(UserAction::Enable { target }) => crate::users::cmd_user_enable(&target).await,
             Some(UserAction::SetPassword { target, password }) => {
                 let pw = match password {
                     Some(p) => p,
@@ -1205,9 +1296,7 @@ pub async fn dispatch() -> Result<()> {
                 )
                 .await
             }
-            Some(UserAction::Offboard { target }) => {
-                crate::users::cmd_user_offboard(&target).await
-            }
+            Some(UserAction::Offboard { target }) => crate::users::cmd_user_offboard(&target).await,
         },
 
         Some(Verb::Auth { action }) => match action {
@@ -1230,32 +1319,29 @@ pub async fn dispatch() -> Result<()> {
             None => {
                 use clap::CommandFactory;
                 let mut cmd = Cli::command();
-                let sub = cmd
-                    .find_subcommand_mut("pm")
-                    .expect("pm subcommand");
+                let sub = cmd.find_subcommand_mut("pm").expect("pm subcommand");
                 sub.print_help()?;
                 println!();
                 Ok(())
             }
             Some(PmAction::List { source, state }) => {
-                let src = if source == "all" { None } else { Some(source.as_str()) };
+                let src = if source == "all" {
+                    None
+                } else {
+                    Some(source.as_str())
+                };
                 crate::pm::cmd_pm_list(src, &state).await
             }
-            Some(PmAction::Show { id }) => {
-                crate::pm::cmd_pm_show(&id).await
-            }
-            Some(PmAction::Create { title, body, source, target }) => {
-                crate::pm::cmd_pm_create(&title, &body, &source, &target).await
-            }
-            Some(PmAction::Comment { id, text }) => {
-                crate::pm::cmd_pm_comment(&id, &text).await
-            }
-            Some(PmAction::Close { id }) => {
-                crate::pm::cmd_pm_close(&id).await
-            }
-            Some(PmAction::Assign { id, user }) => {
-                crate::pm::cmd_pm_assign(&id, &user).await
-            }
+            Some(PmAction::Show { id }) => crate::pm::cmd_pm_show(&id).await,
+            Some(PmAction::Create {
+                title,
+                body,
+                source,
+                target,
+            }) => crate::pm::cmd_pm_create(&title, &body, &source, &target).await,
+            Some(PmAction::Comment { id, text }) => crate::pm::cmd_pm_comment(&id, &text).await,
+            Some(PmAction::Close { id }) => crate::pm::cmd_pm_close(&id).await,
+            Some(PmAction::Assign { id, user }) => crate::pm::cmd_pm_assign(&id, &user).await,
         },
 
         Some(Verb::Workflow { action }) => {
@@ -1273,7 +1359,9 @@ pub async fn dispatch() -> Result<()> {
         Some(Verb::Workflows { output, action }) => {
             let domain = crate::config::domain();
             if domain.is_empty() {
-                return Err(SunbeamError::Config("domain not set — run `sunbeam config set --domain <domain>` first".into()));
+                return Err(SunbeamError::Config(
+                    "domain not set — run `sunbeam config set --domain <domain>` first".into(),
+                ));
             }
             if let Err(e) = crate::wfectl::dispatch(action, output, domain).await {
                 eprintln!("error: {e:#}");
@@ -1284,9 +1372,7 @@ pub async fn dispatch() -> Result<()> {
 
         Some(Verb::Vpn { action }) => match action {
             VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
-            VpnAction::Connect { foreground } => {
-                crate::vpn_cmds::cmd_connect(foreground).await
-            }
+            VpnAction::Connect { foreground } => crate::vpn_cmds::cmd_connect(foreground).await,
             VpnAction::Disconnect => crate::vpn_cmds::cmd_disconnect().await,
             VpnAction::CreateKey {
                 user,

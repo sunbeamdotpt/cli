@@ -8,21 +8,36 @@ use crate::output;
 /// Register all up workflow steps and the workflow definition with a host.
 pub async fn register(host: &wfe::WorkflowHost) {
     // Primitive steps (config-driven, reusable)
-    host.register_step::<crate::workflows::primitives::ApplyManifest>().await;
-    host.register_step::<crate::workflows::primitives::WaitForRollout>().await;
-    host.register_step::<crate::workflows::primitives::CreatePGRole>().await;
-    host.register_step::<crate::workflows::primitives::CreatePGDatabase>().await;
-    host.register_step::<crate::workflows::primitives::EnsureNamespace>().await;
-    host.register_step::<crate::workflows::primitives::CreateK8sSecret>().await;
-    host.register_step::<crate::workflows::primitives::EnableVaultAuth>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultAuthConfig>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultPolicy>().await;
-    host.register_step::<crate::workflows::primitives::WriteVaultRole>().await;
-    host.register_step::<crate::workflows::primitives::SeedKVPath>().await;
-    host.register_step::<crate::workflows::primitives::WriteKVPath>().await;
-    host.register_step::<crate::workflows::primitives::CollectCredentials>().await;
-    host.register_step::<crate::workflows::primitives::EnsureOpenSearchML>().await;
-    host.register_step::<crate::workflows::primitives::InjectOpenSearchModelId>().await;
+    host.register_step::<crate::workflows::primitives::ApplyManifest>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WaitForRollout>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CreatePGRole>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CreatePGDatabase>()
+        .await;
+    host.register_step::<crate::workflows::primitives::EnsureNamespace>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CreateK8sSecret>()
+        .await;
+    host.register_step::<crate::workflows::primitives::EnableVaultAuth>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultAuthConfig>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultPolicy>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteVaultRole>()
+        .await;
+    host.register_step::<crate::workflows::primitives::SeedKVPath>()
+        .await;
+    host.register_step::<crate::workflows::primitives::WriteKVPath>()
+        .await;
+    host.register_step::<crate::workflows::primitives::CollectCredentials>()
+        .await;
+    host.register_step::<crate::workflows::primitives::EnsureOpenSearchML>()
+        .await;
+    host.register_step::<crate::workflows::primitives::InjectOpenSearchModelId>()
+        .await;
 
     // Steps unique to up
     host.register_step::<steps::EnsureCilium>().await;
@@ -30,6 +45,7 @@ pub async fn register(host: &wfe::WorkflowHost) {
     host.register_step::<steps::EnsureTLSCert>().await;
     host.register_step::<steps::EnsureTLSSecret>().await;
     host.register_step::<steps::BootstrapGitea>().await;
+    host.register_step::<steps::MintVpnPreAuthKeys>().await;
     host.register_step::<steps::PrintURLs>().await;
 
     // Steps shared from seed workflow

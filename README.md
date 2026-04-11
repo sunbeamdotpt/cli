@@ -96,7 +96,7 @@ sunbeam up                      # Full cluster bring-up
 sunbeam status                  # Pod health across all namespaces
 sunbeam status ory              # Scoped to namespace
 sunbeam apply                   # Build + apply all manifests
-sunbeam apply lasuite           # Apply single namespace
+sunbeam apply ory               # Apply single namespace
 sunbeam logs ory/kratos         # Stream logs
 sunbeam logs ory/kratos -f      # Follow mode
 sunbeam restart                 # Rolling restart all services

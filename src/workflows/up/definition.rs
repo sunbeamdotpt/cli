@@ -5,13 +5,12 @@ use wfe_core::builder::WorkflowBuilder;
 use wfe_core::models::WorkflowDefinition;
 
 use super::steps;
+use crate::workflows::primitives::kv_service_configs;
 use crate::workflows::primitives::{
     ApplyManifest, CollectCredentials, CreateK8sSecret, CreatePGDatabase, CreatePGRole,
-    EnableVaultAuth, EnsureNamespace, EnsureOpenSearchML, InjectOpenSearchModelId,
-    SeedKVPath, WaitForRollout, WriteKVPath,
-    WriteVaultAuthConfig, WriteVaultPolicy, WriteVaultRole,
+    EnableVaultAuth, EnsureNamespace, EnsureOpenSearchML, InjectOpenSearchModelId, SeedKVPath,
+    WaitForRollout, WriteKVPath, WriteVaultAuthConfig, WriteVaultPolicy, WriteVaultRole,
 };
-use crate::workflows::primitives::kv_service_configs;
 use crate::workflows::seed::steps::postgres::pg_db_map;
 
 /// Build the up workflow definition.
@@ -278,6 +277,14 @@ pub fn build() -> WorkflowDefinition {
 
         .then::<InjectOpenSearchModelId>()
         .name("inject-opensearch-model-id")
+
+        // ── Phase 9: VPN pre-auth keys (mint or skip) ─────────────────
+        // Runs after headscale has been applied (phase 5) and the ACL
+        // ConfigMap has been loaded. Idempotent: no-op if both the
+        // router Secret and the user config already have a key.
+        .then::<steps::MintVpnPreAuthKeys>()
+        .name("mint-vpn-preauth-keys")
+
         .then::<steps::PrintURLs>()
         .name("print-urls")
         .end_workflow()
@@ -293,7 +300,11 @@ mod tests {
         let def = build();
         assert_eq!(def.id, "up");
         assert_eq!(def.version, 2);
-        assert!(def.steps.len() > 20, "expected >20 steps, got {}", def.steps.len());
+        assert!(
+            def.steps.len() > 20,
+            "expected >20 steps, got {}",
+            def.steps.len()
+        );
     }
 
     #[test]
@@ -314,22 +325,31 @@ mod tests {
     #[test]
     fn test_apply_manifest_steps_have_config() {
         let def = build();
-        let apply_steps: Vec<_> = def.steps.iter()
+        let apply_steps: Vec<_> = def
+            .steps
+            .iter()
             .filter(|s| s.step_type.contains("ApplyManifest"))
             .collect();
         assert!(!apply_steps.is_empty(), "should have ApplyManifest steps");
         for s in &apply_steps {
-            let config = s.step_config.as_ref()
+            let config = s
+                .step_config
+                .as_ref()
                 .unwrap_or_else(|| panic!("ApplyManifest step {:?} missing config", s.name));
-            assert!(config.get("namespace").is_some(),
-                "ApplyManifest step {:?} missing namespace in config", s.name);
+            assert!(
+                config.get("namespace").is_some(),
+                "ApplyManifest step {:?} missing namespace in config",
+                s.name
+            );
         }
     }
 
     #[test]
     fn test_wait_for_rollout_steps_have_config() {
         let def = build();
-        let rollout_steps: Vec<_> = def.steps.iter()
+        let rollout_steps: Vec<_> = def
+            .steps
+            .iter()
             .filter(|s| s.step_type.contains("WaitForRollout"))
             .collect();
         assert_eq!(rollout_steps.len(), 3, "should have 3 WaitForRollout steps");
@@ -343,12 +363,21 @@ mod tests {
     #[test]
     fn test_has_parallel_containers() {
         let def = build();
-        let seq_steps: Vec<_> = def.steps.iter()
+        let seq_steps: Vec<_> = def
+            .steps
+            .iter()
             .filter(|s| s.step_type.contains("SequenceStep"))
             .collect();
-        assert!(seq_steps.len() >= 4, "expected >=4 parallel blocks, got {}", seq_steps.len());
+        assert!(
+            seq_steps.len() >= 4,
+            "expected >=4 parallel blocks, got {}",
+            seq_steps.len()
+        );
         for s in &seq_steps {
-            assert!(!s.children.is_empty(), "parallel container should have children");
+            assert!(
+                !s.children.is_empty(),
+                "parallel container should have children"
+            );
         }
     }
 
@@ -360,21 +389,36 @@ mod tests {
             if s.step_type.contains("SequenceStep") {
                 continue;
             }
-            assert!(s.name.is_some(), "step {} ({}) has no name", s.id, s.step_type);
+            assert!(
+                s.name.is_some(),
+                "step {} ({}) has no name",
+                s.id,
+                s.step_type
+            );
         }
     }
 
     #[test]
     fn test_cert_branch_has_chained_outcomes() {
         let def = build();
-        let tls_cert = def.steps.iter()
+        let tls_cert = def
+            .steps
+            .iter()
             .find(|s| s.name.as_deref() == Some("ensure-tls-cert"))
             .expect("should have ensure-tls-cert step");
-        assert!(!tls_cert.outcomes.is_empty(), "ensure-tls-cert should wire to ensure-tls-secret");
+        assert!(
+            !tls_cert.outcomes.is_empty(),
+            "ensure-tls-cert should wire to ensure-tls-secret"
+        );
 
-        let tls_secret = def.steps.iter()
+        let tls_secret = def
+            .steps
+            .iter()
             .find(|s| s.name.as_deref() == Some("ensure-tls-secret"))
             .expect("should have ensure-tls-secret step");
-        assert!(!tls_secret.outcomes.is_empty(), "ensure-tls-secret should wire to apply-cert-manager");
+        assert!(
+            !tls_secret.outcomes.is_empty(),
+            "ensure-tls-secret should wire to apply-cert-manager"
+        );
     }
 }

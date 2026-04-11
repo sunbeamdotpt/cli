@@ -6,17 +6,17 @@ pub mod finalize;
 pub mod infrastructure;
 pub mod platform;
 pub mod vault;
+pub mod vpn;
 
 // Steps unique to the up workflow
 pub use certificates::{EnsureTLSCert, EnsureTLSSecret};
 pub use finalize::PrintURLs;
 pub use infrastructure::{EnsureBuildKit, EnsureCilium};
 pub use platform::BootstrapGitea;
+pub use vpn::MintVpnPreAuthKeys;
 
 // Steps shared from seed workflow (data-struct-agnostic, reusable)
 pub use crate::workflows::seed::steps::{
-    FindOpenBaoPod, WaitPodRunning, InitOrUnsealOpenBao,
-    WaitForPostgres,
-    ConfigureDatabaseEngine,
-    SyncGiteaAdminPassword,
+    ConfigureDatabaseEngine, FindOpenBaoPod, InitOrUnsealOpenBao, SyncGiteaAdminPassword,
+    WaitForPostgres, WaitPodRunning,
 };

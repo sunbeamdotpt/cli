@@ -34,7 +34,8 @@ pub(crate) fn build_s3_json(access_key: &str, secret_key: &str) -> String {
             "credentials": [{"accessKey": access_key, "secretKey": secret_key}],
             "actions": ["Admin", "Read", "Write", "List", "Tagging"]
         }]
-    }).to_string()
+    })
+    .to_string()
 }
 
 // -- SyncGiteaAdminPassword -------------------------------------------------
@@ -47,17 +48,15 @@ pub struct SyncGiteaAdminPassword;
 
 #[async_trait::async_trait]
 impl StepBody for SyncGiteaAdminPassword {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
         if json_bool(data, "skip_seed") {
             return Ok(ExecutionResult::next());
         }
 
-        let creds: HashMap<String, String> = data.get("creds")
+        let creds: HashMap<String, String> = data
+            .get("creds")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
@@ -70,19 +69,33 @@ impl StepBody for SyncGiteaAdminPassword {
         let gitea_pods: Api<Pod> = Api::namespaced(client.clone(), "devtools");
         let lp = ListParams::default().labels("app.kubernetes.io/name=gitea");
         if let Ok(pod_list) = gitea_pods.list(&lp).await {
-            if let Some(gitea_pod) = pod_list.items.first().and_then(|p| p.metadata.name.as_deref()) {
+            if let Some(gitea_pod) = pod_list
+                .items
+                .first()
+                .and_then(|p| p.metadata.name.as_deref())
+            {
                 match k::kube_exec(
-                    "devtools", gitea_pod,
+                    "devtools",
+                    gitea_pod,
                     &[
-                        "gitea", "admin", "user", "change-password",
-                        "--username", GITEA_ADMIN_USER,
-                        "--password", &gitea_admin_pass,
+                        "gitea",
+                        "admin",
+                        "user",
+                        "change-password",
+                        "--username",
+                        GITEA_ADMIN_USER,
+                        "--password",
+                        &gitea_admin_pass,
                         "--must-change-password=false",
                     ],
                     Some("gitea"),
-                ).await {
+                )
+                .await
+                {
                     Ok((0, _)) => ok("Gitea admin password synced to Gitea DB."),
-                    Ok((_, stderr)) => warn(&format!("Could not sync Gitea admin password: {stderr}")),
+                    Ok((_, stderr)) => {
+                        warn(&format!("Could not sync Gitea admin password: {stderr}"))
+                    }
                     Err(e) => warn(&format!("Could not sync Gitea admin password: {e}")),
                 }
             } else {
@@ -122,13 +135,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_gitea_admin_password_skip_seed() {
-        let instance = run_step::<SyncGiteaAdminPassword>(serde_json::json!({ "skip_seed": true })).await;
+        let instance =
+            run_step::<SyncGiteaAdminPassword>(serde_json::json!({ "skip_seed": true })).await;
         assert_eq!(instance.status, WorkflowStatus::Complete);
     }
 
     #[tokio::test]
     async fn test_sync_gitea_admin_password_empty() {
-        let instance = run_step::<SyncGiteaAdminPassword>(serde_json::json!({ "skip_seed": false })).await;
+        let instance =
+            run_step::<SyncGiteaAdminPassword>(serde_json::json!({ "skip_seed": false })).await;
         assert_eq!(instance.status, WorkflowStatus::Complete);
     }
 

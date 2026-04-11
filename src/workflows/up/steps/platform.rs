@@ -11,12 +11,10 @@ pub struct BootstrapGitea;
 
 #[async_trait::async_trait]
 impl StepBody for BootstrapGitea {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         step("Gitea bootstrap...");
-        crate::gitea::cmd_bootstrap().await
+        crate::gitea::cmd_bootstrap()
+            .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
         Ok(ExecutionResult::next())
     }
@@ -27,5 +25,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bootstrap_gitea_is_default() { let _ = BootstrapGitea::default(); }
+    fn bootstrap_gitea_is_default() {
+        let _ = BootstrapGitea::default();
+    }
 }

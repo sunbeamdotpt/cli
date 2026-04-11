@@ -23,13 +23,14 @@ pub struct CreatePGRole;
 
 #[async_trait::async_trait]
 impl StepBody for CreatePGRole {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -38,18 +39,24 @@ impl StepBody for CreatePGRole {
             _ => return Ok(ExecutionResult::next()),
         };
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("CreatePGRole: missing step_config"))?;
-        let username = config.get("username")
+        let username = config
+            .get("username")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("CreatePGRole: missing username in step_config"))?;
 
         let sql = ensure_user_sql(username);
         let _ = k::kube_exec(
-            "data", pg_pod,
+            "data",
+            pg_pod,
             &["psql", "-U", "postgres", "-c", &sql],
             Some("postgres"),
-        ).await;
+        )
+        .await;
 
         ok(&format!("PG role: {username}"));
         Ok(ExecutionResult::next())

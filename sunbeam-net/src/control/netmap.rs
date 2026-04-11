@@ -8,11 +8,22 @@ use crate::proto::types::{DerpMap, MapRequest, MapResponse, Node};
 /// The map protocol uses HTTP/2 server streaming: the client sends a single
 /// `MapRequest` and the server responds with a sequence of length-prefixed
 /// JSON messages on the same response body.
+///
+/// `MapStream` takes ownership of the originating [`ControlClient`] via
+/// `_client_keep_alive`. This is load-bearing: `h2` tracks active
+/// `SendRequest` handles on the connection, and once the last one is
+/// dropped the client issues a graceful `GoAway` and tears the
+/// connection down, which closes *every* stream including this one.
+/// Holding the `ControlClient` here pins the `SendRequest` (and the
+/// connection driver task it owns) for the lifetime of the map stream.
 pub struct MapStream {
     body: RecvStream,
     buf: bytes::BytesMut,
     /// Whether we have received the first (full) message yet.
     first: bool,
+    /// Pin the h2 connection open for as long as we're reading updates.
+    /// Not read directly — the field exists purely for its Drop timing.
+    _client_keep_alive: super::client::ControlClient,
 }
 
 impl std::fmt::Debug for MapStream {
@@ -101,6 +112,7 @@ impl MapStream {
         }
 
         let raw = self.buf.split_to(msg_len);
+        let is_first = self.first;
         if self.first {
             self.first = false;
         }
@@ -116,20 +128,47 @@ impl MapStream {
             raw.to_vec()
         };
 
+        // Preview the whole JSON at trace level. At debug level we only
+        // log sizes + which fields are populated so logs don't drown in
+        // netmap bytes under normal load.
+        if tracing::enabled!(tracing::Level::TRACE) {
+            tracing::trace!(
+                "map frame: {} bytes json, body: {}",
+                json_bytes.len(),
+                String::from_utf8_lossy(&json_bytes)
+            );
+        }
+
         let resp: MapResponse = serde_json::from_slice(&json_bytes)?;
-        Ok(Some(classify_response(resp)))
+        tracing::debug!(
+            "map fields present: node={} peers={} peers_changed={} peers_removed={} derp_map={}",
+            resp.node.is_some(),
+            resp.peers.is_some(),
+            resp.peers_changed.is_some(),
+            resp.peers_removed.is_some(),
+            resp.derp_map.is_some(),
+        );
+        Ok(Some(classify_response(resp, is_first)))
     }
 }
 
 /// Classify a [`MapResponse`] into a [`MapUpdate`] variant based on which
 /// fields are populated.
-fn classify_response(resp: MapResponse) -> MapUpdate {
-    // Full map: has node + peers.
-    if let Some(self_node) = resp.node {
-        if let Some(peers) = resp.peers {
+///
+/// Only the first frame in a stream is a full snapshot — Headscale always
+/// includes `Node` in that frame and usually (but not always) includes
+/// `Peers`. Subsequent frames are deltas: peer-change deltas carry
+/// `PeersChanged`/`PeersRemoved`, and self-info deltas (LastSeen bumps,
+/// tag updates, cap version changes) carry only `Node` with no peer
+/// fields. Treating those self-info frames as "full snapshot with zero
+/// peers" wipes the route table, so post-first `Node`-only frames are
+/// mapped to `KeepAlive` here.
+fn classify_response(resp: MapResponse, is_first: bool) -> MapUpdate {
+    if is_first {
+        if let Some(self_node) = resp.node {
             return MapUpdate::Full {
                 self_node,
-                peers,
+                peers: resp.peers.unwrap_or_default(),
                 derp_map: resp.derp_map,
             };
         }
@@ -145,7 +184,9 @@ fn classify_response(resp: MapResponse) -> MapUpdate {
         return MapUpdate::PeersRemoved(removed);
     }
 
-    // Everything else is a keep-alive.
+    // Post-first frames that only carry our own Node (LastSeen/tag/cap
+    // updates) aren't a full resync — treat them as a keep-alive so the
+    // daemon doesn't clobber the peer table.
     MapUpdate::KeepAlive
 }
 
@@ -167,6 +208,7 @@ impl super::client::ControlClient {
         keys: &crate::keys::NodeKeys,
         hostname: &str,
         endpoints: Option<Vec<String>>,
+        preferred_derp: Option<u32>,
     ) -> crate::Result<()> {
         let req = MapRequest {
             version: 74,
@@ -175,17 +217,22 @@ impl super::client::ControlClient {
             stream: false,
             omit_peers: true,
             read_only: false,
-            hostinfo: super::register::build_hostinfo(hostname),
+            hostinfo: super::register::build_hostinfo(hostname, preferred_derp),
             endpoints,
         };
         // Lite update returns an empty body.
         self.post_json_no_response("/machine/map", &req).await
     }
 
+    /// Start the map streaming session and return a `MapStream` that owns
+    /// the `ControlClient` — dropping the client early would close the h2
+    /// connection and end the stream, so the client is pinned inside the
+    /// returned `MapStream` until the caller is done reading.
     pub async fn map_stream(
-        &mut self,
+        mut self,
         keys: &crate::keys::NodeKeys,
         hostname: &str,
+        preferred_derp: Option<u32>,
     ) -> crate::Result<MapStream> {
         let req = MapRequest {
             version: 74,
@@ -194,7 +241,7 @@ impl super::client::ControlClient {
             stream: true,
             omit_peers: false,
             read_only: false,
-            hostinfo: super::register::build_hostinfo(hostname),
+            hostinfo: super::register::build_hostinfo(hostname, preferred_derp),
             endpoints: None,
         };
 
@@ -233,6 +280,7 @@ impl super::client::ControlClient {
             body,
             buf: bytes::BytesMut::new(),
             first: true,
+            _client_keep_alive: self,
         })
     }
 }
@@ -261,6 +309,7 @@ mod tests {
                 device_model: None,
                 frontend_log_id: None,
                 backend_log_id: None,
+                net_info: None,
             },
             name: "test.example.com".to_string(),
             online: Some(true),
@@ -282,7 +331,7 @@ mod tests {
             collection_name: None,
         };
 
-        let update = classify_response(resp);
+        let update = classify_response(resp, true);
         match update {
             MapUpdate::Full {
                 self_node,
@@ -299,6 +348,56 @@ mod tests {
     }
 
     #[test]
+    fn test_map_update_classify_full_with_no_peers() {
+        // Regression for prod bug #35: Headscale serves a full snapshot
+        // with `Peers` omitted (null) when the tailnet has no other
+        // nodes yet. We still need to treat it as Full so the daemon
+        // can reach Ready state instead of reconnecting forever.
+        let resp = MapResponse {
+            node: Some(sample_node(1, "nodekey:aa")),
+            peers: None,
+            peers_changed: None,
+            peers_removed: None,
+            derp_map: None,
+            dns_config: None,
+            packet_filter: None,
+            domain: None,
+            collection_name: None,
+        };
+        match classify_response(resp, true) {
+            MapUpdate::Full { peers, self_node, .. } => {
+                assert_eq!(self_node.id, 1);
+                assert!(peers.is_empty());
+            }
+            other => panic!("expected Full with empty peers, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_map_update_post_first_node_only_is_keepalive() {
+        // Regression for prod bug #35: after the first full snapshot,
+        // Headscale sends self-info deltas (LastSeen bumps, tag updates,
+        // SrcIPs refreshes) containing only `Node` and no peer fields.
+        // Treating those as Full with empty peers wipes the route table
+        // and leaves the daemon convinced there are zero peers even
+        // though the subnet router is still online.
+        let resp = MapResponse {
+            node: Some(sample_node(1, "nodekey:aa")),
+            peers: None,
+            peers_changed: None,
+            peers_removed: None,
+            derp_map: None,
+            dns_config: None,
+            packet_filter: None,
+            domain: None,
+            collection_name: None,
+        };
+        let update = classify_response(resp, false);
+        assert!(matches!(update, MapUpdate::KeepAlive),
+            "post-first node-only frame must not be reclassified as Full: got {update:?}");
+    }
+
+    #[test]
     fn test_map_update_classify_delta() {
         let resp = MapResponse {
             node: None,
@@ -312,7 +411,7 @@ mod tests {
             collection_name: None,
         };
 
-        let update = classify_response(resp);
+        let update = classify_response(resp, false);
         match update {
             MapUpdate::PeersChanged(changed) => {
                 assert_eq!(changed.len(), 1);
@@ -336,7 +435,7 @@ mod tests {
             collection_name: None,
         };
 
-        let update = classify_response(resp);
+        let update = classify_response(resp, false);
         match update {
             MapUpdate::PeersRemoved(removed) => {
                 assert_eq!(removed, vec!["nodekey:dd"]);
@@ -359,7 +458,7 @@ mod tests {
             collection_name: None,
         };
 
-        let update = classify_response(resp);
+        let update = classify_response(resp, false);
         assert!(matches!(update, MapUpdate::KeepAlive));
     }
 }

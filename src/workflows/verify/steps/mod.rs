@@ -3,13 +3,6 @@
 mod verify;
 
 pub use verify::{
-    FindOpenBaoPod,
-    GetRootToken,
-    WriteSentinel,
-    ApplyVaultAuth,
-    ApplyVaultStaticSecret,
-    WaitForSync,
-    CheckSecretValue,
-    Cleanup,
-    PrintResult,
+    ApplyVaultAuth, ApplyVaultStaticSecret, CheckSecretValue, Cleanup, FindOpenBaoPod,
+    GetRootToken, PrintResult, WaitForSync, WriteSentinel,
 };

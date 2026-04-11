@@ -5,11 +5,11 @@
 
 mod apply_manifest;
 mod collect_credentials;
-pub mod kv_service_configs;
 mod create_k8s_secret;
 mod create_pg_database;
 mod create_pg_role;
 mod ensure_namespace;
+pub mod kv_service_configs;
 mod opensearch_ml;
 mod seed_kv_path;
 mod vault_auth;

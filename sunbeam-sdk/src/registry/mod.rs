@@ -19,6 +19,12 @@ const ANN_DB_NAME: &str = "sunbeam.pt/db-name";
 const ANN_BUILD_TARGET: &str = "sunbeam.pt/build-target";
 const ANN_DEPENDS_ON: &str = "sunbeam.pt/depends-on";
 const ANN_HEALTH_CHECK: &str = "sunbeam.pt/health-check";
+const ANN_POD_SELECTOR: &str = "sunbeam.pt/pod-selector";
+const ANN_SHELL_COMMAND: &str = "sunbeam.pt/shell-command";
+/// Comma-separated list of destination ports this service speaks (e.g.
+/// `"5432"`, `"80,443"`). Used to tighten the SOCKS5 proxy's allow-port
+/// list so the VPN only exposes the ports actually needed for dogfood.
+const ANN_PORTS: &str = "sunbeam.pt/ports";
 
 // ── Core types ───────────────────────────────────────────────────────
 
@@ -37,6 +43,17 @@ pub struct ServiceDefinition {
     pub health: HealthCheck,
     pub virtual_service: bool,
     pub resource_kind: String,
+    /// Label selector used to find the pod backing this service.
+    /// When absent, callers fall back to `app=<first deployment>`.
+    pub pod_selector: Option<String>,
+    /// Command to exec for an interactive shell (e.g. `psql -U postgres`).
+    /// When absent, callers fall back to `/bin/sh`.
+    pub shell_command: Option<String>,
+    /// TCP destination ports this service listens on inside the cluster.
+    /// Populated from the `sunbeam.pt/ports` annotation (comma-separated).
+    /// Drives the SOCKS5 proxy's allow-port list — the VPN only needs to
+    /// permit ports that real services actually use.
+    pub ports: Vec<u16>,
 }
 
 /// Database credentials for a service's CNPG-managed database.
@@ -209,6 +226,26 @@ impl ServiceRegistry {
         vec![]
     }
 
+    /// Deduplicated set of destination ports across all services,
+    /// sorted ascending. Used to tighten the SOCKS5 proxy's allow-port
+    /// list: the VPN only permits CONNECT to ports that at least one
+    /// registered service declared via `sunbeam.pt/ports`.
+    ///
+    /// Infrastructure ports the CLI itself needs (DNS, kube-apiserver)
+    /// are NOT folded in here — callers layer them on explicitly so
+    /// that a missing/stale registry can't silently lock us out of the
+    /// control plane.
+    pub fn aggregated_ports(&self) -> Vec<u16> {
+        let mut ports: Vec<u16> = self
+            .services
+            .values()
+            .flat_map(|s| s.ports.iter().copied())
+            .collect();
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    }
+
     /// Unique namespaces across all services, sorted.
     pub fn namespaces(&self) -> Vec<&str> {
         let mut ns: Vec<&str> = self.services.values().map(|s| s.namespace.as_str()).collect();
@@ -353,6 +390,16 @@ where
             deployments.push(resource_name.to_string());
         }
 
+        let pod_selector = ann(ANN_POD_SELECTOR).filter(|s| !s.is_empty());
+        let shell_command = ann(ANN_SHELL_COMMAND).filter(|s| !s.is_empty());
+        let ports: Vec<u16> = ann(ANN_PORTS)
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|p| p.trim().parse::<u16>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         services.insert(
             service_name.clone(),
             ServiceDefinition {
@@ -368,6 +415,9 @@ where
                 health,
                 virtual_service: is_virtual,
                 resource_kind: kind.to_string(),
+                pod_selector,
+                shell_command,
+                ports,
             },
         );
     }
@@ -401,6 +451,9 @@ mod tests {
                 health: HealthCheck::PodReady,
                 virtual_service: false,
                 resource_kind: "Deployment".into(),
+                pod_selector: None,
+                shell_command: None,
+                ports: vec![],
             },
         );
         services.insert(
@@ -421,6 +474,9 @@ mod tests {
                 health: HealthCheck::PodReady,
                 virtual_service: false,
                 resource_kind: "Deployment".into(),
+                pod_selector: None,
+                shell_command: None,
+                ports: vec![],
             },
         );
         services.insert(
@@ -438,6 +494,9 @@ mod tests {
                 health: HealthCheck::PodReady,
                 virtual_service: false,
                 resource_kind: "Deployment".into(),
+                pod_selector: None,
+                shell_command: None,
+                ports: vec![],
             },
         );
         services.insert(
@@ -455,6 +514,9 @@ mod tests {
                 health: HealthCheck::None,
                 virtual_service: true,
                 resource_kind: "ConfigMap".into(),
+                pod_selector: None,
+                shell_command: None,
+                ports: vec![],
             },
         );
         ServiceRegistry { services }
@@ -584,5 +646,62 @@ mod tests {
         assert!(reg.get("anything").is_none());
         assert!(reg.resolve("anything").is_empty());
         assert!(reg.namespaces().is_empty());
+    }
+
+    fn svc_with_ports(name: &str, ports: Vec<u16>) -> ServiceDefinition {
+        ServiceDefinition {
+            name: name.into(),
+            display_name: name.into(),
+            category: Category::Platform,
+            namespace: "default".into(),
+            deployments: vec![],
+            kv_path: None,
+            database: None,
+            build_target: None,
+            depends_on: vec![],
+            health: HealthCheck::None,
+            virtual_service: false,
+            resource_kind: "Deployment".into(),
+            pod_selector: None,
+            shell_command: None,
+            ports,
+        }
+    }
+
+    #[test]
+    fn aggregated_ports_is_empty_when_nothing_declared() {
+        let reg = ServiceRegistry::new();
+        assert!(reg.aggregated_ports().is_empty());
+    }
+
+    #[test]
+    fn aggregated_ports_dedupes_and_sorts() {
+        let mut reg = ServiceRegistry::new();
+        reg.services
+            .insert("a".into(), svc_with_ports("a", vec![443, 80]));
+        reg.services
+            .insert("b".into(), svc_with_ports("b", vec![5432]));
+        reg.services
+            .insert("c".into(), svc_with_ports("c", vec![443, 9200]));
+        assert_eq!(reg.aggregated_ports(), vec![80, 443, 5432, 9200]);
+    }
+
+    #[test]
+    fn aggregated_ports_ignores_services_without_ports() {
+        let mut reg = ServiceRegistry::new();
+        reg.services
+            .insert("a".into(), svc_with_ports("a", vec![80]));
+        reg.services
+            .insert("b".into(), svc_with_ports("b", vec![]));
+        assert_eq!(reg.aggregated_ports(), vec![80]);
+    }
+
+    #[test]
+    fn mock_registry_has_no_ports_by_default() {
+        // mock_registry pre-dates Phase 6 — make sure the migration path
+        // stays explicit: old fixtures should end up with empty port sets
+        // until annotations are added.
+        let reg = mock_registry();
+        assert!(reg.aggregated_ports().is_empty());
     }
 }

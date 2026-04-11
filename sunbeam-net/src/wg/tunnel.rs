@@ -335,6 +335,7 @@ mod tests {
             device_model: None,
             frontend_log_id: None,
             backend_log_id: None,
+            net_info: None,
         }
     }
 

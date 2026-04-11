@@ -11,8 +11,8 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::openbao::BaoClient;
 use crate::output::ok;
 use crate::secrets::{
-    self, gen_dkim_key_pair, gen_fernet_key, rand_token, rand_token_n, scw_config,
-    GITEA_ADMIN_USER, SMTP_URI,
+    self, GITEA_ADMIN_USER, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_token, rand_token_n,
+    scw_config,
 };
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -69,13 +69,14 @@ pub struct SeedKVPath;
 
 #[async_trait::async_trait]
 impl StepBody for SeedKVPath {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -88,32 +89,48 @@ impl StepBody for SeedKVPath {
             None => return Ok(ExecutionResult::next()),
         };
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("SeedKVPath: missing step_config"))?;
-        let service = config.get("service").and_then(|v| v.as_str())
+        let service = config
+            .get("service")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("SeedKVPath: missing service"))?;
-        let fields = config.get("fields").and_then(|v| v.as_array())
+        let fields = config
+            .get("fields")
+            .and_then(|v| v.as_array())
             .ok_or_else(|| step_err("SeedKVPath: missing fields"))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200).await
+        let pf = secrets::port_forward("data", ob_pod, 8200)
+            .await
             .map_err(|e| step_err(e.to_string()))?;
-        let bao = BaoClient::with_token(
-            &format!("http://127.0.0.1:{}", pf.local_port),
-            root_token,
-        );
+        let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
 
         // Handle DKIM special case: read existing keys before get_or_create
         let mut dkim_private = String::new();
         let mut dkim_public = String::new();
-        let has_dkim = fields.iter().any(|f|
-            f.get("generator").and_then(|g| g.as_str()).map_or(false, |g| g == "dkim_private" || g == "dkim_public")
-        );
+        let has_dkim = fields.iter().any(|f| {
+            f.get("generator")
+                .and_then(|g| g.as_str())
+                .map_or(false, |g| g == "dkim_private" || g == "dkim_public")
+        });
         if has_dkim {
-            let existing = bao.kv_get("secret", service).await
+            let existing = bao
+                .kv_get("secret", service)
+                .await
                 .map_err(|e| step_err(e.to_string()))?
                 .unwrap_or_default();
-            if existing.get("dkim-private-key").filter(|v| !v.is_empty()).is_some() {
-                dkim_private = existing.get("dkim-private-key").cloned().unwrap_or_default();
+            if existing
+                .get("dkim-private-key")
+                .filter(|v| !v.is_empty())
+                .is_some()
+            {
+                dkim_private = existing
+                    .get("dkim-private-key")
+                    .cloned()
+                    .unwrap_or_default();
                 dkim_public = existing.get("dkim-public-key").cloned().unwrap_or_default();
             } else {
                 let (priv_key, pub_key) = gen_dkim_key_pair();
@@ -123,38 +140,40 @@ impl StepBody for SeedKVPath {
         }
 
         // Build field generators, resolving from_creds references from workflow data
-        let generators: Vec<(&str, Box<dyn Fn() -> String + Send + Sync>)> = fields.iter()
+        let generators: Vec<(&str, Box<dyn Fn() -> String + Send + Sync>)> = fields
+            .iter()
             .filter_map(|f| {
                 let key = f.get("key")?.as_str()?;
                 let gen_type = f.get("generator")?.as_str()?;
 
-                let genfn: Box<dyn Fn() -> String + Send + Sync> = if let Some(cred_key) = gen_type.strip_prefix("from_creds:") {
-                    // Read from another service's output in workflow data
-                    let source_service = cred_key.split('.').next().unwrap_or("");
-                    let source_field = cred_key.split('.').nth(1).unwrap_or(cred_key);
-                    let val = data.get(&format!("creds_{source_service}"))
-                        .and_then(|v| v.get(source_field))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Box::new(move || val.clone())
-                } else if gen_type == "dkim_private" {
-                    let v = dkim_private.clone();
-                    Box::new(move || v.clone())
-                } else if gen_type == "dkim_public" {
-                    let v = dkim_public.clone();
-                    Box::new(move || v.clone())
-                } else {
-                    make_generator(gen_type)
-                };
+                let genfn: Box<dyn Fn() -> String + Send + Sync> =
+                    if let Some(cred_key) = gen_type.strip_prefix("from_creds:") {
+                        // Read from another service's output in workflow data
+                        let source_service = cred_key.split('.').next().unwrap_or("");
+                        let source_field = cred_key.split('.').nth(1).unwrap_or(cred_key);
+                        let val = data
+                            .get(&format!("creds_{source_service}"))
+                            .and_then(|v| v.get(source_field))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        Box::new(move || val.clone())
+                    } else if gen_type == "dkim_private" {
+                        let v = dkim_private.clone();
+                        Box::new(move || v.clone())
+                    } else if gen_type == "dkim_public" {
+                        let v = dkim_public.clone();
+                        Box::new(move || v.clone())
+                    } else {
+                        make_generator(gen_type)
+                    };
 
                 Some((key, genfn))
             })
             .collect();
 
-        let gen_refs: Vec<(&str, &(dyn Fn() -> String + Send + Sync))> = generators.iter()
-            .map(|(k, g)| (*k, g.as_ref()))
-            .collect();
+        let gen_refs: Vec<(&str, &(dyn Fn() -> String + Send + Sync))> =
+            generators.iter().map(|(k, g)| (*k, g.as_ref())).collect();
 
         let mut dirty_paths: HashSet<String> = HashSet::new();
         let result_map = secrets::get_or_create(&bao, service, &gen_refs, &mut dirty_paths)
@@ -162,18 +181,26 @@ impl StepBody for SeedKVPath {
             .map_err(|e| step_err(format!("SeedKVPath({service}): {e}")))?;
 
         let is_dirty = dirty_paths.contains(service);
-        let kv_json = serde_json::to_string(&result_map)
-            .map_err(|e| step_err(e.to_string()))?;
+        let kv_json = serde_json::to_string(&result_map).map_err(|e| step_err(e.to_string()))?;
 
-        ok(&format!("KV seed: {service}{}", if is_dirty { " (new)" } else { "" }));
+        ok(&format!(
+            "KV seed: {service}{}",
+            if is_dirty { " (new)" } else { "" }
+        ));
 
         let mut output = serde_json::Map::new();
         output.insert(
             format!("creds_{service}"),
             serde_json::to_value(&result_map).unwrap_or_default(),
         );
-        output.insert(format!("kv_data_{service}"), serde_json::Value::String(kv_json));
-        output.insert(format!("dirty_{service}"), serde_json::Value::Bool(is_dirty));
+        output.insert(
+            format!("kv_data_{service}"),
+            serde_json::Value::String(kv_json),
+        );
+        output.insert(
+            format!("dirty_{service}"),
+            serde_json::Value::Bool(is_dirty),
+        );
 
         let mut exec_result = ExecutionResult::next();
         exec_result.output_data = Some(serde_json::Value::Object(output));
@@ -200,13 +227,13 @@ mod tests {
     #[test]
     fn make_generator_static() {
         let genfn = make_generator("static:hello");
-        assert_eq!(genfn(),"hello");
+        assert_eq!(genfn(), "hello");
     }
 
     #[test]
     fn make_generator_empty_static() {
         let genfn = make_generator("static:");
-        assert_eq!(genfn(),"");
+        assert_eq!(genfn(), "");
     }
 
     #[test]
@@ -219,6 +246,6 @@ mod tests {
     #[test]
     fn make_generator_unknown_returns_empty() {
         let genfn = make_generator("unknown");
-        assert_eq!(genfn(),"");
+        assert_eq!(genfn(), "");
     }
 }

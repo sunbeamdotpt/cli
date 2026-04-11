@@ -75,7 +75,10 @@ impl BaoClient {
                     ServerStatus::RECOVERY => (true, true),
                     ServerStatus::UNINITIALIZED | ServerStatus::UNKNOWN => (false, true),
                 };
-                Ok(SealStatusResponse { initialized, sealed })
+                Ok(SealStatusResponse {
+                    initialized,
+                    sealed,
+                })
             }
             Err(e) => Err(crate::error::SunbeamError::Other(format!(
                 "Failed to get seal status: {e}"
@@ -95,15 +98,14 @@ impl BaoClient {
     }
 
     pub async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
-        let resp = vaultrs::sys::unseal(
-            &self.inner,
-            Some(key.to_string()),
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| crate::error::SunbeamError::Other(format!("OpenBao unseal failed: {e}")))?;
-        Ok(UnsealResponse { sealed: resp.sealed })
+        let resp = vaultrs::sys::unseal(&self.inner, Some(key.to_string()), None, None)
+            .await
+            .map_err(|e| {
+                crate::error::SunbeamError::Other(format!("OpenBao unseal failed: {e}"))
+            })?;
+        Ok(UnsealResponse {
+            sealed: resp.sealed,
+        })
     }
 
     // ── Secrets engine management ───────────────────────────────────────
@@ -127,7 +129,9 @@ impl BaoClient {
     // ── KV v2 operations ────────────────────────────────────────────────
 
     pub async fn kv_get(&self, mount: &str, path: &str) -> Result<Option<HashMap<String, String>>> {
-        match vaultrs::kv2::read::<HashMap<String, serde_json::Value>>(&self.inner, mount, path).await {
+        match vaultrs::kv2::read::<HashMap<String, serde_json::Value>>(&self.inner, mount, path)
+            .await
+        {
             Ok(data) => {
                 let result: HashMap<String, String> = data
                     .into_iter()
@@ -161,16 +165,28 @@ impl BaoClient {
         }
     }
 
-    pub async fn kv_put(&self, mount: &str, path: &str, data: &HashMap<String, String>) -> Result<()> {
+    pub async fn kv_put(
+        &self,
+        mount: &str,
+        path: &str,
+        data: &HashMap<String, String>,
+    ) -> Result<()> {
         vaultrs::kv2::set(&self.inner, mount, path, data)
             .await
-            .map_err(|e| crate::error::SunbeamError::Other(format!("KV put {mount}/{path}: {e}")))?;
+            .map_err(|e| {
+                crate::error::SunbeamError::Other(format!("KV put {mount}/{path}: {e}"))
+            })?;
         Ok(())
     }
 
     /// Patch (merge) fields into an existing KV v2 secret.
     /// vaultrs doesn't have a patch method, so we use a raw HTTP request.
-    pub async fn kv_patch(&self, mount: &str, path: &str, data: &HashMap<String, String>) -> Result<()> {
+    pub async fn kv_patch(
+        &self,
+        mount: &str,
+        path: &str,
+        data: &HashMap<String, String>,
+    ) -> Result<()> {
         #[derive(serde::Serialize)]
         struct KvWriteRequest<'a> {
             data: &'a HashMap<String, String>,
@@ -244,7 +260,9 @@ impl BaoClient {
             req = req.header("X-Vault-Token", token);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .with_ctx(|| format!("Failed to write to {path}"))?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -278,7 +296,8 @@ impl BaoClient {
             "password": password,
             "allowed_roles": allowed_roles,
         });
-        self.write(&format!("database/config/{name}"), &data).await?;
+        self.write(&format!("database/config/{name}"), &data)
+            .await?;
         Ok(())
     }
 
@@ -296,7 +315,8 @@ impl BaoClient {
             "rotation_period": rotation_period,
             "rotation_statements": rotation_statements,
         });
-        self.write(&format!("database/static-roles/{name}"), &data).await?;
+        self.write(&format!("database/static-roles/{name}"), &data)
+            .await?;
         Ok(())
     }
 }

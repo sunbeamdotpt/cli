@@ -31,21 +31,11 @@ async fn resolve_service(name: &str) -> Result<(String, String)> {
 /// Top-level dispatcher for `sunbeam service <action>`.
 pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Result<()> {
     match action {
-        ServiceAction::Status { target } => {
-            crate::services::cmd_status(target.as_deref()).await
-        }
-        ServiceAction::Logs { target, follow } => {
-            crate::services::cmd_logs(&target, follow).await
-        }
-        ServiceAction::Get { target, output } => {
-            crate::services::cmd_get(&target, &output).await
-        }
-        ServiceAction::Restart { target } => {
-            crate::services::cmd_restart(target.as_deref()).await
-        }
-        ServiceAction::Check { target } => {
-            crate::checks::cmd_check(target.as_deref()).await
-        }
+        ServiceAction::Status { target } => crate::services::cmd_status(target.as_deref()).await,
+        ServiceAction::Logs { target, follow } => crate::services::cmd_logs(&target, follow).await,
+        ServiceAction::Get { target, output } => crate::services::cmd_get(&target, &output).await,
+        ServiceAction::Restart { target } => crate::services::cmd_restart(target.as_deref()).await,
+        ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
         ServiceAction::Deploy { target, all } => {
             if all || target.is_none() {
                 let is_production = !crate::config::active_context().ssh_host.is_empty();
@@ -55,11 +45,24 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
                 cmd_deploy(&target.unwrap(), domain, email).await
             }
         }
-        ServiceAction::Apply { namespace, apply_all, domain: apply_domain, email: apply_email } => {
+        ServiceAction::Apply {
+            namespace,
+            apply_all,
+            domain: apply_domain,
+            email: apply_email,
+        } => {
             let is_production = !crate::config::active_context().ssh_host.is_empty();
             let env_str = if is_production { "production" } else { "local" };
-            let d = if apply_domain.is_empty() { domain.to_string() } else { apply_domain };
-            let e = if apply_email.is_empty() { email.to_string() } else { apply_email };
+            let d = if apply_domain.is_empty() {
+                domain.to_string()
+            } else {
+                apply_domain
+            };
+            let e = if apply_email.is_empty() {
+                email.to_string()
+            } else {
+                apply_email
+            };
             let ns = namespace.unwrap_or_default();
 
             if is_production && ns.is_empty() && !apply_all {
@@ -81,7 +84,10 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
         }
         ServiceAction::Verify => {
             crate::output::step("Verifying VSO -> OpenBao integration...");
-            run_workflow("verify", 1, 300, |i| crate::workflows::verify::print_summary(i)).await
+            run_workflow("verify", 1, 300, |i| {
+                crate::workflows::verify::print_summary(i)
+            })
+            .await
         }
         ServiceAction::Secrets { service, action } => cmd_secrets(&service, action).await,
         ServiceAction::Shell { service } => cmd_shell(&service).await,
@@ -91,9 +97,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             container,
             command,
         } => cmd_exec(&service, container.as_deref(), &command).await,
-        ServiceAction::PortForward { service, ports } => {
-            cmd_port_forward(&service, &ports).await
-        }
+        ServiceAction::PortForward { service, ports } => cmd_port_forward(&service, &ports).await,
         ServiceAction::Scale { service, replicas } => cmd_scale(&service, replicas).await,
         ServiceAction::Top { service } => cmd_top(&service).await,
         ServiceAction::Edit { service } => cmd_edit(&service).await,
@@ -156,7 +160,9 @@ async fn cmd_deploy(target: &str, domain: &str, email: &str) -> Result<()> {
     let reg = get_registry().await?;
     let resolved = reg.resolve(target);
     if resolved.is_empty() {
-        bail!("Unknown service: '{target}'. Try 'sunbeam service deploy --all' or a service name like 'hydra'.");
+        bail!(
+            "Unknown service: '{target}'. Try 'sunbeam service deploy --all' or a service name like 'hydra'."
+        );
     }
 
     let mut namespaces: Vec<&str> = resolved.iter().map(|s| s.namespace.as_str()).collect();
@@ -188,17 +194,14 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
         .get(service)
         .ok_or_else(|| SunbeamError::Other(format!("Unknown service: '{service}'")))?;
 
-    let kv_path = svc
-        .kv_path
-        .as_deref()
-        .ok_or_else(|| SunbeamError::Other(format!("Service '{service}' has no secrets in OpenBao")))?;
+    let kv_path = svc.kv_path.as_deref().ok_or_else(|| {
+        SunbeamError::Other(format!("Service '{service}' has no secrets in OpenBao"))
+    })?;
 
-    let ob_pod = crate::kube::find_pod_by_label(
-        "data",
-        "app.kubernetes.io/name=openbao,component=server",
-    )
-    .await
-    .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
+    let ob_pod =
+        crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
+            .await
+            .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
 
     let pf = crate::secrets::port_forward("data", &ob_pod, 8200).await?;
     let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
@@ -210,27 +213,25 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
     let bao = crate::openbao::BaoClient::with_token(&bao_url, &token);
 
     match action {
-        None => {
-            match bao.kv_get("secret", kv_path).await? {
-                Some(data) => {
-                    step(&format!("Secrets for {service} (secret/{kv_path}):"));
-                    let mut keys: Vec<&String> = data.keys().collect();
-                    keys.sort();
-                    for key in keys {
-                        let value = &data[key];
-                        let display = if value.len() > 8 {
-                            format!("{}...{}", &value[..4], &value[value.len() - 4..])
-                        } else {
-                            value.clone()
-                        };
-                        println!("  {key}: {display}");
-                    }
-                }
-                None => {
-                    warn(&format!("No secrets found at secret/{kv_path}"));
+        None => match bao.kv_get("secret", kv_path).await? {
+            Some(data) => {
+                step(&format!("Secrets for {service} (secret/{kv_path}):"));
+                let mut keys: Vec<&String> = data.keys().collect();
+                keys.sort();
+                for key in keys {
+                    let value = &data[key];
+                    let display = if value.len() > 8 {
+                        format!("{}...{}", &value[..4], &value[value.len() - 4..])
+                    } else {
+                        value.clone()
+                    };
+                    println!("  {key}: {display}");
                 }
             }
-        }
+            None => {
+                warn(&format!("No secrets found at secret/{kv_path}"));
+            }
+        },
         Some(SecretsAction::Get { key }) => {
             let value = bao.kv_get_field("secret", kv_path, &key).await?;
             if value.is_empty() {
@@ -245,50 +246,44 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
 }
 
 /// Interactive shell into a service pod.
+///
+/// Pod lookup uses `sunbeam.pt/pod-selector` annotation when present, otherwise
+/// falls back to `app=<first deployment>`. The command run inside the pod comes
+/// from `sunbeam.pt/shell-command` annotation, defaulting to `/bin/sh`.
 async fn cmd_shell(service: &str) -> Result<()> {
     let reg = get_registry().await?;
     let svc = reg
         .get(service)
         .ok_or_else(|| SunbeamError::Other(format!("Unknown service: '{service}'")))?;
 
-    let context = crate::kube::context();
+    let selector = svc
+        .pod_selector
+        .clone()
+        .or_else(|| svc.deployments.first().map(|d| format!("app={d}")))
+        .ok_or_else(|| {
+            SunbeamError::Other(format!(
+                "Service '{service}' has no pod-selector annotation and no deployments"
+            ))
+        })?;
 
-    match service {
-        "postgres" => {
-            step("Connecting to PostgreSQL primary...");
-            let pod = crate::kube::find_pod_by_label(
-                "data",
-                "cnpg.io/cluster=postgres,role=primary",
-            )
-            .await
-            .ok_or_else(|| SunbeamError::Other("PostgreSQL primary pod not found".into()))?;
+    let pod = crate::kube::find_pod_by_label(&svc.namespace, &selector)
+        .await
+        .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
 
-            kubectl_interactive(&[
-                &format!("--context={context}"),
-                "exec", "-it", "-n", "data", &pod, "--", "psql", "-U", "postgres",
-            ])
-            .await
-        }
-        _ => {
-            if svc.deployments.is_empty() {
-                bail!("Service '{service}' has no deployments");
-            }
-            let deploy = &svc.deployments[0];
-            let pod = crate::kube::find_pod_by_label(
-                &svc.namespace,
-                &format!("app={deploy}"),
-            )
-            .await
-            .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
-
-            step(&format!("Connecting to {service} ({pod})..."));
-            kubectl_interactive(&[
-                &format!("--context={context}"),
-                "exec", "-it", "-n", &svc.namespace, &pod, "--", "/bin/sh",
-            ])
-            .await
-        }
+    let shell_cmd = svc.shell_command.as_deref().unwrap_or("/bin/sh");
+    let shell_parts: Vec<&str> = shell_cmd.split_whitespace().collect();
+    if shell_parts.is_empty() {
+        bail!("Service '{service}' has an empty shell-command annotation");
     }
+
+    step(&format!("Connecting to {service} ({pod})..."));
+    let context = crate::kube::context();
+    let mut args: Vec<&str> = vec!["exec", "-it", "-n", &svc.namespace, &pod, "--"];
+    args.extend(shell_parts);
+    let ctx_arg = format!("--context={context}");
+    let mut full_args = vec![ctx_arg.as_str()];
+    full_args.extend(args);
+    kubectl_interactive(&full_args).await
 }
 
 /// Describe a service's deployment (kubectl describe).
@@ -297,7 +292,11 @@ async fn cmd_describe(service: &str) -> Result<()> {
     let context = crate::kube::context();
     kubectl_interactive(&[
         &format!("--context={context}"),
-        "describe", "deployment", &deploy, "-n", &ns,
+        "describe",
+        "deployment",
+        &deploy,
+        "-n",
+        &ns,
     ])
     .await
 }
@@ -366,19 +365,21 @@ async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
     let context = crate::kube::context();
 
     step(&format!("Scaling {service} to {replicas} replica(s)..."));
-    let status = tokio::process::Command::new("kubectl")
-        .args([
-            &format!("--context={context}"),
-            "scale",
-            "deployment",
-            &deploy,
-            "-n",
-            &ns,
-            &format!("--replicas={replicas}"),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.args([
+        &format!("--context={context}"),
+        "scale",
+        "deployment",
+        &deploy,
+        "-n",
+        &ns,
+        &format!("--replicas={replicas}"),
+    ])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::inherit())
+    .stderr(std::process::Stdio::inherit());
+    crate::vpn_env::inject_tokio_default(&mut cmd);
+    let status = cmd
         .status()
         .await
         .map_err(|e| SunbeamError::Other(format!("kubectl scale failed: {e}")))?;
@@ -386,7 +387,10 @@ async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
     if status.success() {
         ok(&format!("{service} scaled to {replicas}."));
     } else {
-        warn(&format!("kubectl scale exited with code {}", status.code().unwrap_or(-1)));
+        warn(&format!(
+            "kubectl scale exited with code {}",
+            status.code().unwrap_or(-1)
+        ));
     }
     Ok(())
 }
@@ -397,7 +401,12 @@ async fn cmd_top(service: &str) -> Result<()> {
     let context = crate::kube::context();
     kubectl_interactive(&[
         &format!("--context={context}"),
-        "top", "pod", "-n", &ns, "-l", &format!("app={deploy}"),
+        "top",
+        "pod",
+        "-n",
+        &ns,
+        "-l",
+        &format!("app={deploy}"),
     ])
     .await
 }
@@ -408,18 +417,24 @@ async fn cmd_edit(service: &str) -> Result<()> {
     let context = crate::kube::context();
     kubectl_interactive(&[
         &format!("--context={context}"),
-        "edit", "deployment", &deploy, "-n", &ns,
+        "edit",
+        "deployment",
+        &deploy,
+        "-n",
+        &ns,
     ])
     .await
 }
 
 /// Run kubectl with inherited stdio (interactive).
 async fn kubectl_interactive(args: &[&str]) -> Result<()> {
-    let status = tokio::process::Command::new("kubectl")
-        .args(args)
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.args(args)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    crate::vpn_env::inject_tokio_default(&mut cmd);
+    let status = cmd
         .status()
         .await
         .map_err(|e| SunbeamError::Other(format!("kubectl failed: {e}")))?;

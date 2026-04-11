@@ -12,11 +12,9 @@ use crate::error::{Result, SunbeamError};
 /// Lock and queue providers are in-memory (single-process, non-distributed).
 pub async fn create_host_at(db_path: &std::path::Path) -> Result<wfe::WorkflowHost> {
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            SunbeamError::Io {
-                context: format!("create workflow db dir: {}", parent.display()),
-                source: e,
-            }
+        std::fs::create_dir_all(parent).map_err(|e| SunbeamError::Io {
+            context: format!("create workflow db dir: {}", parent.display()),
+            source: e,
         })?;
     }
 
@@ -121,7 +119,11 @@ mod tests {
     async fn test_create_test_host() {
         let host = create_test_host().await.unwrap();
         let now = chrono::Utc::now();
-        let ids = host.persistence().get_runnable_instances(now).await.unwrap();
+        let ids = host
+            .persistence()
+            .get_runnable_instances(now)
+            .await
+            .unwrap();
         assert!(ids.is_empty());
         host.stop().await;
     }
@@ -137,7 +139,11 @@ mod tests {
 
         // Should be queryable
         let now = chrono::Utc::now();
-        let ids = host.persistence().get_runnable_instances(now).await.unwrap();
+        let ids = host
+            .persistence()
+            .get_runnable_instances(now)
+            .await
+            .unwrap();
         assert!(ids.is_empty());
 
         shutdown_host(host).await;

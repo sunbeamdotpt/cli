@@ -29,12 +29,11 @@ pub struct FindOpenBaoPod;
 
 #[async_trait::async_trait]
 impl StepBody for FindOpenBaoPod {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let step_ctx = data.ctx.as_ref()
+        let step_ctx = data
+            .ctx
+            .as_ref()
             .ok_or_else(|| step_err("missing __ctx in workflow data"))?;
 
         k::set_context(&step_ctx.kube_context, &step_ctx.ssh_host);
@@ -68,10 +67,7 @@ pub struct GetRootToken;
 
 #[async_trait::async_trait]
 impl StepBody for GetRootToken {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let root_token = k::kube_get_secret_field("data", "openbao-keys", "root-token")
             .await
             .map_err(|e| step_err(format!("Could not read openbao-keys secret: {e}")))?;
@@ -92,29 +88,29 @@ pub struct WriteSentinel;
 
 #[async_trait::async_trait]
 impl StepBody for WriteSentinel {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let ob_pod = data.ob_pod.as_deref()
+        let ob_pod = data
+            .ob_pod
+            .as_deref()
             .ok_or_else(|| step_err("ob_pod not set"))?;
-        let root_token = data.root_token.as_deref()
+        let root_token = data
+            .root_token
+            .as_deref()
             .ok_or_else(|| step_err("root_token not set"))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200).await
+        let pf = secrets::port_forward("data", ob_pod, 8200)
+            .await
             .map_err(|e| step_err(e.to_string()))?;
-        let bao = BaoClient::with_token(
-            &format!("http://127.0.0.1:{}", pf.local_port),
-            root_token,
-        );
+        let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
 
         let test_value = secrets::rand_token_n(16);
         ok("Writing test sentinel to OpenBao secret/vso-test...");
 
         let mut kv_data = std::collections::HashMap::new();
         kv_data.insert("test-key".to_string(), test_value.clone());
-        bao.kv_put("secret", "vso-test", &kv_data).await
+        bao.kv_put("secret", "vso-test", &kv_data)
+            .await
             .map_err(|e| step_err(e.to_string()))?;
 
         let mut result = ExecutionResult::next();
@@ -131,10 +127,7 @@ pub struct ApplyVaultAuth;
 
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultAuth {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         ok(&format!("Creating VaultAuth {TEST_NS}/{TEST_NAME}..."));
         k::kube_apply(&format!(
             r#"
@@ -166,11 +159,10 @@ pub struct ApplyVaultStaticSecret;
 
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultStaticSecret {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        ok(&format!("Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}..."));
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        ok(&format!(
+            "Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}..."
+        ));
         k::kube_apply(&format!(
             r#"
 apiVersion: secrets.hashicorp.com/v1beta1
@@ -205,10 +197,7 @@ pub struct WaitForSync;
 
 #[async_trait::async_trait]
 impl StepBody for WaitForSync {
-    async fn run(
-        &mut self,
-        _ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         ok("Waiting for VSO to sync (up to 60s)...");
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -239,7 +228,11 @@ impl StepBody for WaitForSync {
             .await;
             return Err(step_err(format!(
                 "VSO did not sync within 60s. Last status: {}",
-                if msg.is_empty() { "unknown".to_string() } else { msg }
+                if msg.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    msg
+                }
             )));
         }
 
@@ -257,12 +250,11 @@ pub struct CheckSecretValue;
 
 #[async_trait::async_trait]
 impl StepBody for CheckSecretValue {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
-        let test_value = data.test_value.as_deref()
+        let test_value = data
+            .test_value
+            .as_deref()
             .ok_or_else(|| step_err("test_value not set"))?;
 
         ok("Verifying K8s Secret contents...");
@@ -272,12 +264,15 @@ impl StepBody for CheckSecretValue {
             .map_err(|e| step_err(e.to_string()))?
             .ok_or_else(|| step_err(format!("K8s Secret {TEST_NS}/{TEST_NAME} not found")))?;
 
-        let secret_data = secret.data.as_ref()
+        let secret_data = secret
+            .data
+            .as_ref()
             .ok_or_else(|| step_err("Secret has no data"))?;
-        let raw = secret_data.get("test-key")
+        let raw = secret_data
+            .get("test-key")
             .ok_or_else(|| step_err("Missing key 'test-key' in secret"))?;
-        let actual = String::from_utf8(raw.0.clone())
-            .map_err(|e| step_err(format!("UTF-8 error: {e}")))?;
+        let actual =
+            String::from_utf8(raw.0.clone()).map_err(|e| step_err(format!("UTF-8 error: {e}")))?;
 
         if actual != test_value {
             return Err(step_err(format!(
@@ -299,10 +294,7 @@ pub struct Cleanup;
 
 #[async_trait::async_trait]
 impl StepBody for Cleanup {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         ok("Cleaning up test resources...");
 
         let _ = secrets::delete_resource(TEST_NS, "vaultstaticsecret", TEST_NAME).await;
@@ -312,12 +304,16 @@ impl StepBody for Cleanup {
         if let Ok(client) = k::get_client().await {
             let api: kube::Api<k8s_openapi::api::core::v1::Secret> =
                 kube::Api::namespaced(client.clone(), TEST_NS);
-            let _ = api.delete(TEST_NAME, &kube::api::DeleteParams::default()).await;
+            let _ = api
+                .delete(TEST_NAME, &kube::api::DeleteParams::default())
+                .await;
         }
 
         // Delete the vault KV entry
         let data = load_data(ctx)?;
-        if let (Some(ob_pod), Some(root_token)) = (data.ob_pod.as_deref(), data.root_token.as_deref()) {
+        if let (Some(ob_pod), Some(root_token)) =
+            (data.ob_pod.as_deref(), data.root_token.as_deref())
+        {
             if let Ok(pf) = secrets::port_forward("data", ob_pod, 8200).await {
                 let bao = BaoClient::with_token(
                     &format!("http://127.0.0.1:{}", pf.local_port),
@@ -339,10 +335,7 @@ pub struct PrintResult;
 
 #[async_trait::async_trait]
 impl StepBody for PrintResult {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = load_data(ctx)?;
         if data.synced {
             ok("VSO E2E verification passed.");
@@ -377,31 +370,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn find_openbao_pod_is_default() { let _ = FindOpenBaoPod::default(); }
+    fn find_openbao_pod_is_default() {
+        let _ = FindOpenBaoPod::default();
+    }
 
     #[test]
-    fn get_root_token_is_default() { let _ = GetRootToken::default(); }
+    fn get_root_token_is_default() {
+        let _ = GetRootToken::default();
+    }
 
     #[test]
-    fn write_sentinel_is_default() { let _ = WriteSentinel::default(); }
+    fn write_sentinel_is_default() {
+        let _ = WriteSentinel::default();
+    }
 
     #[test]
-    fn apply_vault_auth_is_default() { let _ = ApplyVaultAuth::default(); }
+    fn apply_vault_auth_is_default() {
+        let _ = ApplyVaultAuth::default();
+    }
 
     #[test]
-    fn apply_vault_static_secret_is_default() { let _ = ApplyVaultStaticSecret::default(); }
+    fn apply_vault_static_secret_is_default() {
+        let _ = ApplyVaultStaticSecret::default();
+    }
 
     #[test]
-    fn wait_for_sync_is_default() { let _ = WaitForSync::default(); }
+    fn wait_for_sync_is_default() {
+        let _ = WaitForSync::default();
+    }
 
     #[test]
-    fn check_secret_value_is_default() { let _ = CheckSecretValue::default(); }
+    fn check_secret_value_is_default() {
+        let _ = CheckSecretValue::default();
+    }
 
     #[test]
-    fn cleanup_is_default() { let _ = Cleanup::default(); }
+    fn cleanup_is_default() {
+        let _ = Cleanup::default();
+    }
 
     #[test]
-    fn print_result_is_default() { let _ = PrintResult::default(); }
+    fn print_result_is_default() {
+        let _ = PrintResult::default();
+    }
 
     #[test]
     fn test_constants() {

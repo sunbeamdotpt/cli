@@ -50,10 +50,7 @@ pub async fn dispatch(context_name: &str, action: WorkflowAction) -> Result<()> 
 }
 
 /// Inner dispatch that operates on an already-created host. Testable.
-pub async fn dispatch_with_host(
-    h: &wfe::WorkflowHost,
-    action: WorkflowAction,
-) -> Result<()> {
+pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
     match action {
         WorkflowAction::List { status } => list_workflows(h, &status).await,
         WorkflowAction::Status { id } => show_workflow_status(h, &id).await,
@@ -120,9 +117,7 @@ pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()>
                             .clone()
                             .unwrap_or_else(|| format!("step-{}", ep.step_id)),
                         format!("{:?}", ep.status),
-                        ep.start_time
-                            .map(|t| t.to_string())
-                            .unwrap_or_default(),
+                        ep.start_time.map(|t| t.to_string()).unwrap_or_default(),
                         ep.end_time.map(|t| t.to_string()).unwrap_or_default(),
                         format!("{}", ep.retry_count),
                     ]
@@ -293,7 +288,12 @@ mod tests {
     async fn test_run_workflow_not_implemented() {
         let result = run_workflow("test.yaml").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not yet implemented"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not yet implemented")
+        );
     }
 
     #[tokio::test]
@@ -301,7 +301,9 @@ mod tests {
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
             &h,
-            WorkflowAction::List { status: String::new() },
+            WorkflowAction::List {
+                status: String::new(),
+            },
         )
         .await;
         assert!(result.is_ok());
@@ -311,11 +313,7 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_with_host_status() {
         let (h, id) = setup_host_with_workflow().await;
-        let result = dispatch_with_host(
-            &h,
-            WorkflowAction::Status { id },
-        )
-        .await;
+        let result = dispatch_with_host(&h, WorkflowAction::Status { id }).await;
         assert!(result.is_ok());
         h.stop().await;
     }
@@ -325,7 +323,9 @@ mod tests {
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
             &h,
-            WorkflowAction::Retry { id: "nope".to_string() },
+            WorkflowAction::Retry {
+                id: "nope".to_string(),
+            },
         )
         .await;
         assert!(result.is_err());
@@ -344,7 +344,10 @@ mod tests {
             .build("suspend-def", 1);
         h.register_workflow_definition(def).await;
 
-        let id = h.start_workflow("suspend-def", 1, serde_json::json!({})).await.unwrap();
+        let id = h
+            .start_workflow("suspend-def", 1, serde_json::json!({}))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Suspend it
@@ -370,7 +373,10 @@ mod tests {
             .build("cancel-def", 1);
         h.register_workflow_definition(def).await;
 
-        let id = h.start_workflow("cancel-def", 1, serde_json::json!({})).await.unwrap();
+        let id = h
+            .start_workflow("cancel-def", 1, serde_json::json!({}))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let result = cancel_workflow(&h, &id).await;
@@ -381,11 +387,7 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_with_host_cancel() {
         let (h, id) = setup_host_with_workflow().await;
-        let result = dispatch_with_host(
-            &h,
-            WorkflowAction::Cancel { id },
-        )
-        .await;
+        let result = dispatch_with_host(&h, WorkflowAction::Cancel { id }).await;
         drop(result);
         h.stop().await;
     }
@@ -397,11 +399,7 @@ mod tests {
         let h = host::create_test_host().await.unwrap();
 
         // Manually persist a Runnable workflow so get_runnable_instances finds it
-        let instance = WorkflowInstance::new(
-            "manual-def",
-            1,
-            serde_json::json!({}),
-        );
+        let instance = WorkflowInstance::new("manual-def", 1, serde_json::json!({}));
 
         h.persistence()
             .create_new_workflow(&instance)

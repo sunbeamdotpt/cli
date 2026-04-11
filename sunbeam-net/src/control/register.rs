@@ -1,5 +1,5 @@
 use crate::keys::NodeKeys;
-use crate::proto::types::{AuthInfo, HostInfo, RegisterRequest, RegisterResponse};
+use crate::proto::types::{AuthInfo, HostInfo, NetInfo, RegisterRequest, RegisterResponse};
 
 impl super::client::ControlClient {
     /// Register this node with the coordination server using a pre-auth key.
@@ -21,7 +21,7 @@ impl super::client::ControlClient {
             auth: Some(AuthInfo {
                 auth_key: Some(auth_key.to_string()),
             }),
-            hostinfo: build_hostinfo(hostname),
+            hostinfo: build_hostinfo(hostname, None),
             followup: None,
             timestamp: None,
         };
@@ -31,7 +31,13 @@ impl super::client::ControlClient {
 }
 
 /// Build a [`HostInfo`] for the current platform.
-pub(crate) fn build_hostinfo(hostname: &str) -> HostInfo {
+///
+/// `preferred_derp` populates `NetInfo.PreferredDERP`, which Headscale uses
+/// to set our `Node.DERP` field and which peers consult when deciding which
+/// DERP region to address relay traffic to. Pass `None` on the initial
+/// register (we don't know the region yet) and `Some(region)` on later
+/// lite-updates once the netmap has told us which DERP region to prefer.
+pub(crate) fn build_hostinfo(hostname: &str, preferred_derp: Option<u32>) -> HostInfo {
     HostInfo {
         go_arch: std::env::consts::ARCH.to_string(),
         go_os: std::env::consts::OS.to_string(),
@@ -42,6 +48,9 @@ pub(crate) fn build_hostinfo(hostname: &str) -> HostInfo {
         device_model: None,
         frontend_log_id: None,
         backend_log_id: None,
+        net_info: preferred_derp.map(|region| NetInfo {
+            preferred_derp: region,
+        }),
     }
 }
 
@@ -51,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_build_hostinfo() {
-        let hi = build_hostinfo("myhost");
+        let hi = build_hostinfo("myhost", None);
         assert_eq!(hi.hostname, "myhost");
         assert!(!hi.go_arch.is_empty(), "go_arch should be set");
         assert!(!hi.go_os.is_empty(), "go_os should be set");
@@ -60,6 +69,10 @@ mod tests {
             "go_version should start with sunbeam-net/"
         );
         assert!(!hi.os.is_empty(), "os should be set");
+        assert!(hi.net_info.is_none(), "no NetInfo without preferred_derp");
+
+        let hi2 = build_hostinfo("myhost", Some(999));
+        assert_eq!(hi2.net_info.as_ref().unwrap().preferred_derp, 999);
     }
 
     #[test]
@@ -73,7 +86,7 @@ mod tests {
             auth: Some(AuthInfo {
                 auth_key: Some("tskey-auth-test123".to_string()),
             }),
-            hostinfo: build_hostinfo("test-host"),
+            hostinfo: build_hostinfo("test-host", None),
             followup: None,
             timestamp: None,
         };

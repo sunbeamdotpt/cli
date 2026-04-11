@@ -8,9 +8,7 @@ use crate::output::{ok, step};
 use crate::workflows::data::UpData;
 
 fn secrets_dir() -> std::path::PathBuf {
-    crate::config::get_infra_dir()
-        .join("secrets")
-        .join("local")
+    crate::config::get_infra_dir().join("secrets").join("local")
 }
 
 // ── EnsureTLSCert ───────────────────────────────────────────────────────────
@@ -21,10 +19,7 @@ pub struct EnsureTLSCert;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureTLSCert {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -50,12 +45,9 @@ impl StepBody for EnsureTLSCert {
         })?;
 
         let subject_alt_names = vec![format!("*.{domain}")];
-        let mut params = rcgen::CertificateParams::new(subject_alt_names)
-            .map_err(|e| {
-                wfe_core::WfeError::StepExecution(format!(
-                    "Failed to create certificate params: {e}"
-                ))
-            })?;
+        let mut params = rcgen::CertificateParams::new(subject_alt_names).map_err(|e| {
+            wfe_core::WfeError::StepExecution(format!("Failed to create certificate params: {e}"))
+        })?;
         params
             .distinguished_name
             .push(rcgen::DnType::CommonName, format!("*.{domain}"));
@@ -85,12 +77,11 @@ impl StepBody for EnsureTLSCert {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| {
-                    wfe_core::WfeError::StepExecution(format!(
-                        "Failed to set key permissions: {e}"
-                    ))
-                })?;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).map_err(
+                |e| {
+                    wfe_core::WfeError::StepExecution(format!("Failed to set key permissions: {e}"))
+                },
+            )?;
         }
 
         ok(&format!("Cert generated. Domain: {domain}"));
@@ -106,10 +97,7 @@ pub struct EnsureTLSSecret;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureTLSSecret {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 

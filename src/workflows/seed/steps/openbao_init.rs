@@ -28,13 +28,10 @@ pub struct FindOpenBaoPod;
 
 #[async_trait::async_trait]
 impl StepBody for FindOpenBaoPod {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        let step_ctx: StepContext = serde_json::from_value(
-            ctx.workflow.data.get("__ctx").cloned().unwrap_or_default()
-        ).map_err(|e| step_err(e.to_string()))?;
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let step_ctx: StepContext =
+            serde_json::from_value(ctx.workflow.data.get("__ctx").cloned().unwrap_or_default())
+                .map_err(|e| step_err(e.to_string()))?;
 
         k::set_context(&step_ctx.kube_context, &step_ctx.ssh_host);
 
@@ -75,11 +72,14 @@ pub struct WaitPodRunning;
 
 #[async_trait::async_trait]
 impl StepBody for WaitPodRunning {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        if ctx.workflow.data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        if ctx
+            .workflow
+            .data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -90,7 +90,10 @@ impl StepBody for WaitPodRunning {
 
         // Ensure openbao-keys secret exists (even as placeholder) so the pod
         // can mount it. InitOrUnsealOpenBao will overwrite with real values.
-        if k::kube_get_secret_field("data", "openbao-keys", "key").await.is_err() {
+        if k::kube_get_secret_field("data", "openbao-keys", "key")
+            .await
+            .is_err()
+        {
             let placeholder = std::collections::HashMap::from([
                 ("key".to_string(), "placeholder".to_string()),
                 ("root-token".to_string(), "placeholder".to_string()),
@@ -114,11 +117,14 @@ pub struct InitOrUnsealOpenBao;
 
 #[async_trait::async_trait]
 impl StepBody for InitOrUnsealOpenBao {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        if ctx.workflow.data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        if ctx
+            .workflow
+            .data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -131,10 +137,16 @@ impl StepBody for InitOrUnsealOpenBao {
         let mut pf = None;
         for attempt in 0..10 {
             match secrets::port_forward("data", &ob_pod, 8200).await {
-                Ok(p) => { pf = Some(p); break; }
+                Ok(p) => {
+                    pf = Some(p);
+                    break;
+                }
                 Err(e) => {
                     if attempt < 9 {
-                        ok(&format!("Waiting for OpenBao to accept connections (attempt {})...", attempt + 1));
+                        ok(&format!(
+                            "Waiting for OpenBao to accept connections (attempt {})...",
+                            attempt + 1
+                        ));
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     } else {
                         return Err(step_err(format!(
@@ -152,7 +164,10 @@ impl StepBody for InitOrUnsealOpenBao {
         let mut status = None;
         for attempt in 0..30 {
             match bao.seal_status().await {
-                Ok(s) => { status = Some(s); break; }
+                Ok(s) => {
+                    status = Some(s);
+                    break;
+                }
                 Err(_) if attempt < 29 => {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
@@ -164,7 +179,8 @@ impl StepBody for InitOrUnsealOpenBao {
         let mut root_token = String::new();
 
         let status = status.unwrap_or_else(|| crate::openbao::SealStatusResponse {
-            initialized: false, sealed: true,
+            initialized: false,
+            sealed: true,
         });
 
         // Check if truly initialized (not just a placeholder secret)
@@ -186,12 +202,15 @@ impl StepBody for InitOrUnsealOpenBao {
                     let mut secret_data = HashMap::new();
                     secret_data.insert("key".to_string(), unseal_key.clone());
                     secret_data.insert("root-token".to_string(), root_token.clone());
-                    k::create_secret("data", "openbao-keys", secret_data).await
+                    k::create_secret("data", "openbao-keys", secret_data)
+                        .await
                         .map_err(|e| step_err(e.to_string()))?;
                     ok("Initialized -- keys stored in secret/openbao-keys.");
                 }
                 Err(e) => {
-                    warn(&format!("Init failed -- resetting OpenBao storage... ({e})"));
+                    warn(&format!(
+                        "Init failed -- resetting OpenBao storage... ({e})"
+                    ));
                     let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
                     let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
                     warn("OpenBao storage reset. Run again after the pod restarts.");
@@ -203,22 +222,30 @@ impl StepBody for InitOrUnsealOpenBao {
         } else {
             ok("Already initialized.");
             if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await {
-                if key != "placeholder" { unseal_key = key; }
+                if key != "placeholder" {
+                    unseal_key = key;
+                }
             }
-            if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await {
-                if token != "placeholder" { root_token = token; }
+            if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await
+            {
+                if token != "placeholder" {
+                    root_token = token;
+                }
             }
         }
 
         // Unseal if needed
-        let status = bao.seal_status().await.unwrap_or_else(|_| {
-            crate::openbao::SealStatusResponse {
-                initialized: true, sealed: true,
-            }
-        });
+        let status =
+            bao.seal_status()
+                .await
+                .unwrap_or_else(|_| crate::openbao::SealStatusResponse {
+                    initialized: true,
+                    sealed: true,
+                });
         if status.sealed && !unseal_key.is_empty() {
             ok("Unsealing...");
-            bao.unseal(&unseal_key).await
+            bao.unseal(&unseal_key)
+                .await
                 .map_err(|e| step_err(format!("Failed to unseal OpenBao: {e}")))?;
         }
 

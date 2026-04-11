@@ -21,19 +21,22 @@ pub struct WaitForRollout;
 
 #[async_trait::async_trait]
 impl StepBody for WaitForRollout {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        let config = ctx.step.step_config.as_ref()
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("WaitForRollout: missing step_config"))?;
-        let namespace = config.get("namespace")
+        let namespace = config
+            .get("namespace")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WaitForRollout: missing namespace in step_config"))?;
-        let deployment = config.get("deployment")
+        let deployment = config
+            .get("deployment")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WaitForRollout: missing deployment in step_config"))?;
-        let timeout_secs = config.get("timeout_secs")
+        let timeout_secs = config
+            .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(120);
 
@@ -60,6 +63,9 @@ mod tests {
     fn error_includes_context() {
         let err = step_err(format!("WaitForRollout({}/{}): timed out", "ory", "kratos"));
         let msg = err.to_string();
-        assert!(msg.contains("ory/kratos"), "error should include ns/deploy: {msg}");
+        assert!(
+            msg.contains("ory/kratos"),
+            "error should include ns/deploy: {msg}"
+        );
     }
 }

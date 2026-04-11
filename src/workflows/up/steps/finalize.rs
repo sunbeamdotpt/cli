@@ -24,10 +24,7 @@ pub struct PrintURLs;
 
 #[async_trait::async_trait]
 impl StepBody for PrintURLs {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -48,9 +45,7 @@ impl StepBody for PrintURLs {
             ("People", format!("https://people.{domain}/")),
             (
                 "Gitea",
-                format!(
-                    "https://src.{domain}/  ({GITEA_ADMIN_USER} / <from openbao>)"
-                ),
+                format!("https://src.{domain}/  ({GITEA_ADMIN_USER} / <from openbao>)"),
             ),
         ];
 
@@ -77,7 +72,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn print_urls_is_default() { let _ = PrintURLs::default(); }
+    fn print_urls_is_default() {
+        let _ = PrintURLs::default();
+    }
 
     #[test]
     fn resolve_domain_with_domain_set() {

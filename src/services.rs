@@ -1,11 +1,11 @@
 //! Service management — status, logs, restart.
 
 use crate::error::{Result, SunbeamError};
-use k8s_openapi::api::core::v1::Pod;
-use kube::api::{Api, DynamicObject, ListParams, LogParams};
-use kube::ResourceExt;
 use crate::kube::{get_client, kube_rollout_restart, parse_target};
 use crate::output::{ok, step, warn};
+use k8s_openapi::api::core::v1::Pod;
+use kube::ResourceExt;
+use kube::api::{Api, DynamicObject, ListParams, LogParams};
 use sunbeam_sdk::registry::{self, Category, ServiceRegistry};
 
 // ---------------------------------------------------------------------------
@@ -15,7 +15,8 @@ use sunbeam_sdk::registry::{self, Category, ServiceRegistry};
 /// Discover the service registry from the cluster.
 async fn get_registry() -> Result<ServiceRegistry> {
     let client = get_client().await?;
-    registry::discover(client).await
+    registry::discover(client)
+        .await
         .map_err(|e| SunbeamError::Other(format!("service discovery failed: {e}")))
 }
 
@@ -42,15 +43,12 @@ fn icon_for_status(status: &str) -> &'static str {
 
 fn is_unhealthy(pod: &Pod) -> bool {
     let status = pod.status.as_ref();
-    let phase = status
-        .and_then(|s| s.phase.as_deref())
-        .unwrap_or("Unknown");
+    let phase = status.and_then(|s| s.phase.as_deref()).unwrap_or("Unknown");
 
     match phase {
         "Running" => {
             // Check all containers are ready.
-            let container_statuses = status
-                .and_then(|s| s.container_statuses.as_ref());
+            let container_statuses = status.and_then(|s| s.container_statuses.as_ref());
             if let Some(cs) = container_statuses {
                 let total = cs.len();
                 let ready = cs.iter().filter(|c| c.ready).count();
@@ -111,7 +109,8 @@ async fn vso_sync_status() -> Result<()> {
 
         if let Ok(list) = list {
             // Group by namespace and sort
-            let mut grouped: std::collections::BTreeMap<String, Vec<(String, bool)>> = std::collections::BTreeMap::new();
+            let mut grouped: std::collections::BTreeMap<String, Vec<(String, bool)>> =
+                std::collections::BTreeMap::new();
             for obj in &list.items {
                 let ns = obj.namespace().unwrap_or_default();
                 let name = obj.name_any();
@@ -152,7 +151,8 @@ async fn vso_sync_status() -> Result<()> {
         let list = api.list(&ListParams::default()).await;
 
         if let Ok(list) = list {
-            let mut grouped: std::collections::BTreeMap<String, Vec<(String, bool)>> = std::collections::BTreeMap::new();
+            let mut grouped: std::collections::BTreeMap<String, Vec<(String, bool)>> =
+                std::collections::BTreeMap::new();
             for obj in &list.items {
                 let ns = obj.namespace().unwrap_or_default();
                 let name = obj.name_any();
@@ -206,8 +206,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
         None => {
             // All managed namespaces (derived from registry)
             let namespaces = reg.namespaces();
-            let ns_set: std::collections::HashSet<&str> =
-                namespaces.iter().copied().collect();
+            let ns_set: std::collections::HashSet<&str> = namespaces.iter().copied().collect();
             for ns in &namespaces {
                 let api: Api<Pod> = Api::namespaced(client.clone(), ns);
                 let lp = ListParams::default();
@@ -232,14 +231,14 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
             let resolved = reg.resolve(input);
             if !resolved.is_empty() {
                 // Collect unique namespaces from resolved services
-                let mut namespaces: Vec<&str> = resolved.iter()
-                    .map(|s| s.namespace.as_str())
-                    .collect();
+                let mut namespaces: Vec<&str> =
+                    resolved.iter().map(|s| s.namespace.as_str()).collect();
                 namespaces.sort_unstable();
                 namespaces.dedup();
 
                 // Collect deployment names for label filtering
-                let deploy_names: std::collections::HashSet<&str> = resolved.iter()
+                let deploy_names: std::collections::HashSet<&str> = resolved
+                    .iter()
                     .flat_map(|s| s.deployments.iter().map(|d| d.as_str()))
                     .collect();
 
@@ -261,8 +260,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                     } else {
                         // Filter by app label for each deployment
                         for deploy in &deploy_names {
-                            let lp = ListParams::default()
-                                .labels(&format!("app={deploy}"));
+                            let lp = ListParams::default().labels(&format!("app={deploy}"));
                             if let Ok(list) = api.list(&lp).await {
                                 for pod in list.items {
                                     pods.push(PodRow {
@@ -296,8 +294,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                     }
                     (Some(ns), Some(svc)) => {
                         let api: Api<Pod> = Api::namespaced(client.clone(), ns);
-                        let lp = ListParams::default()
-                            .labels(&format!("app={svc}"));
+                        let lp = ListParams::default().labels(&format!("app={svc}"));
                         if let Ok(list) = api.list(&lp).await {
                             for pod in list.items {
                                 pods.push(PodRow {
@@ -331,10 +328,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
         }
         let icon = icon_for_status(&row.status);
 
-        let mut unhealthy = !matches!(
-            row.status.as_str(),
-            "Running" | "Completed" | "Succeeded"
-        );
+        let mut unhealthy = !matches!(row.status.as_str(), "Running" | "Completed" | "Succeeded");
         // For Running pods, check ready ratio
         if !unhealthy && row.status == "Running" && row.ready.contains('/') {
             let parts: Vec<&str> = row.ready.split('/').collect();
@@ -345,7 +339,10 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
         if unhealthy {
             all_ok = false;
         }
-        println!("    {icon} {:<50} {:<6} {}", row.name, row.ready, row.status);
+        println!(
+            "    {icon} {:<50} {:<6} {}",
+            row.name, row.ready, row.status
+        );
     }
 
     println!();
@@ -473,17 +470,27 @@ pub async fn cmd_restart(target: Option<&str>) -> Result<()> {
     let pairs: Vec<(String, String)> = match target {
         None => {
             // All non-infra services with deployments
-            reg.all().iter()
+            reg.all()
+                .iter()
                 .filter(|s| !s.deployments.is_empty())
                 .filter(|s| s.category != Category::Infra)
-                .flat_map(|s| s.deployments.iter().map(move |d| (s.namespace.clone(), d.clone())))
+                .flat_map(|s| {
+                    s.deployments
+                        .iter()
+                        .map(move |d| (s.namespace.clone(), d.clone()))
+                })
                 .collect()
         }
         Some(input) => {
             let resolved = reg.resolve(input);
             if !resolved.is_empty() {
-                resolved.iter()
-                    .flat_map(|s| s.deployments.iter().map(move |d| (s.namespace.clone(), d.clone())))
+                resolved
+                    .iter()
+                    .flat_map(|s| {
+                        s.deployments
+                            .iter()
+                            .map(move |d| (s.namespace.clone(), d.clone()))
+                    })
                     .collect()
             } else {
                 // Fallback: parse as namespace or namespace/name
@@ -491,8 +498,13 @@ pub async fn cmd_restart(target: Option<&str>) -> Result<()> {
                 match (ns_filter, svc_filter) {
                     (Some(ns), None) => {
                         // Restart all deployments in this namespace from registry
-                        reg.by_namespace(ns).iter()
-                            .flat_map(|s| s.deployments.iter().map(move |d| (s.namespace.clone(), d.clone())))
+                        reg.by_namespace(ns)
+                            .iter()
+                            .flat_map(|s| {
+                                s.deployments
+                                    .iter()
+                                    .map(move |d| (s.namespace.clone(), d.clone()))
+                            })
                             .collect()
                     }
                     (Some(ns), Some(name)) => {

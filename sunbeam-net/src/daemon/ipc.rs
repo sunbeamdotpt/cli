@@ -3,6 +3,8 @@
 // The IPC interface uses a Unix domain socket at the configured
 // control_socket path. Commands include:
 // - Status: query current daemon status
+// - Routes: dump the subnet-router table
+// - RecentConnections: tail the SOCKS proxy audit log
 // - Reconnect: force reconnection to coordination server
 // - Stop: gracefully shut down the daemon
 
@@ -13,6 +15,8 @@ use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 
 use super::state::DaemonStatus;
+use crate::control::RouteTable;
+use crate::proxy::audit::{AuditEntry, AuditLog};
 
 /// IPC command sent to the daemon.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -20,10 +24,25 @@ use super::state::DaemonStatus;
 pub enum IpcCommand {
     /// Query the current daemon status.
     Status,
+    /// Dump the current subnet-router table.
+    Routes,
+    /// Query the last N audit entries. `max` caps the response size;
+    /// the daemon may return fewer if the ring buffer is smaller.
+    RecentConnections { max: usize },
     /// Force reconnection.
     Reconnect,
     /// Gracefully stop the daemon.
     Stop,
+}
+
+/// One entry in the `Routes` response — a wire-format view of a
+/// single `(cidr, node_key)` pair from the peer route table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RouteInfo {
+    /// The advertised prefix, rendered as a CIDR string (`10.42.0.0/16`).
+    pub cidr: String,
+    /// Node key of the peer advertising the prefix.
+    pub node_key: String,
 }
 
 /// IPC response from the daemon.
@@ -32,6 +51,10 @@ pub enum IpcCommand {
 pub enum IpcResponse {
     /// Status response.
     Status(DaemonStatus),
+    /// Subnet-router table, longest prefix first.
+    Routes(Vec<RouteInfo>),
+    /// Tail of the proxy audit log, newest first.
+    RecentConnections(Vec<AuditEntry>),
     /// Acknowledgement.
     Ok,
     /// Error.
@@ -42,6 +65,11 @@ pub enum IpcResponse {
 pub(crate) struct IpcServer {
     listener: UnixListener,
     status: Arc<RwLock<DaemonStatus>>,
+    /// Peer route table. Shared with the map-stream loop (writes) and
+    /// the SOCKS proxy (reads). The IPC server only ever reads from it.
+    routes: Arc<RwLock<RouteTable>>,
+    /// Ring-buffer audit log shared with the SOCKS proxy.
+    audit: Arc<AuditLog>,
     /// Cancellation token shared with the daemon loop. Cancelling this from
     /// an IPC `Stop` request triggers graceful shutdown of the whole
     /// daemon, the same as `DaemonHandle::shutdown()`.
@@ -53,6 +81,8 @@ impl IpcServer {
     pub fn new(
         socket_path: &Path,
         status: Arc<RwLock<DaemonStatus>>,
+        routes: Arc<RwLock<RouteTable>>,
+        audit: Arc<AuditLog>,
         daemon_shutdown: CancellationToken,
     ) -> crate::Result<Self> {
         // Remove stale socket file if it exists.
@@ -62,6 +92,8 @@ impl IpcServer {
         Ok(Self {
             listener,
             status,
+            routes,
+            audit,
             daemon_shutdown,
         })
     }
@@ -72,9 +104,13 @@ impl IpcServer {
             let (stream, _) = self.listener.accept().await
                 .map_err(|e| crate::Error::Io { context: "accept IPC".into(), source: e })?;
             let status = self.status.clone();
+            let routes = self.routes.clone();
+            let audit = self.audit.clone();
             let shutdown = self.daemon_shutdown.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_ipc_connection(stream, &status, &shutdown).await {
+                if let Err(e) =
+                    handle_ipc_connection(stream, &status, &routes, &audit, &shutdown).await
+                {
                     tracing::warn!("IPC error: {e}");
                 }
             });
@@ -174,11 +210,35 @@ impl IpcClient {
             ))),
         }
     }
+
+    /// Convenience: dump the daemon's current subnet-router table.
+    pub async fn routes(&self) -> crate::Result<Vec<RouteInfo>> {
+        match self.request(IpcCommand::Routes).await? {
+            IpcResponse::Routes(list) => Ok(list),
+            IpcResponse::Error(e) => Err(crate::Error::Ipc(e)),
+            other => Err(crate::Error::Ipc(format!(
+                "unexpected response to Routes: {other:?}"
+            ))),
+        }
+    }
+
+    /// Convenience: tail the SOCKS proxy audit log, newest first.
+    pub async fn recent_connections(&self, max: usize) -> crate::Result<Vec<AuditEntry>> {
+        match self.request(IpcCommand::RecentConnections { max }).await? {
+            IpcResponse::RecentConnections(list) => Ok(list),
+            IpcResponse::Error(e) => Err(crate::Error::Ipc(e)),
+            other => Err(crate::Error::Ipc(format!(
+                "unexpected response to RecentConnections: {other:?}"
+            ))),
+        }
+    }
 }
 
 async fn handle_ipc_connection(
     stream: tokio::net::UnixStream,
     status: &Arc<RwLock<DaemonStatus>>,
+    routes: &Arc<RwLock<RouteTable>>,
+    audit: &Arc<AuditLog>,
     daemon_shutdown: &CancellationToken,
 ) -> crate::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -195,6 +255,20 @@ async fn handle_ipc_connection(
         IpcCommand::Status => {
             let s = status.read().map_err(|e| crate::Error::Ipc(e.to_string()))?;
             IpcResponse::Status(s.clone())
+        }
+        IpcCommand::Routes => {
+            let r = routes.read().map_err(|e| crate::Error::Ipc(e.to_string()))?;
+            let list = r
+                .routes()
+                .map(|(net, key)| RouteInfo {
+                    cidr: net.to_string(),
+                    node_key: key.to_string(),
+                })
+                .collect();
+            IpcResponse::Routes(list)
+        }
+        IpcCommand::RecentConnections { max } => {
+            IpcResponse::RecentConnections(audit.snapshot(max))
         }
         IpcCommand::Reconnect => {
             // TODO: implement targeted session reconnect (without dropping
@@ -218,8 +292,18 @@ async fn handle_ipc_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::types::{HostInfo, Node};
+    use crate::proxy::audit::AuditOutcome;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
+
+    fn empty_routes() -> Arc<RwLock<RouteTable>> {
+        Arc::new(RwLock::new(RouteTable::new()))
+    }
+
+    fn empty_audit() -> Arc<AuditLog> {
+        Arc::new(AuditLog::new())
+    }
 
     #[tokio::test]
     async fn test_ipc_status_query() {
@@ -230,9 +314,17 @@ mod tests {
             addresses: vec!["100.64.0.1".parse().unwrap()],
             peer_count: 3,
             derp_home: Some(1),
+            socks_proxy_port: None,
         }));
 
-        let server = IpcServer::new(&sock_path, status, CancellationToken::new()).unwrap();
+        let server = IpcServer::new(
+            &sock_path,
+            status,
+            empty_routes(),
+            empty_audit(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         let server_task = tokio::spawn(async move { server.run().await });
 
         // Give the server a moment to start accepting.
@@ -265,7 +357,14 @@ mod tests {
         let sock_path = dir.path().join("test.sock");
 
         let status = Arc::new(RwLock::new(DaemonStatus::Stopped));
-        let server = IpcServer::new(&sock_path, status, CancellationToken::new()).unwrap();
+        let server = IpcServer::new(
+            &sock_path,
+            status,
+            empty_routes(),
+            empty_audit(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         let server_task = tokio::spawn(async move { server.run().await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -294,6 +393,160 @@ mod tests {
         reader2.read_line(&mut resp_line).await.unwrap();
         let resp: IpcResponse = serde_json::from_str(resp_line.trim()).unwrap();
         assert!(matches!(resp, IpcResponse::Status(DaemonStatus::Stopped)));
+
+        server_task.abort();
+    }
+
+    fn test_node(key: &str, cidrs: &[&str]) -> Node {
+        Node {
+            id: 0,
+            key: key.to_string(),
+            disco_key: format!("discokey:{key}"),
+            addresses: vec![],
+            allowed_ips: cidrs.iter().map(|s| (*s).to_string()).collect(),
+            endpoints: vec![],
+            derp: "127.3.3.40:1".to_string(),
+            hostinfo: HostInfo::default(),
+            name: format!("{key}.test"),
+            online: Some(true),
+            machine_authorized: true,
+        }
+    }
+
+    async fn send_cmd(sock_path: &std::path::Path, cmd: IpcCommand) -> IpcResponse {
+        let mut stream = UnixStream::connect(sock_path).await.unwrap();
+        let body = serde_json::to_string(&cmd).unwrap();
+        stream
+            .write_all(format!("{body}\n").as_bytes())
+            .await
+            .unwrap();
+        let (reader, _writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        serde_json::from_str(line.trim()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_ipc_routes_query_returns_table_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sock_path = dir.path().join("test.sock");
+
+        let status = Arc::new(RwLock::new(DaemonStatus::Stopped));
+        let routes = {
+            let mut t = RouteTable::new();
+            t.rebuild(
+                &[
+                    test_node("nodekey:api", &["10.42.0.0/16"]),
+                    test_node("nodekey:wide", &["10.0.0.0/8"]),
+                ],
+                &["10.0.0.0/8".parse().unwrap()],
+            );
+            Arc::new(RwLock::new(t))
+        };
+
+        let server = IpcServer::new(
+            &sock_path,
+            status,
+            routes,
+            empty_audit(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(async move { server.run().await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let resp = send_cmd(&sock_path, IpcCommand::Routes).await;
+        match resp {
+            IpcResponse::Routes(list) => {
+                assert_eq!(list.len(), 2, "got {list:?}");
+                // Longest prefix first.
+                assert_eq!(list[0].cidr, "10.42.0.0/16");
+                assert_eq!(list[0].node_key, "nodekey:api");
+                assert_eq!(list[1].cidr, "10.0.0.0/8");
+                assert_eq!(list[1].node_key, "nodekey:wide");
+            }
+            other => panic!("expected Routes, got {other:?}"),
+        }
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ipc_routes_empty_when_no_peers() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let status = Arc::new(RwLock::new(DaemonStatus::Stopped));
+        let server = IpcServer::new(
+            &sock_path,
+            status,
+            empty_routes(),
+            empty_audit(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(async move { server.run().await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        match send_cmd(&sock_path, IpcCommand::Routes).await {
+            IpcResponse::Routes(list) => assert!(list.is_empty()),
+            other => panic!("expected Routes, got {other:?}"),
+        }
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ipc_recent_connections_returns_audit_tail() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let status = Arc::new(RwLock::new(DaemonStatus::Stopped));
+
+        let audit = Arc::new(AuditLog::new());
+        audit.record(
+            "socks5",
+            "10.42.0.1:443".to_string(),
+            AuditOutcome::Accepted,
+        );
+        audit.record(
+            "http",
+            "blocked:9999".to_string(),
+            AuditOutcome::DeniedPort,
+        );
+        audit.record(
+            "socks5",
+            "postgres.data.svc:5432".to_string(),
+            AuditOutcome::Accepted,
+        );
+
+        let server = IpcServer::new(
+            &sock_path,
+            status,
+            empty_routes(),
+            audit,
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(async move { server.run().await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Ask for the last 10 — we only have 3.
+        match send_cmd(&sock_path, IpcCommand::RecentConnections { max: 10 }).await {
+            IpcResponse::RecentConnections(entries) => {
+                assert_eq!(entries.len(), 3);
+                // Newest first.
+                assert_eq!(entries[0].destination, "postgres.data.svc:5432");
+                assert_eq!(entries[0].outcome, AuditOutcome::Accepted);
+                assert_eq!(entries[1].destination, "blocked:9999");
+                assert_eq!(entries[1].outcome, AuditOutcome::DeniedPort);
+                assert_eq!(entries[2].destination, "10.42.0.1:443");
+            }
+            other => panic!("expected RecentConnections, got {other:?}"),
+        }
+
+        // And cap it to 2.
+        match send_cmd(&sock_path, IpcCommand::RecentConnections { max: 2 }).await {
+            IpcResponse::RecentConnections(entries) => assert_eq!(entries.len(), 2),
+            other => panic!("expected RecentConnections, got {other:?}"),
+        }
 
         server_task.abort();
     }

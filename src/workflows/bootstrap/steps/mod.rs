@@ -3,11 +3,6 @@
 mod bootstrap;
 
 pub use bootstrap::{
-    GetAdminPassword,
-    WaitForGiteaPod,
-    SetAdminPassword,
-    MarkAdminPrivate,
-    CreateOrgs,
-    ConfigureOIDC,
-    PrintBootstrapResult,
+    ConfigureOIDC, CreateOrgs, GetAdminPassword, MarkAdminPrivate, PrintBootstrapResult,
+    SetAdminPassword, WaitForGiteaPod,
 };

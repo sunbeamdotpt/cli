@@ -80,27 +80,11 @@ When a service spans multiple Deployments (e.g. `messages` has `messages-backend
 |---|---|---|---|---|
 | `gitea` | Deployment `gitea` in `devtools` | `service: gitea`, `category: devtools` | `display-name: "Gitea (Git Forge)"`, `kv-path: gitea`, `db-user: gitea`, `db-name: gitea_db`, `depends-on: postgres,openbao` | |
 
-### Platform (namespace: `lasuite`)
-
-| Service | K8s Resource | Labels | Annotations | Notes |
-|---|---|---|---|---|
-| `hive` | Deployment `hive` in `lasuite` | `service: hive`, `category: platform` | `display-name: "Hive (Backend)"`, `kv-path: hive`, `db-user: hive`, `db-name: hive_db`, `depends-on: postgres,openbao` | |
-| `people-backend` | Deployment `people-backend` in `lasuite` | `service: people-backend`, `category: platform` | `display-name: "People (Backend)"`, `kv-path: people`, `db-user: people`, `db-name: people_db`, `build-target: people`, `depends-on: postgres,openbao` | |
-| `people-frontend` | Deployment `people-frontend` in `lasuite` | `service: people-frontend`, `category: platform` | `display-name: "People (Frontend)"`, `build-target: people-frontend` | |
-| `people-celery` | Deployments `people-celery-worker` + `people-celery-beat` in `lasuite` | `service: people-celery`, `category: platform` | `display-name: "People (Workers)"`, `depends-on: people-backend` | Multi-deploy: both Deployments get the same `service` label |
-| `docs` | Deployment `docs-frontend` in `lasuite` | `service: docs`, `category: platform` | `display-name: "Docs"`, `kv-path: docs`, `db-user: docs`, `db-name: docs_db`, `build-target: docs-frontend`, `depends-on: postgres,openbao` | |
-| `meet` | Deployment `meet` in `lasuite` | `service: meet`, `category: platform` | `display-name: "Meet"`, `kv-path: meet`, `db-user: meet`, `db-name: meet_db`, `build-target: meet`, `depends-on: postgres,openbao,livekit` | |
-| `drive` | Deployment `drive` in `lasuite` | `service: drive`, `category: platform` | `display-name: "Drive"`, `kv-path: drive`, `db-user: drive`, `db-name: drive_db`, `depends-on: postgres,openbao` | |
-| `projects` | Deployment `projects` in `lasuite` | `service: projects`, `category: platform` | `display-name: "Projects"`, `kv-path: projects`, `db-user: projects`, `db-name: projects_db`, `build-target: projects`, `depends-on: postgres,openbao` | |
-| `calendars` | Deployment `calendars` in `lasuite` | `service: calendars`, `category: platform` | `display-name: "Calendars"`, `kv-path: calendars`, `db-user: calendars`, `db-name: calendars_db`, `build-target: calendars`, `depends-on: postgres,openbao` | |
-| `kratos-admin` | Deployment `kratos-admin` in `lasuite` | `service: kratos-admin`, `category: platform` | `display-name: "Kratos Admin UI"`, `kv-path: kratos-admin`, `build-target: kratos-admin`, `depends-on: kratos,seaweedfs` | |
-| `collabora` | Deployment `collabora` in `lasuite` | `service: collabora`, `category: platform` | `display-name: "Collabora (Office)"`, `kv-path: collabora` | |
-
 ### Messaging
 
 | Service | K8s Resource | Labels | Annotations | Notes |
 |---|---|---|---|---|
-| `messages` | Deployments `messages-backend`, `messages-mta-in`, `messages-mta-out` in `lasuite` | `service: messages`, `category: messaging` | `display-name: "Messages (Mail)"`, `kv-path: messages`, `db-user: messages`, `db-name: messages_db`, `build-target: messages`, `depends-on: postgres,openbao` | Multi-deploy: all 3 get the same `service` label |
+| `stalwart` | Deployment `stalwart` in `stalwart` | `service: stalwart`, `category: messaging` | `display-name: "Stalwart (Mail)"`, `kv-path: stalwart`, `db-user: stalwart`, `db-name: stalwart_db`, `depends-on: postgres,openbao` | |
 | `tuwunel` | Deployment `tuwunel` in `matrix` | `service: tuwunel`, `category: messaging` | `display-name: "Tuwunel (Matrix)"`, `kv-path: tuwunel`, `build-target: tuwunel`, `depends-on: openbao` | |
 
 ### Media (namespace: `media`)
@@ -212,50 +196,37 @@ metadata:
 data: {}
 ```
 
-### Example 5: Multi-deployment service (messages)
+### Example 5: Multi-deployment service
 
-All three Deployments carry the same `sunbeam.pt/service: messages` label. Full annotations go on the primary Deployment; the others only need the labels.
+When a logical service is backed by multiple Deployments, all of them carry the same `sunbeam.pt/service` label. Full annotations go on the primary Deployment; the others only need the labels.
 
 ```yaml
 # Primary Deployment - carries all annotations
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: messages-backend
-  namespace: lasuite
+  name: stalwart
+  namespace: stalwart
   labels:
-    sunbeam.pt/service: messages
+    sunbeam.pt/service: stalwart
     sunbeam.pt/category: messaging
   annotations:
-    sunbeam.pt/display-name: "Messages (Mail)"
-    sunbeam.pt/kv-path: messages
-    sunbeam.pt/db-user: messages
-    sunbeam.pt/db-name: messages_db
-    sunbeam.pt/build-target: messages
+    sunbeam.pt/display-name: "Stalwart (Mail)"
+    sunbeam.pt/kv-path: stalwart
+    sunbeam.pt/db-user: stalwart
+    sunbeam.pt/db-name: stalwart_db
     sunbeam.pt/depends-on: postgres,openbao
 ---
 # Secondary Deployment - labels only
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: messages-mta-in
-  namespace: lasuite
+  name: stalwart-worker
+  namespace: stalwart
   labels:
-    sunbeam.pt/service: messages
-    sunbeam.pt/category: messaging
----
-# Secondary Deployment - labels only
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: messages-mta-out
-  namespace: lasuite
-  labels:
-    sunbeam.pt/service: messages
+    sunbeam.pt/service: stalwart
     sunbeam.pt/category: messaging
 ```
-
-The same pattern applies to `people-celery` (Deployments: `people-celery-worker`, `people-celery-beat`).
 
 ---
 

@@ -38,29 +38,37 @@ pub struct CreateK8sSecret;
 
 #[async_trait::async_trait]
 impl StepBody for CreateK8sSecret {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("CreateK8sSecret: missing step_config"))?;
-        let namespace = config.get("namespace")
+        let namespace = config
+            .get("namespace")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("CreateK8sSecret: missing namespace"))?;
-        let name = config.get("name")
+        let name = config
+            .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("CreateK8sSecret: missing name"))?;
-        let data_map = config.get("data")
+        let data_map = config
+            .get("data")
             .and_then(|v| v.as_object())
             .ok_or_else(|| step_err("CreateK8sSecret: missing data"))?;
 
-        let creds: HashMap<String, String> = data.get("creds")
+        let creds: HashMap<String, String> = data
+            .get("creds")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
@@ -80,7 +88,8 @@ impl StepBody for CreateK8sSecret {
             secret_data.insert(secret_key.clone(), value);
         }
 
-        k::create_secret(namespace, name, secret_data).await
+        k::create_secret(namespace, name, secret_data)
+            .await
             .map_err(|e| step_err(format!("CreateK8sSecret({namespace}/{name}): {e}")))?;
 
         ok(&format!("K8s secret: {namespace}/{name}"));

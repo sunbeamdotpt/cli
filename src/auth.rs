@@ -81,8 +81,8 @@ fn read_cache() -> Result<AuthTokens> {
     let content = std::fs::read_to_string(&path).map_err(|e| {
         SunbeamError::Identity(format!("No cached auth tokens ({}): {e}", path.display()))
     })?;
-    let tokens: AuthTokens = serde_json::from_str(&content)
-        .ctx("Failed to parse cached auth tokens")?;
+    let tokens: AuthTokens =
+        serde_json::from_str(&content).ctx("Failed to parse cached auth tokens")?;
     Ok(tokens)
 }
 
@@ -277,8 +277,7 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
         .await
         .ctx("Failed to parse refresh token response")?;
 
-    let expires_at = Utc::now()
-        + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
+    let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
 
     let new_tokens = AuthTokens {
         access_token: token_resp.access_token,
@@ -371,12 +370,14 @@ async fn wait_for_callback(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Wait up to 5 minutes for the callback, or until Ctrl+C
-    let accept_result = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        listener.accept(),
-    )
-    .await
-    .map_err(|_| SunbeamError::identity("Login timed out (5 min). Try again with `sunbeam auth login`."))?;
+    let accept_result =
+        tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
+            .await
+            .map_err(|_| {
+                SunbeamError::identity(
+                    "Login timed out (5 min). Try again with `sunbeam auth login`.",
+                )
+            })?;
 
     let (mut stream, _) = accept_result.ctx("Failed to accept callback connection")?;
 
@@ -388,10 +389,7 @@ async fn wait_for_callback(
     let request = String::from_utf8_lossy(&buf[..n]);
 
     // Parse the GET request line: "GET /callback?code=...&state=... HTTP/1.1"
-    let request_line = request
-        .lines()
-        .next()
-        .ctx("Empty callback request")?;
+    let request_line = request.lines().next().ctx("Empty callback request")?;
 
     let path = request_line
         .split_whitespace()
@@ -399,10 +397,7 @@ async fn wait_for_callback(
         .ctx("No path in callback request")?;
 
     // Parse query params
-    let query = path
-        .split('?')
-        .nth(1)
-        .ctx("No query params in callback")?;
+    let query = path.split('?').nth(1).ctx("No query params in callback")?;
 
     let mut code = None;
     let mut state = None;
@@ -580,8 +575,7 @@ pub async fn cmd_auth_sso_login_with_redirect(
     )
     .await?;
 
-    let expires_at = Utc::now()
-        + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
+    let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
 
     let tokens = AuthTokens {
         access_token: token_resp.access_token,
@@ -593,10 +587,7 @@ pub async fn cmd_auth_sso_login_with_redirect(
     };
 
     // Print success with email if available
-    let email = tokens
-        .id_token
-        .as_ref()
-        .and_then(|t| extract_email(t));
+    let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
     if let Some(ref email) = email {
         crate::output::ok(&format!("Logged in as {email}"));
     } else {
@@ -690,9 +681,8 @@ pub async fn cmd_auth_login_all(domain_override: Option<&str>) -> Result<()> {
 
 /// Get the Gitea API token (for use by pm.rs).
 pub fn get_gitea_token() -> Result<String> {
-    let tokens = read_cache().map_err(|_| {
-        SunbeamError::identity("Not logged in. Run `sunbeam auth login` first.")
-    })?;
+    let tokens = read_cache()
+        .map_err(|_| SunbeamError::identity("Not logged in. Run `sunbeam auth login` first."))?;
     tokens.gitea_token.ok_or_else(|| {
         SunbeamError::identity(
             "No Gitea token. Run `sunbeam auth login` or `sunbeam auth set-gitea-token <token>`.",
@@ -704,8 +694,7 @@ pub fn get_gitea_token() -> Result<String> {
 pub async fn cmd_auth_logout() -> Result<()> {
     let path = cache_path();
     if path.exists() {
-        std::fs::remove_file(&path)
-            .with_ctx(|| format!("Failed to remove {}", path.display()))?;
+        std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
         crate::output::ok("Logged out (cached tokens removed)");
     } else {
         crate::output::ok("Not logged in (no cached tokens to remove)");
@@ -825,7 +814,9 @@ mod tests {
             access_token: "access_abc".to_string(),
             refresh_token: "refresh_xyz".to_string(),
             expires_at: Utc::now() + Duration::hours(1),
-            id_token: Some("eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ.sig".to_string()),
+            id_token: Some(
+                "eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ.sig".to_string(),
+            ),
             domain: "sunbeam.pt".to_string(),
             gitea_token: None,
         };
@@ -932,7 +923,10 @@ mod tests {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
         let fake_jwt = format!("eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig");
 
-        assert_eq!(extract_email(&fake_jwt), Some("alice@sunbeam.pt".to_string()));
+        assert_eq!(
+            extract_email(&fake_jwt),
+            Some("alice@sunbeam.pt".to_string())
+        );
     }
 
     #[test]

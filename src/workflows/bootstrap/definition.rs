@@ -50,11 +50,7 @@ mod tests {
     #[test]
     fn test_build_step_names() {
         let def = build();
-        let names: Vec<Option<&str>> = def
-            .steps
-            .iter()
-            .map(|s| s.name.as_deref())
-            .collect();
+        let names: Vec<Option<&str>> = def.steps.iter().map(|s| s.name.as_deref()).collect();
         assert_eq!(
             names,
             vec![

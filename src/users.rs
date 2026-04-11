@@ -131,7 +131,8 @@ async fn kratos_api(
 async fn find_identity(base_url: &str, target: &str, required: bool) -> Result<Option<Value>> {
     // Looks like a UUID?
     if target.len() == 36 && target.chars().filter(|&c| c == '-').count() == 4 {
-        let result = kratos_api(base_url, &format!("/identities/{target}"), "GET", None, &[]).await?;
+        let result =
+            kratos_api(base_url, &format!("/identities/{target}"), "GET", None, &[]).await?;
         return Ok(result);
     }
 
@@ -152,7 +153,9 @@ async fn find_identity(base_url: &str, target: &str, required: bool) -> Result<O
     }
 
     if required {
-        return Err(SunbeamError::identity(format!("Identity not found: {target}")));
+        return Err(SunbeamError::identity(format!(
+            "Identity not found: {target}"
+        )));
     }
     Ok(None)
 }
@@ -266,14 +269,8 @@ fn display_name(traits: &Value) -> String {
 
     match traits.get("name") {
         Some(Value::Object(name_map)) => {
-            let first = name_map
-                .get("first")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let last = name_map
-                .get("last")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let first = name_map.get("first").and_then(|v| v.as_str()).unwrap_or("");
+            let last = name_map.get("last").and_then(|v| v.as_str()).unwrap_or("");
             format!("{first} {last}").trim().to_string()
         }
         Some(name) => name.as_str().unwrap_or("").to_string(),
@@ -322,7 +319,10 @@ pub async fn cmd_user_list(search: &str) -> Result<()> {
     let rows: Vec<Vec<String>> = identities
         .iter()
         .map(|i| {
-            let traits = i.get("traits").cloned().unwrap_or(Value::Object(Default::default()));
+            let traits = i
+                .get("traits")
+                .cloned()
+                .unwrap_or(Value::Object(Default::default()));
             let email = traits
                 .get("email")
                 .and_then(|v| v.as_str())
@@ -334,10 +334,7 @@ pub async fn cmd_user_list(search: &str) -> Result<()> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("active")
                 .to_string();
-            let id = i
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let id = i.get("id").and_then(|v| v.as_str()).unwrap_or("");
             vec![short_id(id), email, name, state]
         })
         .collect();
@@ -558,9 +555,7 @@ async fn send_welcome_email(
     };
 
     let joining_line = if !job_title.is_empty() && !department.is_empty() {
-        format!(
-            " You're joining as {job_title} in the {department} department."
-        )
+        format!(" You're joining as {job_title} in the {department} department.")
     } else {
         String::new()
     };
@@ -733,8 +728,13 @@ pub async fn cmd_user_onboard(
         let domain = crate::kube::get_domain().await?;
         let recipient = if notify.is_empty() { email } else { notify };
         send_welcome_email(
-            &domain, recipient, name, &recovery_link, &recovery_code,
-            job_title, department,
+            &domain,
+            recipient,
+            name,
+            &recovery_link,
+            &recovery_code,
+            job_title,
+            department,
         )
         .await?;
     }

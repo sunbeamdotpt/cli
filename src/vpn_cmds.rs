@@ -11,7 +11,7 @@
 use crate::config::active_context;
 use crate::error::{Result, SunbeamError};
 use crate::output::{ok, step, warn};
-use std::path::PathBuf;
+use crate::vpn_env::vpn_state_dir;
 
 /// Run `sunbeam connect`.
 ///
@@ -188,6 +188,11 @@ async fn run_daemon_foreground() -> Result<()> {
         hostname,
         server_public_key: None,
         derp_tls_insecure: ctx.vpn_tls_insecure,
+        route_whitelist: sunbeam_net::config::default_route_whitelist(),
+        socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        socks_allow_ports: sunbeam_net::config::default_socks_allow_ports(),
+        dns_server: parse_dns_server(&ctx.vpn_dns_server)?,
+        dns_search_domains: parse_dns_search(&ctx.vpn_dns_search),
     };
 
     step(&format!("Connecting to {}", ctx.vpn_url));
@@ -199,9 +204,8 @@ async fn run_daemon_foreground() -> Result<()> {
     // (e.g. via an IPC `Stop` request).
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
-    let mut sigterm =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .map_err(|e| SunbeamError::Other(format!("install SIGTERM handler: {e}")))?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| SunbeamError::Other(format!("install SIGTERM handler: {e}")))?;
 
     loop {
         tokio::select! {
@@ -257,7 +261,12 @@ pub async fn cmd_vpn_status() -> Result<()> {
         return Ok(());
     }
     match client.status().await {
-        Ok(sunbeam_net::DaemonStatus::Running { addresses, peer_count, derp_home }) => {
+        Ok(sunbeam_net::DaemonStatus::Running {
+            addresses,
+            peer_count,
+            derp_home,
+            socks_proxy_port,
+        }) => {
             let addrs: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
             println!("VPN: running");
             println!("  addresses: {}", addrs.join(", "));
@@ -265,6 +274,11 @@ pub async fn cmd_vpn_status() -> Result<()> {
             if let Some(region) = derp_home {
                 println!("  derp home: region {region}");
             }
+            if let Some(port) = socks_proxy_port {
+                println!("  socks proxy: 127.0.0.1:{port}");
+            }
+            print_routes(&client).await;
+            print_recent_connections(&client).await;
         }
         Ok(other) => {
             println!("VPN: {other}");
@@ -276,6 +290,65 @@ pub async fn cmd_vpn_status() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Query the daemon for its subnet-router table and print one line per
+/// advertised prefix. Silently skipped if the daemon doesn't answer —
+/// `sunbeam vpn status` is a best-effort view and we'd rather show
+/// partial output than bail.
+async fn print_routes(client: &sunbeam_net::IpcClient) {
+    match client.routes().await {
+        Ok(routes) if !routes.is_empty() => {
+            println!("  routes:");
+            for r in routes {
+                // Collapse long node keys to a short suffix; the full
+                // 64-char base64 hides the useful information.
+                let short = short_node_key(&r.node_key);
+                println!("    {:<20}  via {short}", r.cidr);
+            }
+        }
+        Ok(_) => {
+            println!("  routes: (none)");
+        }
+        Err(e) => {
+            println!("  routes: (query failed: {e})");
+        }
+    }
+}
+
+/// Pull the last few SOCKS/HTTP proxy audit entries and render them
+/// as a compact table. Accepted and denied entries share the same
+/// layout so it's easy to eyeball what the proxy is actually doing.
+async fn print_recent_connections(client: &sunbeam_net::IpcClient) {
+    const TAIL: usize = 10;
+    match client.recent_connections(TAIL).await {
+        Ok(entries) if !entries.is_empty() => {
+            println!("  recent connections (newest first):");
+            for e in entries {
+                println!(
+                    "    {:>5}  {:<20}  {}",
+                    e.protocol,
+                    e.outcome.label(),
+                    e.destination,
+                );
+            }
+        }
+        Ok(_) => {
+            println!("  recent connections: (none)");
+        }
+        Err(e) => {
+            println!("  recent connections: (query failed: {e})");
+        }
+    }
+}
+
+/// Collapse a full `nodekey:...` string to a short display form so the
+/// routes table stays readable. We keep the first 12 hex characters,
+/// which is unique enough for operator-level identification.
+fn short_node_key(key: &str) -> String {
+    let body = key.strip_prefix("nodekey:").unwrap_or(key);
+    let cut = body.char_indices().nth(12).map(|(i, _)| i).unwrap_or(body.len());
+    format!("nodekey:{}…", &body[..cut])
 }
 
 /// Run `sunbeam vpn create-key` — call Headscale's REST API to mint a
@@ -343,16 +416,13 @@ pub async fn cmd_vpn_create_key(
     }
 
     // Response shape: {"preAuthKey": {"key": "...", "user": "...", "reusable": ..., ...}}
-    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        SunbeamError::Other(format!("parse headscale response: {e}\nbody: {text}"))
-    })?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| SunbeamError::Other(format!("parse headscale response: {e}\nbody: {text}")))?;
     let key = parsed
         .get("preAuthKey")
         .and_then(|p| p.get("key"))
         .and_then(|k| k.as_str())
-        .ok_or_else(|| {
-            SunbeamError::Other(format!("no preAuthKey.key in response: {text}"))
-        })?;
+        .ok_or_else(|| SunbeamError::Other(format!("no preAuthKey.key in response: {text}")))?;
 
     ok(&format!("Pre-auth key for user '{user}':"));
     println!("{key}");
@@ -447,9 +517,83 @@ fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
     (y, mo, days_u + 1)
 }
 
-/// Resolve the on-disk directory for VPN state (keys, control socket).
-fn vpn_state_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME")
-        .map_err(|_| SunbeamError::Other("HOME not set".into()))?;
-    Ok(PathBuf::from(home).join(".sunbeam").join("vpn"))
+/// Parse the context's `vpn-dns-server` field into a `SocketAddr`.
+/// An empty string disables cluster DNS (returns `None`). A value
+/// without an explicit port defaults to `:53`.
+fn parse_dns_server(raw: &str) -> Result<Option<std::net::SocketAddr>> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(addr) = s.parse::<std::net::SocketAddr>() {
+        return Ok(Some(addr));
+    }
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        return Ok(Some(std::net::SocketAddr::new(ip, 53)));
+    }
+    Err(SunbeamError::Other(format!(
+        "vpn-dns-server {s:?} is not a valid IP or host:port"
+    )))
+}
+
+/// Parse the context's `vpn-dns-search` field into a list of search
+/// domains, defaulting to k8s cluster domains when empty.
+fn parse_dns_search(raw: &str) -> Vec<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return vec!["svc.cluster.local".into(), "cluster.local".into()];
+    }
+    s.split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(test)]
+mod dns_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_empty_as_none() {
+        assert!(parse_dns_server("").unwrap().is_none());
+        assert!(parse_dns_server("   ").unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_ip_only_as_port_53() {
+        let got = parse_dns_server("10.43.0.10").unwrap().unwrap();
+        assert_eq!(got, "10.43.0.10:53".parse().unwrap());
+    }
+
+    #[test]
+    fn parses_full_host_port() {
+        let got = parse_dns_server("10.43.0.10:9053").unwrap().unwrap();
+        assert_eq!(got, "10.43.0.10:9053".parse().unwrap());
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert!(parse_dns_server("not-an-ip").is_err());
+    }
+
+    #[test]
+    fn search_domains_default_when_empty() {
+        assert_eq!(
+            parse_dns_search(""),
+            vec!["svc.cluster.local".to_string(), "cluster.local".to_string()]
+        );
+    }
+
+    #[test]
+    fn search_domains_split_csv_and_trim() {
+        assert_eq!(
+            parse_dns_search(" svc.cluster.local , cluster.local , ops.local "),
+            vec![
+                "svc.cluster.local".to_string(),
+                "cluster.local".to_string(),
+                "ops.local".to_string()
+            ]
+        );
+    }
 }

@@ -30,16 +30,35 @@ const CRED_MAPPINGS: &[(&str, &str, &str)] = &[
     ("people-django-secret", "people", "django-secret-key"),
     ("livekit-api-key", "livekit", "api-key"),
     ("livekit-api-secret", "livekit", "api-secret"),
-    ("kratos-admin-cookie-secret", "kratos-admin", "cookie-secret"),
+    (
+        "kratos-admin-cookie-secret",
+        "kratos-admin",
+        "cookie-secret",
+    ),
     ("messages-dkim-public-key", "messages", "dkim-public-key"),
 ];
 
 /// All services that have KV data to collect.
 const KV_SERVICES: &[&str] = &[
-    "hydra", "kratos", "seaweedfs", "gitea", "hive", "livekit",
-    "people", "login-ui", "kratos-admin", "docs", "meet", "drive",
-    "projects", "calendars", "messages", "collabora", "tuwunel",
-    "grafana", "scaleway-s3",
+    "hydra",
+    "kratos",
+    "seaweedfs",
+    "gitea",
+    "hive",
+    "livekit",
+    "people",
+    "login-ui",
+    "kratos-admin",
+    "docs",
+    "meet",
+    "drive",
+    "projects",
+    "calendars",
+    "messages",
+    "collabora",
+    "tuwunel",
+    "grafana",
+    "scaleway-s3",
 ];
 
 /// Collect per-service credential outputs into a unified `creds` map.
@@ -51,13 +70,14 @@ pub struct CollectCredentials;
 
 #[async_trait::async_trait]
 impl StepBody for CollectCredentials {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
 
-        if data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if data
+            .get("skip_seed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(ExecutionResult::next());
         }
 
@@ -66,7 +86,8 @@ impl StepBody for CollectCredentials {
 
         // Collect per-service creds into the global map
         for (global_key, service, field) in CRED_MAPPINGS {
-            let value = data.get(&format!("creds_{service}"))
+            let value = data
+                .get(&format!("creds_{service}"))
                 .and_then(|v| v.get(*field))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -82,13 +103,20 @@ impl StepBody for CollectCredentials {
             }
 
             let dirty_key = format!("dirty_{service}");
-            if data.get(&dirty_key).and_then(|v| v.as_bool()).unwrap_or(false) {
+            if data
+                .get(&dirty_key)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 dirty_paths.push(service.to_string());
             }
         }
 
-        ok(&format!("Collected credentials from {} services ({} dirty)",
-            KV_SERVICES.len(), dirty_paths.len()));
+        ok(&format!(
+            "Collected credentials from {} services ({} dirty)",
+            KV_SERVICES.len(),
+            dirty_paths.len()
+        ));
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({
@@ -111,8 +139,16 @@ mod tests {
     #[test]
     fn cred_mappings_cover_all_expected_keys() {
         assert_eq!(CRED_MAPPINGS.len(), 15);
-        assert!(CRED_MAPPINGS.iter().any(|(k, _, _)| *k == "hydra-system-secret"));
-        assert!(CRED_MAPPINGS.iter().any(|(k, _, _)| *k == "messages-dkim-public-key"));
+        assert!(
+            CRED_MAPPINGS
+                .iter()
+                .any(|(k, _, _)| *k == "hydra-system-secret")
+        );
+        assert!(
+            CRED_MAPPINGS
+                .iter()
+                .any(|(k, _, _)| *k == "messages-dkim-public-key")
+        );
     }
 
     #[test]

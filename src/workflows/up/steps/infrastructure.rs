@@ -15,10 +15,7 @@ pub struct EnsureCilium;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureCilium {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -77,10 +74,7 @@ pub struct EnsureBuildKit;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureBuildKit {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 

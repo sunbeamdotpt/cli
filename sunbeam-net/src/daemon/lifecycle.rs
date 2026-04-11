@@ -6,11 +6,12 @@ use smoltcp::wire::IpAddress;
 use tokio::sync::mpsc;
 
 use crate::config::VpnConfig;
-use crate::control::MapUpdate;
+use crate::control::{MapUpdate, RouteTable};
 use crate::daemon::ipc::IpcServer;
 use crate::daemon::state::{DaemonHandle, DaemonStatus};
 use crate::derp::client::{DerpClient, DerpTlsMode};
 use crate::proto::types::DerpMap;
+use crate::proxy::audit::AuditLog;
 use crate::proxy::engine::{EngineCommand, NetworkEngine};
 use crate::wg::tunnel::{DecapAction, WgTunnel};
 
@@ -28,9 +29,10 @@ impl VpnDaemon {
 
         let status_clone = status.clone();
         let shutdown_clone = shutdown.clone();
-        let join = tokio::spawn(async move {
-            run_daemon_loop(config, status_clone, shutdown_clone).await
-        });
+        let join =
+            tokio::spawn(
+                async move { run_daemon_loop(config, status_clone, shutdown_clone).await },
+            );
 
         Ok(DaemonHandle::with_daemon(shutdown, status, join))
     }
@@ -68,11 +70,11 @@ async fn run_daemon_loop(
 
         match session_result {
             Ok(SessionExit::Disconnected) | Err(_) => {
+                if let Err(ref e) = session_result {
+                    tracing::error!("session ended with error: {e:?}");
+                }
                 attempt += 1;
-                let delay = std::cmp::min(
-                    Duration::from_secs(1 << attempt.min(6)),
-                    max_backoff,
-                );
+                let delay = std::cmp::min(Duration::from_secs(1 << attempt.min(6)), max_backoff);
                 set_status(&status, DaemonStatus::Reconnecting { attempt });
 
                 tokio::select! {
@@ -111,6 +113,24 @@ impl Drop for SocketGuard {
     }
 }
 
+/// Cleans up the SOCKS5 discovery files (`socks5.port` + `socks5.auth`) on
+/// daemon exit so the next `sunbeam vpn status` doesn't see stale creds.
+struct SocksGuard {
+    state_dir: std::path::PathBuf,
+}
+
+impl SocksGuard {
+    fn new(state_dir: std::path::PathBuf) -> Self {
+        Self { state_dir }
+    }
+}
+
+impl Drop for SocksGuard {
+    fn drop(&mut self) {
+        crate::proxy::socks::SocksServer::remove_discovery_files(&self.state_dir);
+    }
+}
+
 /// Run a single VPN session. Returns when the session ends (error or shutdown).
 async fn run_session(
     config: &VpnConfig,
@@ -120,39 +140,107 @@ async fn run_session(
 ) -> std::result::Result<SessionExit, crate::Error> {
     // 1. Connect to coordination server
     set_status(status, DaemonStatus::Connecting);
-    let mut control = crate::control::ControlClient::connect(config, keys).await
-        .map_err(|e| { eprintln!("[session] connect: {e:?}"); e })?;
+    let mut control = crate::control::ControlClient::connect(config, keys)
+        .await
+        .map_err(|e| {
+            eprintln!("[session] connect: {e:?}");
+            e
+        })?;
 
     // 2. Register
     set_status(status, DaemonStatus::Registering);
-    let _reg = control.register(&config.auth_key, &config.hostname, keys).await?;
+    let _reg = control
+        .register(&config.auth_key, &config.hostname, keys)
+        .await?;
 
     // 2a. Send a Lite endpoint update so Headscale persists our DiscoKey on
     //     the node record. The streaming /machine/map handler doesn't
     //     update DiscoKey at capability versions ≥ 68 — only the Lite path
     //     does, and without it our peers can't see us in their netmaps.
-    control.lite_update(keys, &config.hostname, None).await?;
+    //
+    //     We don't yet know our preferred DERP region on this first call —
+    //     the DERPMap arrives with the first netmap below — so NetInfo is
+    //     left unset here and re-sent with the correct region in step 4b.
+    control
+        .lite_update(keys, &config.hostname, None, None)
+        .await?;
 
     // 3. Start map stream
-    let mut map_stream = control.map_stream(keys, &config.hostname).await?;
+    let mut map_stream = control.map_stream(keys, &config.hostname, None).await?;
 
     // 4. Wait for first netmap to get our addresses and peers
-    let first_update = map_stream.next().await?
+    let first_update = map_stream
+        .next()
+        .await?
         .ok_or_else(|| crate::Error::Control("map stream closed before first update".into()))?;
 
     let (peers, addresses, derp_map) = match &first_update {
-        MapUpdate::Full { peers, self_node, derp_map, .. } => {
-            let addrs: Vec<IpAddr> = self_node.addresses.iter()
+        MapUpdate::Full {
+            peers,
+            self_node,
+            derp_map,
+            ..
+        } => {
+            let addrs: Vec<IpAddr> = self_node
+                .addresses
+                .iter()
                 .filter_map(|a| a.split('/').next()?.parse().ok())
                 .collect();
             (peers.clone(), addrs, derp_map.clone())
         }
         _ => {
-            return Err(crate::Error::Control("expected Full netmap as first update".into()));
+            return Err(crate::Error::Control(
+                "expected Full netmap as first update".into(),
+            ));
         }
     };
 
     let peer_count = peers.len();
+
+    // 4b. Re-send the Lite endpoint update with NetInfo.PreferredDERP set
+    //     to the first region from the just-received DERPMap. Headscale
+    //     derives our `Node.DERP` field from this value, and peers use it
+    //     to decide which relay region to address our packets to. Without
+    //     it, our node record advertises "127.3.3.40:0" and DERP-only peers
+    //     (the common case for peers behind NAT with unreachable endpoints)
+    //     never route traffic to us, so WireGuard handshakes dead-end and
+    //     time out at REKEY_ATTEMPT. The `map_stream` future above holds
+    //     the original ControlClient hostage, so we open a fresh control
+    //     connection just for this lite-update — one extra Noise handshake
+    //     per session is a small price for correct DERP addressing.
+    if let Some(ref dm) = derp_map {
+        if let Some(region) = dm.regions.values().next() {
+            tracing::info!(
+                "sending lite-update with preferred_derp={}",
+                region.region_id
+            );
+            let mut lite_client =
+                crate::control::ControlClient::connect(config, keys).await?;
+            lite_client
+                .lite_update(keys, &config.hostname, None, Some(region.region_id.into()))
+                .await?;
+            // Drop lite_client → closes its h2 connection. The map stream
+            // on the original ControlClient is unaffected.
+        }
+    }
+
+    // 4a. Build the peer route table from the first netmap. Phase 1: the
+    //     table is kept up-to-date but not yet consulted by the TCP proxy
+    //     — Phase 2 (SOCKS5) will call `RouteTable::resolve` to pick an
+    //     owning peer for arbitrary destination IPs. We maintain it now so
+    //     the plumbing is in place and the behavior is testable.
+    let route_table = {
+        let mut t = RouteTable::new();
+        t.rebuild(&peers, &config.route_whitelist);
+        Arc::new(RwLock::new(t))
+    };
+    if let Ok(rt) = route_table.read() {
+        tracing::info!(
+            "route table initialized with {} entries from {} peers",
+            rt.len(),
+            peer_count
+        );
+    }
 
     // 5. Initialize WireGuard tunnel. Tailscale uses the node_key as the
     //    WireGuard static key — they are the same key, not separate. Peers
@@ -163,7 +251,8 @@ async fn run_session(
     wg_tunnel.update_peers(&peers);
 
     // 6. Set up NetworkEngine with our VPN IP
-    let local_ip = addresses.first()
+    let local_ip = addresses
+        .first()
         .ok_or_else(|| crate::Error::Control("no addresses assigned".into()))?;
     let smoltcp_ip = match local_ip {
         IpAddr::V4(v4) => IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from(*v4)),
@@ -202,6 +291,44 @@ async fn run_session(
         run_proxy_listener(proxy_bind, cluster_addr, proxy_cmd_tx, proxy_cancel).await
     });
 
+    // 7a. SOCKS5 + HTTP CONNECT proxy: loopback-only, auth-gated, enforces
+    //     destination ACLs via the peer route table. Published port +
+    //     auth token are written to `{state_dir}/socks5.{port,auth}` so
+    //     downstream tools can point HTTPS_PROXY at it.
+    let socks_cfg = crate::proxy::socks::SocksConfig {
+        bind: config.socks_bind,
+        allow_ports: config.socks_allow_ports.clone(),
+        state_dir: config.state_dir.clone(),
+    };
+    // Build the optional cluster DNS resolver. It runs its queries
+    // through the same engine command channel the SOCKS proxy uses,
+    // so virtual TCP to the DNS server traverses the existing
+    // smoltcp + WireGuard path.
+    let resolver = config.dns_server.map(|dns_server| {
+        std::sync::Arc::new(crate::dns::resolver::Resolver::new(
+            dns_server,
+            channels.cmd_tx.clone(),
+            config.dns_search_domains.clone(),
+        ))
+    });
+    // Shared audit log for the SOCKS proxy. The same Arc is handed to
+    // the IpcServer below so `sunbeam vpn status` can tail it without
+    // any extra plumbing.
+    let audit_log = Arc::new(AuditLog::new());
+    let (socks_server, socks_endpoint) = crate::proxy::socks::SocksServer::bind(
+        socks_cfg,
+        route_table.clone(),
+        channels.cmd_tx.clone(),
+        resolver,
+        audit_log.clone(),
+    )
+    .await?;
+    let socks_state_dir = config.state_dir.clone();
+    let _socks_guard = SocksGuard::new(socks_state_dir);
+    let socks_cancel = cancel.clone();
+    let socks_task = tokio::spawn(async move { socks_server.run(socks_cancel).await });
+    let socks_proxy_port = Some(socks_endpoint.port);
+
     // 8. Engine task: polls smoltcp and bridges connections
     let engine_cancel = cancel.clone();
     let engine_task = tokio::spawn(async move {
@@ -214,10 +341,8 @@ async fn run_session(
 
     // 9a. Bind a UDP socket for direct WireGuard transport. Failure here is
     //     non-fatal — DERP can carry traffic alone, just slower.
-    let (udp_out_tx, udp_out_rx) =
-        mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
-    let (udp_in_tx, udp_in_rx) =
-        mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
+    let (udp_out_tx, udp_out_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
+    let (udp_in_tx, udp_in_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
     let _udp_task = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
         Ok(socket) => {
             let local = socket.local_addr().ok();
@@ -299,22 +424,34 @@ async fn run_session(
     });
 
     // 11. Start IPC server
-    let ipc = IpcServer::new(&config.control_socket, status.clone(), daemon_shutdown.clone())?;
+    let ipc = IpcServer::new(
+        &config.control_socket,
+        status.clone(),
+        route_table.clone(),
+        audit_log.clone(),
+        daemon_shutdown.clone(),
+    )?;
 
     // Mark as ready
-    let derp_home = derp_map.as_ref()
+    let derp_home = derp_map
+        .as_ref()
         .and_then(|dm| dm.regions.values().next())
         .map(|r| r.region_id);
 
-    set_status(status, DaemonStatus::Running {
-        addresses,
-        peer_count,
-        derp_home,
-    });
+    set_status(
+        status,
+        DaemonStatus::Running {
+            addresses,
+            peer_count,
+            derp_home,
+            socks_proxy_port,
+        },
+    );
 
     // 11. Run concurrent tasks
+    let route_whitelist = config.route_whitelist.clone();
     tokio::select! {
-        result = map_stream_loop(&mut map_stream, status) => {
+        result = map_stream_loop(&mut map_stream, status, &route_table, &route_whitelist) => {
             eprintln!("[session] map_stream_loop exited: {result:?}");
             cancel.cancel();
             match result {
@@ -324,6 +461,11 @@ async fn run_session(
         }
         r = proxy_task => {
             eprintln!("[session] proxy_task exited: {r:?}");
+            cancel.cancel();
+            Ok(SessionExit::Disconnected)
+        }
+        r = socks_task => {
+            tracing::error!("socks_task exited: {r:?}");
             cancel.cancel();
             Ok(SessionExit::Disconnected)
         }
@@ -352,13 +494,17 @@ async fn run_proxy_listener(
     cmd_tx: mpsc::Sender<EngineCommand>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind_addr).await
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
         .map_err(|e| crate::Error::Io {
             context: format!("bind proxy {bind_addr}"),
             source: e,
         })?;
 
-    tracing::info!("VPN proxy listening on {}", listener.local_addr().unwrap_or(bind_addr));
+    tracing::info!(
+        "VPN proxy listening on {}",
+        listener.local_addr().unwrap_or(bind_addr)
+    );
 
     loop {
         tokio::select! {
@@ -670,29 +816,44 @@ fn coordination_host_port(url: &str) -> Option<(String, u16)> {
 }
 
 /// Continuously read map updates and update state.
+///
+/// This also keeps the shared [`RouteTable`] in sync with the netmap so
+/// Phase 2 (SOCKS5 resolution) can consult it. Rebuilds on `Full`, upserts
+/// on `PeersChanged`, and removes on `PeersRemoved`.
 async fn map_stream_loop(
     stream: &mut crate::control::MapStream,
     status: &Arc<RwLock<DaemonStatus>>,
+    route_table: &Arc<RwLock<RouteTable>>,
+    route_whitelist: &[ipnet::IpNet],
 ) -> crate::Result<()> {
     loop {
         match stream.next().await? {
-            Some(update) => {
-                match &update {
-                    MapUpdate::Full { peers, .. } => {
-                        update_peer_count(status, peers.len());
+            Some(update) => match &update {
+                MapUpdate::Full { peers, .. } => {
+                    update_peer_count(status, peers.len());
+                    if let Ok(mut rt) = route_table.write() {
+                        rt.rebuild(peers, route_whitelist);
+                        tracing::info!("netmap: {} peers, {} routes", peers.len(), rt.len());
+                    } else {
                         tracing::info!("netmap: {} peers", peers.len());
                     }
-                    MapUpdate::PeersChanged(peers) => {
-                        tracing::debug!("netmap: {} peers changed", peers.len());
-                    }
-                    MapUpdate::PeersRemoved(keys) => {
-                        tracing::debug!("netmap: {} peers removed", keys.len());
-                    }
-                    MapUpdate::KeepAlive => {
-                        tracing::trace!("netmap: keep-alive");
-                    }
                 }
-            }
+                MapUpdate::PeersChanged(peers) => {
+                    if let Ok(mut rt) = route_table.write() {
+                        rt.apply_changed(peers, route_whitelist);
+                    }
+                    tracing::debug!("netmap: {} peers changed", peers.len());
+                }
+                MapUpdate::PeersRemoved(keys) => {
+                    if let Ok(mut rt) = route_table.write() {
+                        rt.apply_removed(keys);
+                    }
+                    tracing::debug!("netmap: {} peers removed", keys.len());
+                }
+                MapUpdate::KeepAlive => {
+                    tracing::trace!("netmap: keep-alive");
+                }
+            },
             None => return Ok(()), // stream ended
         }
     }
@@ -751,6 +912,11 @@ mod tests {
             hostname: "test-node".to_string(),
             server_public_key: Some([0xaa; 32]),
             derp_tls_insecure: false,
+            route_whitelist: crate::config::default_route_whitelist(),
+            socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            socks_allow_ports: crate::config::default_socks_allow_ports(),
+            dns_server: None,
+            dns_search_domains: vec![],
         };
 
         let handle = VpnDaemon::start(config).await.unwrap();
@@ -761,8 +927,7 @@ mod tests {
         let status = handle.current_status();
         // It should be reconnecting (connection to bogus addr fails) or connecting.
         match status {
-            DaemonStatus::Reconnecting { .. }
-            | DaemonStatus::Connecting => {}
+            DaemonStatus::Reconnecting { .. } | DaemonStatus::Connecting => {}
             other => panic!("expected Reconnecting or Connecting, got {other:?}"),
         }
 

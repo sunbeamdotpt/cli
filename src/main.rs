@@ -3,11 +3,11 @@ mod error;
 
 mod auth;
 mod checks;
-mod doctor;
 mod cli;
 mod cluster;
-mod constants;
 mod config;
+mod constants;
+mod doctor;
 mod gitea;
 mod kube;
 mod manifests;
@@ -21,6 +21,7 @@ mod tools;
 mod update;
 mod users;
 mod vpn_cmds;
+mod vpn_env;
 mod wfectl;
 mod workflows;
 
@@ -36,9 +37,8 @@ async fn main() {
     // Default: warn for dependencies, info for sunbeam.
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("sunbeam=info,warn")
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("sunbeam=info,warn")),
         )
         .with_target(false)
         .with_writer(std::io::stderr)

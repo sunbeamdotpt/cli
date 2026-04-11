@@ -17,17 +17,19 @@ pub struct EnsureNamespace;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureNamespace {
-    async fn run(
-        &mut self,
-        ctx: &StepExecutionContext<'_>,
-    ) -> wfe_core::Result<ExecutionResult> {
-        let config = ctx.step.step_config.as_ref()
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("EnsureNamespace: missing step_config"))?;
-        let namespace = config.get("namespace")
+        let namespace = config
+            .get("namespace")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("EnsureNamespace: missing namespace in step_config"))?;
 
-        k::ensure_ns(namespace).await
+        k::ensure_ns(namespace)
+            .await
             .map_err(|e| step_err(format!("EnsureNamespace({namespace}): {e}")))?;
 
         Ok(ExecutionResult::next())

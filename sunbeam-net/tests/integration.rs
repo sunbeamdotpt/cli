@@ -14,9 +14,7 @@ use std::env;
 
 fn require_env(key: &str) -> String {
     env::var(key).unwrap_or_else(|_| {
-        panic!(
-            "Integration test requires {key} env var. Run via sunbeam-net/tests/run.sh"
-        )
+        panic!("Integration test requires {key} env var. Run via sunbeam-net/tests/run.sh")
     })
 }
 
@@ -39,15 +37,19 @@ async fn test_register_and_receive_netmap() {
         hostname: "sunbeam-net-test".into(),
         server_public_key: None,
         derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
+        route_whitelist: sunbeam_net::config::default_route_whitelist(),
+        socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        socks_allow_ports: sunbeam_net::config::default_socks_allow_ports(),
+        dns_server: None,
+        dns_search_domains: vec![],
     };
 
     let keys = sunbeam_net::keys::NodeKeys::load_or_generate(&config.state_dir).unwrap();
 
     // Connect and register
-    let mut control =
-        sunbeam_net::control::ControlClient::connect(&config, &keys)
-            .await
-            .expect("failed to connect to Headscale");
+    let mut control = sunbeam_net::control::ControlClient::connect(&config, &keys)
+        .await
+        .expect("failed to connect to Headscale");
 
     let reg = control
         .register(&config.auth_key, &config.hostname, &keys)
@@ -65,14 +67,11 @@ async fn test_register_and_receive_netmap() {
         .await
         .expect("failed to start map stream");
 
-    let update = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        map.next(),
-    )
-    .await
-    .expect("timed out waiting for netmap")
-    .expect("map stream error")
-    .expect("map stream ended without data");
+    let update = tokio::time::timeout(std::time::Duration::from_secs(15), map.next())
+        .await
+        .expect("timed out waiting for netmap")
+        .expect("map stream error")
+        .expect("map stream ended without data");
 
     match update {
         sunbeam_net::control::MapUpdate::Full { peers, .. } => {
@@ -109,6 +108,11 @@ async fn test_proxy_listener_accepts() {
         hostname: "sunbeam-net-proxy-test".into(),
         server_public_key: None,
         derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
+        route_whitelist: sunbeam_net::config::default_route_whitelist(),
+        socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        socks_allow_ports: sunbeam_net::config::default_socks_allow_ports(),
+        dns_server: None,
+        dns_search_domains: vec![],
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config).await.unwrap();
@@ -116,7 +120,10 @@ async fn test_proxy_listener_accepts() {
     // Wait for Running
     let mut ready = false;
     for _ in 0..60 {
-        if matches!(handle.current_status(), sunbeam_net::DaemonStatus::Running { .. }) {
+        if matches!(
+            handle.current_status(),
+            sunbeam_net::DaemonStatus::Running { .. }
+        ) {
             ready = true;
             break;
         }
@@ -175,6 +182,11 @@ async fn test_e2e_tcp_through_tunnel() {
         server_public_key: None,
         // Test stack uses a self-signed cert.
         derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
+        route_whitelist: sunbeam_net::config::default_route_whitelist(),
+        socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        socks_allow_ports: sunbeam_net::config::default_socks_allow_ports(),
+        dns_server: None,
+        dns_search_domains: vec![],
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config)
@@ -220,13 +232,10 @@ async fn test_e2e_tcp_through_tunnel() {
         .expect("write request failed");
 
     let mut buf = Vec::new();
-    let read = tokio::time::timeout(
-        Duration::from_secs(20),
-        stream.read_to_end(&mut buf),
-    )
-    .await
-    .expect("read response timed out")
-    .expect("read response failed");
+    let read = tokio::time::timeout(Duration::from_secs(20), stream.read_to_end(&mut buf))
+        .await
+        .expect("read response timed out")
+        .expect("read response failed");
 
     assert!(read > 0, "expected bytes from echo server, got 0");
     let body = String::from_utf8_lossy(&buf);
@@ -257,6 +266,11 @@ async fn test_daemon_lifecycle() {
         hostname: "sunbeam-net-daemon-test".into(),
         server_public_key: None,
         derp_tls_insecure: std::env::var("SUNBEAM_NET_TEST_DERP_INSECURE").is_ok(),
+        route_whitelist: sunbeam_net::config::default_route_whitelist(),
+        socks_bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        socks_allow_ports: sunbeam_net::config::default_socks_allow_ports(),
+        dns_server: None,
+        dns_search_domains: vec![],
     };
 
     let handle = sunbeam_net::VpnDaemon::start(config)

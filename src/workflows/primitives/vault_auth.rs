@@ -15,24 +15,27 @@ fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
 }
 
 fn should_skip(data: &serde_json::Value) -> bool {
-    data.get("skip_seed").and_then(|v| v.as_bool()).unwrap_or(false)
+    data.get("skip_seed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 fn get_str(data: &serde_json::Value, key: &str) -> Option<String> {
-    data.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    data.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
-async fn connect_bao(data: &serde_json::Value) -> Result<(BaoClient, secrets::PortForwardGuard), wfe_core::WfeError> {
-    let ob_pod = get_str(data, "ob_pod")
-        .ok_or_else(|| step_err("vault auth: missing ob_pod"))?;
-    let root_token = get_str(data, "root_token")
-        .ok_or_else(|| step_err("vault auth: missing root_token"))?;
-    let pf = secrets::port_forward("data", &ob_pod, 8200).await
+async fn connect_bao(
+    data: &serde_json::Value,
+) -> Result<(BaoClient, secrets::PortForwardGuard), wfe_core::WfeError> {
+    let ob_pod = get_str(data, "ob_pod").ok_or_else(|| step_err("vault auth: missing ob_pod"))?;
+    let root_token =
+        get_str(data, "root_token").ok_or_else(|| step_err("vault auth: missing root_token"))?;
+    let pf = secrets::port_forward("data", &ob_pod, 8200)
+        .await
         .map_err(|e| step_err(e.to_string()))?;
-    let bao = BaoClient::with_token(
-        &format!("http://127.0.0.1:{}", pf.local_port),
-        &root_token,
-    );
+    let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), &root_token);
     Ok((bao, pf))
 }
 
@@ -48,14 +51,21 @@ pub struct EnableVaultAuth;
 impl StepBody for EnableVaultAuth {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
-        if should_skip(data) { return Ok(ExecutionResult::next()); }
+        if should_skip(data) {
+            return Ok(ExecutionResult::next());
+        }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("EnableVaultAuth: missing step_config"))?;
-        let mount = config.get("mount").and_then(|v| v.as_str())
+        let mount = config
+            .get("mount")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("EnableVaultAuth: missing mount"))?;
         let auth_type = config.get("type").and_then(|v| v.as_str()).unwrap_or(mount);
 
@@ -78,20 +88,29 @@ pub struct WriteVaultAuthConfig;
 impl StepBody for WriteVaultAuthConfig {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
-        if should_skip(data) { return Ok(ExecutionResult::next()); }
+        if should_skip(data) {
+            return Ok(ExecutionResult::next());
+        }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("WriteVaultAuthConfig: missing step_config"))?;
-        let mount = config.get("mount").and_then(|v| v.as_str())
+        let mount = config
+            .get("mount")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteVaultAuthConfig: missing mount"))?;
-        let auth_config = config.get("config")
+        let auth_config = config
+            .get("config")
             .ok_or_else(|| step_err("WriteVaultAuthConfig: missing config"))?;
 
         let (bao, _pf) = connect_bao(data).await?;
-        bao.write(&format!("auth/{mount}/config"), auth_config).await
+        bao.write(&format!("auth/{mount}/config"), auth_config)
+            .await
             .map_err(|e| step_err(format!("WriteVaultAuthConfig({mount}): {e}")))?;
         ok(&format!("Vault auth config: {mount}"));
         Ok(ExecutionResult::next())
@@ -110,20 +129,30 @@ pub struct WriteVaultPolicy;
 impl StepBody for WriteVaultPolicy {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
-        if should_skip(data) { return Ok(ExecutionResult::next()); }
+        if should_skip(data) {
+            return Ok(ExecutionResult::next());
+        }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("WriteVaultPolicy: missing step_config"))?;
-        let name = config.get("name").and_then(|v| v.as_str())
+        let name = config
+            .get("name")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteVaultPolicy: missing name"))?;
-        let hcl = config.get("hcl").and_then(|v| v.as_str())
+        let hcl = config
+            .get("hcl")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteVaultPolicy: missing hcl"))?;
 
         let (bao, _pf) = connect_bao(data).await?;
-        bao.write_policy(name, hcl).await
+        bao.write_policy(name, hcl)
+            .await
             .map_err(|e| step_err(format!("WriteVaultPolicy({name}): {e}")))?;
         ok(&format!("Vault policy: {name}"));
         Ok(ExecutionResult::next())
@@ -142,22 +171,33 @@ pub struct WriteVaultRole;
 impl StepBody for WriteVaultRole {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
-        if should_skip(data) { return Ok(ExecutionResult::next()); }
+        if should_skip(data) {
+            return Ok(ExecutionResult::next());
+        }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
             return Ok(ExecutionResult::next());
         }
 
-        let config = ctx.step.step_config.as_ref()
+        let config = ctx
+            .step
+            .step_config
+            .as_ref()
             .ok_or_else(|| step_err("WriteVaultRole: missing step_config"))?;
-        let mount = config.get("mount").and_then(|v| v.as_str())
+        let mount = config
+            .get("mount")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteVaultRole: missing mount"))?;
-        let role = config.get("role").and_then(|v| v.as_str())
+        let role = config
+            .get("role")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteVaultRole: missing role"))?;
-        let role_config = config.get("config")
+        let role_config = config
+            .get("config")
             .ok_or_else(|| step_err("WriteVaultRole: missing config"))?;
 
         let (bao, _pf) = connect_bao(data).await?;
-        bao.write(&format!("auth/{mount}/role/{role}"), role_config).await
+        bao.write(&format!("auth/{mount}/role/{role}"), role_config)
+            .await
             .map_err(|e| step_err(format!("WriteVaultRole({mount}/{role}): {e}")))?;
         ok(&format!("Vault role: {mount}/{role}"));
         Ok(ExecutionResult::next())

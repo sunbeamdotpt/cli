@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Deserialize a JSON field that may be `null` as an empty `Vec`.
+///
+/// Headscale sometimes serializes empty lists as JSON `null` (e.g. a
+/// `FilterRule` with no source IP restrictions emits `"SrcIPs":null`).
+/// `#[serde(default)]` on the struct only fills in *missing* fields, so
+/// explicit null still fails without this helper.
+fn null_as_empty_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
+}
+
 /// Registration request sent to POST /machine/register.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -47,6 +61,26 @@ pub struct HostInfo {
     pub frontend_log_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_log_id: Option<String>,
+    /// NetInfo carries DERP preferences and NAT-traversal hints. Headscale
+    /// derives our Node.DERP field from `NetInfo.PreferredDERP`, and peers
+    /// use that value to decide which relay region to address packets to.
+    /// Without it, peers see us as `127.3.3.40:0` and DERP-only sends get
+    /// dropped by the relay.
+    #[serde(rename = "NetInfo", skip_serializing_if = "Option::is_none")]
+    pub net_info: Option<NetInfo>,
+}
+
+/// Network/DERP information announced to the coordination server. Only the
+/// field we actually care about — `PreferredDERP` — is populated; the rest
+/// round-trip as `None` / defaults and Headscale accepts a partial struct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct NetInfo {
+    /// DERP region ID we want peers to use when relaying packets to us.
+    /// Zero means "no preference", which is how Headscale interprets an
+    /// absent `NetInfo` — and also how peers refuse to relay to us.
+    #[serde(rename = "PreferredDERP")]
+    pub preferred_derp: u32,
 }
 
 /// Registration response from POST /machine/register.
@@ -144,9 +178,11 @@ pub struct Node {
     pub id: u64,
     pub key: String,
     pub disco_key: String,
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub addresses: Vec<String>,
-    #[serde(rename = "AllowedIPs")]
+    #[serde(rename = "AllowedIPs", deserialize_with = "null_as_empty_vec")]
     pub allowed_ips: Vec<String>,
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub endpoints: Vec<String>,
     #[serde(rename = "DERP")]
     pub derp: String,
@@ -166,6 +202,7 @@ pub struct DerpMap {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DerpRegion {
+    #[serde(rename = "RegionID")]
     pub region_id: u16,
     pub region_code: String,
     pub region_name: String,
@@ -176,6 +213,7 @@ pub struct DerpRegion {
 #[serde(rename_all = "PascalCase", default)]
 pub struct DerpNode {
     pub name: String,
+    #[serde(rename = "RegionID")]
     pub region_id: u16,
     pub host_name: String,
     #[serde(rename = "IPv4")]
@@ -191,7 +229,9 @@ pub struct DerpNode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DnsConfig {
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub resolvers: Vec<DnsResolver>,
+    #[serde(deserialize_with = "null_as_empty_vec")]
     pub domains: Vec<String>,
 }
 
@@ -204,9 +244,9 @@ pub struct DnsResolver {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct FilterRule {
-    #[serde(rename = "SrcIPs")]
+    #[serde(rename = "SrcIPs", deserialize_with = "null_as_empty_vec")]
     pub src_ips: Vec<String>,
-    #[serde(rename = "DstPorts")]
+    #[serde(rename = "DstPorts", deserialize_with = "null_as_empty_vec")]
     pub dst_ports: Vec<FilterPort>,
 }
 
@@ -240,6 +280,7 @@ mod tests {
             device_model: None,
             frontend_log_id: None,
             backend_log_id: None,
+            net_info: None,
         }
     }
 
@@ -425,6 +466,51 @@ mod tests {
         assert_eq!(back.derp, "127.3.3.40:1");
         assert_eq!(back.name, "test.example.com");
         assert_eq!(back.online, Some(true));
+    }
+
+    #[test]
+    fn test_filter_rule_null_src_ips() {
+        // Regression: Headscale emits `"SrcIPs":null` on rules that allow
+        // any source. serde's struct-level `default` only fills in missing
+        // fields, not explicit nulls, so we need a deserializer that
+        // accepts both.
+        let json = r#"{
+            "PacketFilter": [{
+                "SrcIPs": null,
+                "DstPorts": [
+                    {"IP": "10.42.0.0/16", "Ports": {"First": 0, "Last": 65535}},
+                    {"IP": "10.43.0.0/16", "Ports": {"First": 0, "Last": 65535}}
+                ]
+            }]
+        }"#;
+        let resp: MapResponse = serde_json::from_str(json).unwrap();
+        let rules = resp.packet_filter.as_ref().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].src_ips.is_empty());
+        assert_eq!(rules[0].dst_ports.len(), 2);
+        assert_eq!(rules[0].dst_ports[0].ip, "10.42.0.0/16");
+    }
+
+    #[test]
+    fn test_node_null_vec_fields() {
+        // Regression: Headscale may serialize empty peer lists' Addresses
+        // or Endpoints as null rather than [].
+        let json = r#"{
+            "ID": 5,
+            "Key": "nodekey:aa",
+            "DiscoKey": "discokey:bb",
+            "Addresses": null,
+            "AllowedIPs": null,
+            "Endpoints": null,
+            "DERP": "127.3.3.40:1",
+            "Hostinfo": {"GoArch":"arm64","GoOS":"linux","GoVersion":"x","Hostname":"h","OS":"linux","OSVersion":"6.1"},
+            "Name": "n.example.com",
+            "MachineAuthorized": true
+        }"#;
+        let node: Node = serde_json::from_str(json).unwrap();
+        assert!(node.addresses.is_empty());
+        assert!(node.allowed_ips.is_empty());
+        assert!(node.endpoints.is_empty());
     }
 
     #[test]

@@ -25,6 +25,11 @@ pub enum DaemonStatus {
         peer_count: usize,
         /// Home DERP region ID.
         derp_home: Option<u16>,
+        /// Local loopback port the SOCKS5 + HTTP CONNECT proxy is bound to.
+        /// `None` until the proxy has been staged. CLI discovers the
+        /// matching auth token from `{state_dir}/socks5.auth`.
+        #[serde(default)]
+        socks_proxy_port: Option<u16>,
     },
     /// Reconnecting after a connection loss.
     Reconnecting {
@@ -162,6 +167,7 @@ mod tests {
             addresses: vec!["100.64.0.1".parse().unwrap()],
             peer_count: 3,
             derp_home: Some(1),
+            socks_proxy_port: Some(16580),
         };
         assert_eq!(running.to_string(), "running (100.64.0.1), 3 peers");
     }
@@ -172,6 +178,7 @@ mod tests {
             addresses: vec!["fd7a:115c:a1e0::1".parse().unwrap()],
             peer_count: 5,
             derp_home: Some(2),
+            socks_proxy_port: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         let deserialized: DaemonStatus = serde_json::from_str(&json).unwrap();

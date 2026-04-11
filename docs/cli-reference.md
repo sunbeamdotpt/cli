@@ -69,7 +69,7 @@ Build kustomize overlay, apply domain substitution, and apply manifests.
 sunbeam apply
 
 # Apply specific namespace only
-sunbeam apply lasuite
+sunbeam apply ory
 
 # Production environment with custom domain
 sunbeam apply --env production --domain sunbeam.pt
