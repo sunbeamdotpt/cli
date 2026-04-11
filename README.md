@@ -59,34 +59,6 @@ Once installed, sunbeam can update itself:
 sunbeam update
 ```
 
-## Workspace Layout
-
-```
-cli/
-  Cargo.toml                    # [workspace] — sunbeam-sdk + sunbeam
-  sunbeam-sdk/                  # Library crate — all logic
-    src/
-      lib.rs
-      error.rs, config.rs, output.rs, constants.rs
-      kube/       # client, apply, exec, secrets, kustomize_build, tools
-      openbao/    # BaoClient HTTP API
-      auth/       # OAuth2 PKCE, token cache
-      services/   # status, logs, get, restart
-      images/     # build, mirror, per-service builders
-      secrets/    # seed, verify, KV seeding, DB engine
-      users/      # identity CRUD, provisioning (mailbox, projects, email)
-      checks/     # functional health probes, S3 auth
-      pm/         # Planka + Gitea ticket management
-      cluster/    # cert-manager, Linkerd, TLS
-      manifests/  # kustomize apply, namespace filtering
-      gitea/      # bootstrap (orgs, repos, OIDC)
-      update/     # self-update, version
-  sunbeam/                      # Binary crate — thin CLI wrapper
-    src/
-      main.rs                   # tokio, rustls, tracing init
-      cli.rs                    # Clap structs + dispatch
-```
-
 ## Usage
 
 ### Basic Commands
@@ -160,16 +132,16 @@ sunbeam check devtools          # Scoped to namespace
 ### Passthrough
 
 ```bash
-sunbeam k8s get pods -A         # kubectl passthrough
 sunbeam bao status              # bao CLI inside OpenBao pod
 ```
 
 ### Production
 
 ```bash
-sunbeam config set --domain sunbeam.pt --host user@62.210.145.138
+sunbeam config set --domain sunbeam.pt
 sunbeam config use-context production
-sunbeam apply                   # Opens SSH tunnel automatically
+sunbeam connect                 # Bring up the embedded VPN daemon
+sunbeam service apply           # Apply all manifests over the VPN transport
 ```
 
 ## Running Tests
