@@ -40,9 +40,13 @@ pub(crate) struct EncapAction {
 
 impl EncapAction {
     pub fn nothing() -> Self {
-        Self { udp: None, derp: None }
+        Self {
+            udp: None,
+            derp: None,
+        }
     }
 
+    #[allow(dead_code)]
     pub fn is_nothing(&self) -> bool {
         self.udp.is_none() && self.derp.is_none()
     }
@@ -59,7 +63,6 @@ pub(crate) enum DecapAction {
 }
 
 pub(crate) struct TimerAction {
-    pub peer_key: [u8; 32],
     pub action: EncapAction,
 }
 
@@ -106,19 +109,22 @@ impl WgTunnel {
                 let tunn = Tunn::new(
                     self.private_key.clone(),
                     peer_public,
-                    None,  // no preshared key
-                    Some(25),  // 25 second persistent keepalive
+                    None,     // no preshared key
+                    Some(25), // 25 second persistent keepalive
                     index,
-                    None,  // no rate limiter
+                    None, // no rate limiter
                 );
 
-                self.peers.insert(*key_bytes, PeerTunnel {
-                    tunn,
-                    endpoint: parse_first_endpoint(&node.endpoints),
-                    derp_region: parse_derp_region(&node.derp),
-                    allowed_ips: parse_allowed_ips(&node.allowed_ips),
-                    local_index: index,
-                });
+                self.peers.insert(
+                    *key_bytes,
+                    PeerTunnel {
+                        tunn,
+                        endpoint: parse_first_endpoint(&node.endpoints),
+                        derp_region: parse_derp_region(&node.derp),
+                        allowed_ips: parse_allowed_ips(&node.allowed_ips),
+                        local_index: index,
+                    },
+                );
             }
         }
     }
@@ -201,10 +207,7 @@ impl WgTunnel {
                 TunnResult::WriteToNetwork(data) => {
                     let packet = data.to_vec();
                     let action = route_packet(peer, &peer_key, packet);
-                    actions.push(TimerAction {
-                        peer_key,
-                        action,
-                    });
+                    actions.push(TimerAction { action });
                 }
                 TunnResult::Err(_) | TunnResult::Done => {}
                 TunnResult::WriteToTunnelV4(_, _) | TunnResult::WriteToTunnelV6(_, _) => {}
@@ -304,7 +307,7 @@ fn parse_allowed_ips(ips: &[String]) -> Vec<IpNet> {
 
 /// Simple hex decoder.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -313,16 +316,16 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// Simple hex encoder.
+#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
     use super::*;
     use crate::proto::types::{HostInfo, Node};
+    use std::net::Ipv4Addr;
 
     fn test_hostinfo() -> HostInfo {
         HostInfo {
@@ -343,7 +346,8 @@ mod tests {
         Node {
             id: 1,
             key: format!("nodekey:{}", hex_encode(key_bytes)),
-            disco_key: "discokey:0000000000000000000000000000000000000000000000000000000000000000".into(),
+            disco_key: "discokey:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
             addresses: vec!["100.64.0.2/32".into()],
             allowed_ips: allowed_ips.into_iter().map(String::from).collect(),
             endpoints: vec!["1.2.3.4:41641".into()],

@@ -391,7 +391,13 @@ mod tests {
 
     #[test]
     fn decode_a_happy_path() {
-        let resp = mk_response(0xbeef, "hydra.ory.svc.cluster.local", TYPE_A, &[10, 43, 1, 23], 30);
+        let resp = mk_response(
+            0xbeef,
+            "hydra.ory.svc.cluster.local",
+            TYPE_A,
+            &[10, 43, 1, 23],
+            30,
+        );
         let rec = decode_first_ip_record(&resp, 0xbeef, TYPE_A).unwrap();
         assert_eq!(rec.addr, IpAddr::V4(Ipv4Addr::new(10, 43, 1, 23)));
         assert_eq!(rec.ttl, 30);
@@ -413,7 +419,13 @@ mod tests {
     fn decode_rejects_id_mismatch() {
         let resp = mk_response(1, "foo", TYPE_A, &[1, 2, 3, 4], 60);
         let err = decode_first_ip_record(&resp, 2, TYPE_A).unwrap_err();
-        assert!(matches!(err, DnsError::IdMismatch { expected: 2, got: 1 }));
+        assert!(matches!(
+            err,
+            DnsError::IdMismatch {
+                expected: 2,
+                got: 1
+            }
+        ));
     }
 
     #[test]
@@ -493,9 +505,7 @@ mod tests {
         msg.extend_from_slice(&[3, b'b', b'a', b'r', 0]);
 
         // AAAA answer
-        let v6: [u8; 16] = [
-            0xfd, 0x7a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05,
-        ];
+        let v6: [u8; 16] = [0xfd, 0x7a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05];
         msg.extend_from_slice(&ptr);
         msg.extend_from_slice(&TYPE_AAAA.to_be_bytes());
         msg.extend_from_slice(&CLASS_IN.to_be_bytes());

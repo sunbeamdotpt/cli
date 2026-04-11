@@ -41,9 +41,7 @@ pub enum DaemonStatus {
     /// The daemon has stopped (terminal state).
     Stopped,
     /// The daemon encountered a fatal error.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 impl std::fmt::Display for DaemonStatus {
@@ -53,7 +51,11 @@ impl std::fmt::Display for DaemonStatus {
             Self::Connecting => write!(f, "connecting"),
             Self::Handshaking => write!(f, "handshaking"),
             Self::Registering => write!(f, "registering"),
-            Self::Running { addresses, peer_count, .. } => {
+            Self::Running {
+                addresses,
+                peer_count,
+                ..
+            } => {
                 let addrs: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
                 write!(f, "running ({}), {} peers", addrs.join(", "), peer_count)
             }
@@ -130,10 +132,10 @@ impl DaemonHandle {
 
     /// Query the current daemon status.
     pub fn current_status(&self) -> DaemonStatus {
-        if let Some(ref live) = self.live_status {
-            if let Ok(s) = live.read() {
-                return s.clone();
-            }
+        if let Some(ref live) = self.live_status
+            && let Ok(s) = live.read()
+        {
+            return s.clone();
         }
         self.status.clone()
     }

@@ -38,7 +38,10 @@ impl Decoder for DerpFrameCodec {
     type Item = DerpFrame;
     type Error = std::io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         if src.len() < HEADER_SIZE {
             return Ok(None);
         }
@@ -72,7 +75,11 @@ impl Decoder for DerpFrameCodec {
 impl Encoder<DerpFrame> for DerpFrameCodec {
     type Error = std::io::Error;
 
-    fn encode(&mut self, item: DerpFrame, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
+    fn encode(
+        &mut self,
+        item: DerpFrame,
+        dst: &mut BytesMut,
+    ) -> std::result::Result<(), Self::Error> {
         if item.payload.len() > MAX_FRAME_SIZE {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -106,7 +113,10 @@ mod tests {
         let mut buf = BytesMut::new();
         codec.encode(frame.clone(), &mut buf).unwrap();
 
-        let decoded = codec.decode(&mut buf).unwrap().expect("should decode a frame");
+        let decoded = codec
+            .decode(&mut buf)
+            .unwrap()
+            .expect("should decode a frame");
         assert_eq!(decoded, frame);
     }
 
@@ -133,7 +143,10 @@ mod tests {
 
     #[test]
     fn test_round_trip_ping() {
-        round_trip(FRAME_PING, &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        round_trip(
+            FRAME_PING,
+            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+        );
     }
 
     #[test]

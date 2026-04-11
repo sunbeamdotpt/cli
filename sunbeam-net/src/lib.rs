@@ -8,10 +8,10 @@ pub(crate) mod dns;
 pub mod error;
 pub mod keys;
 pub mod noise;
+pub(crate) mod proto;
 pub mod proxy;
 pub mod tls;
 pub mod wg;
-pub(crate) mod proto;
 
 pub use config::VpnConfig;
 pub use daemon::{

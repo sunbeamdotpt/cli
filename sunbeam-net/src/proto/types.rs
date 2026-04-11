@@ -327,7 +327,10 @@ mod tests {
         assert_eq!(resp.login.id, 2);
         assert!(!resp.node_key_expired);
         assert!(resp.machine_authorized);
-        assert_eq!(resp.auth_url.as_deref(), Some("https://login.example.com/a/xyz"));
+        assert_eq!(
+            resp.auth_url.as_deref(),
+            Some("https://login.example.com/a/xyz")
+        );
     }
 
     #[test]

@@ -63,6 +63,7 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// Errors surfaced by the resolver.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
+    #[allow(dead_code)]
     #[error("resolver not configured (no dns_server)")]
     Disabled,
     #[error("name is empty")]
@@ -212,6 +213,7 @@ impl Resolver {
 
     /// Purge all cache entries. Called when the VPN reconnects and
     /// netmap-learned peer IPs may have changed.
+    #[allow(dead_code)]
     pub fn invalidate_cache(&self) {
         if let Ok(mut cache) = self.cache.write() {
             cache.clear();
@@ -263,10 +265,7 @@ impl Resolver {
                 .write_all(&len.to_be_bytes())
                 .await
                 .map_err(ResolveError::Io)?;
-            client
-                .write_all(&query)
-                .await
-                .map_err(ResolveError::Io)?;
+            client.write_all(&query).await.map_err(ResolveError::Io)?;
             client.flush().await.map_err(ResolveError::Io)?;
 
             let mut len_buf = [0u8; 2];
@@ -518,7 +517,10 @@ mod tests {
         tokio::spawn(run_stub_engine(rx, plan_aaaa_only(answer, 60)));
 
         let resolver = Resolver::new(stub_dns_addr(), tx, vec![]);
-        let ip = resolver.resolve("hydra.ory.svc.cluster.local").await.unwrap();
+        let ip = resolver
+            .resolve("hydra.ory.svc.cluster.local")
+            .await
+            .unwrap();
         assert_eq!(ip, IpAddr::V6(answer));
     }
 

@@ -130,6 +130,12 @@ impl AuditLog {
     pub fn len(&self) -> usize {
         self.inner.lock().map(|q| q.len()).unwrap_or(0)
     }
+
+    /// Whether the audit log has no retained entries.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().map(|q| q.is_empty()).unwrap_or(true)
+    }
 }
 
 impl Default for AuditLog {
@@ -156,8 +162,16 @@ mod tests {
     #[test]
     fn record_and_snapshot_newest_first() {
         let log = AuditLog::new();
-        log.record("socks5", destination("10.0.0.1:443"), AuditOutcome::Accepted);
-        log.record("http", destination("10.0.0.2:443"), AuditOutcome::DeniedPort);
+        log.record(
+            "socks5",
+            destination("10.0.0.1:443"),
+            AuditOutcome::Accepted,
+        );
+        log.record(
+            "http",
+            destination("10.0.0.2:443"),
+            AuditOutcome::DeniedPort,
+        );
         log.record(
             "socks5",
             destination("hydra:443"),
@@ -177,11 +191,7 @@ mod tests {
     fn ring_buffer_evicts_oldest() {
         let log = AuditLog::with_capacity(3);
         for i in 0..5u16 {
-            log.record(
-                "socks5",
-                format!("10.0.0.{i}:443"),
-                AuditOutcome::Accepted,
-            );
+            log.record("socks5", format!("10.0.0.{i}:443"), AuditOutcome::Accepted);
         }
         assert_eq!(log.len(), 3);
         let snap = log.snapshot(10);
@@ -205,11 +215,7 @@ mod tests {
     fn snapshot_honors_max() {
         let log = AuditLog::new();
         for i in 0..10u16 {
-            log.record(
-                "socks5",
-                format!("10.0.0.{i}:443"),
-                AuditOutcome::Accepted,
-            );
+            log.record("socks5", format!("10.0.0.{i}:443"), AuditOutcome::Accepted);
         }
         assert_eq!(log.snapshot(3).len(), 3);
         assert_eq!(log.snapshot(100).len(), 10);
@@ -250,7 +256,10 @@ mod tests {
     fn outcome_label_matches_variant() {
         assert_eq!(AuditOutcome::Accepted.label(), "accepted");
         assert_eq!(AuditOutcome::DeniedPort.label(), "denied/port");
-        assert_eq!(AuditOutcome::DeniedNotRoutable.label(), "denied/not-routable");
+        assert_eq!(
+            AuditOutcome::DeniedNotRoutable.label(),
+            "denied/not-routable"
+        );
         assert_eq!(AuditOutcome::DeniedNoDns.label(), "denied/no-dns");
         assert_eq!(AuditOutcome::DeniedResolveFailed.label(), "denied/resolve");
         assert_eq!(AuditOutcome::DeniedProtocol.label(), "denied/protocol");

@@ -136,8 +136,7 @@ impl RouteTable {
         // Sort by descending prefix length. `sort_by_key` is stable, so
         // insertion order is preserved among ties. We negate the key via
         // `u8::MAX - k` to get descending order without `Reverse`.
-        self.entries
-            .sort_by_key(|e| u8::MAX - e.net.prefix_len());
+        self.entries.sort_by_key(|e| u8::MAX - e.net.prefix_len());
     }
 }
 

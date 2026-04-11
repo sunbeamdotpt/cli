@@ -9,7 +9,6 @@ use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, Nonce, Tag};
 use hkdf::Hkdf;
 use hmac::SimpleHmac;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 type HkdfBlake2s = Hkdf<blake2::Blake2s256, SimpleHmac<blake2::Blake2s256>>;
@@ -22,11 +21,13 @@ const PROTOCOL_VERSION: u16 = 49;
 const MSG_TYPE_INITIATION: u8 = 1;
 const MSG_TYPE_RESPONSE: u8 = 2;
 const MSG_TYPE_ERROR: u8 = 3;
+#[allow(dead_code)]
 pub(crate) const MSG_TYPE_RECORD: u8 = 4;
 
 // Sizes
 const TAG_SIZE: usize = 16;
 
+#[allow(dead_code)]
 pub(crate) struct HandshakeResult {
     pub tx_cipher: ChaCha20Poly1305, // client -> server
     pub rx_cipher: ChaCha20Poly1305, // server -> client
@@ -50,7 +51,7 @@ impl SymmetricState {
 
     fn mix_hash(&mut self, data: &[u8]) {
         let mut hasher = blake2::Blake2s256::new();
-        hasher.update(&self.h);
+        hasher.update(self.h);
         hasher.update(data);
         self.h = hasher.finalize().into();
     }
@@ -235,8 +236,7 @@ where
     // Parse response
     if resp_data[0] == MSG_TYPE_ERROR {
         let err_len = u16::from_be_bytes([resp_data[1], resp_data[2]]) as usize;
-        let err_msg =
-            String::from_utf8_lossy(&resp_data[3..3 + err_len.min(resp_data.len() - 3)]);
+        let err_msg = String::from_utf8_lossy(&resp_data[3..3 + err_len.min(resp_data.len() - 3)]);
         return Err(crate::Error::Noise(format!("server error: {err_msg}")));
     }
     if resp_data[0] != MSG_TYPE_RESPONSE {
@@ -282,7 +282,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     /// Mock server that implements the controlbase server-side handshake.
     async fn mock_controlbase_server(
@@ -315,7 +315,11 @@ mod tests {
             .decode(init_b64)
             .expect("bad base64");
 
-        assert_eq!(init_msg.len(), 101, "initiation message should be 101 bytes");
+        assert_eq!(
+            init_msg.len(),
+            101,
+            "initiation message should be 101 bytes"
+        );
 
         // Parse initiation
         let _version = u16::from_be_bytes([init_msg[0], init_msg[1]]);
@@ -339,9 +343,12 @@ mod tests {
         let cipher_es = s.mix_dh(&server_private, &client_ephemeral).unwrap();
 
         // -> s: DecryptAndHash to get client machine public key
-        let client_machine_pub_bytes = s.decrypt_and_hash(cipher_es, encrypted_machine_pub).unwrap();
+        let client_machine_pub_bytes = s
+            .decrypt_and_hash(cipher_es, encrypted_machine_pub)
+            .unwrap();
         assert_eq!(client_machine_pub_bytes.len(), 32);
-        let client_machine_pub = PublicKey::from(<[u8; 32]>::try_from(&client_machine_pub_bytes[..]).unwrap());
+        let client_machine_pub =
+            PublicKey::from(<[u8; 32]>::try_from(&client_machine_pub_bytes[..]).unwrap());
 
         // -> ss: MixDH(server_private, client_machine_pub)
         let cipher_ss = s.mix_dh(&server_private, &client_machine_pub).unwrap();
@@ -364,10 +371,14 @@ mod tests {
         s.mix_hash(server_ephemeral_public.as_bytes());
 
         // <- ee: MixDH(server_ephemeral_private, client_ephemeral)
-        let _cipher_ee = s.mix_dh(&server_ephemeral_secret, &client_ephemeral).unwrap();
+        let _cipher_ee = s
+            .mix_dh(&server_ephemeral_secret, &client_ephemeral)
+            .unwrap();
 
         // <- se: MixDH(server_ephemeral_private, client_machine_pub)
-        let cipher_se = s.mix_dh(&server_ephemeral_secret, &client_machine_pub).unwrap();
+        let cipher_se = s
+            .mix_dh(&server_ephemeral_secret, &client_machine_pub)
+            .unwrap();
         let tag = s.encrypt_and_hash(cipher_se, &[]);
 
         // Build response message (51 bytes)

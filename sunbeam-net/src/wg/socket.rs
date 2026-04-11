@@ -23,8 +23,14 @@ struct ChannelDevice {
 }
 
 impl Device for ChannelDevice {
-    type RxToken<'a> = ChannelRxToken where Self: 'a;
-    type TxToken<'a> = ChannelTxToken<'a> where Self: 'a;
+    type RxToken<'a>
+        = ChannelRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = ChannelTxToken<'a>
+    where
+        Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         match self.rx.try_recv() {
@@ -136,26 +142,17 @@ impl VirtualNetwork {
     }
 
     /// Open a TCP connection to a remote address through the virtual network.
-    pub fn tcp_connect(
-        &mut self,
-        remote: std::net::SocketAddr,
-    ) -> crate::Result<TcpSocketHandle> {
+    pub fn tcp_connect(&mut self, remote: std::net::SocketAddr) -> crate::Result<TcpSocketHandle> {
         let rx_buf = tcp::SocketBuffer::new(vec![0u8; 65536]);
         let tx_buf = tcp::SocketBuffer::new(vec![0u8; 65536]);
         let mut socket = tcp::Socket::new(rx_buf, tx_buf);
 
         let remote_ep = match remote {
             std::net::SocketAddr::V4(v4) => {
-                smoltcp::wire::IpEndpoint::new(
-                    IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from(*v4.ip())),
-                    v4.port(),
-                )
+                smoltcp::wire::IpEndpoint::new(IpAddress::Ipv4(*v4.ip()), v4.port())
             }
             std::net::SocketAddr::V6(v6) => {
-                smoltcp::wire::IpEndpoint::new(
-                    IpAddress::Ipv6(smoltcp::wire::Ipv6Address::from(*v6.ip())),
-                    v6.port(),
-                )
+                smoltcp::wire::IpEndpoint::new(IpAddress::Ipv6(*v6.ip()), v6.port())
             }
         };
 
@@ -182,11 +179,7 @@ impl VirtualNetwork {
     /// data is available right now). Returns `Err(...)` only when the
     /// socket has actually finished receiving (FIN seen, drained) — not
     /// merely when the socket is in a transient state like SynSent.
-    pub fn tcp_recv(
-        &mut self,
-        handle: TcpSocketHandle,
-        buf: &mut [u8],
-    ) -> crate::Result<usize> {
+    pub fn tcp_recv(&mut self, handle: TcpSocketHandle, buf: &mut [u8]) -> crate::Result<usize> {
         let socket = self.sockets.get_mut::<tcp::Socket>(handle.0);
         // Not ready to receive yet (SynSent, Listen, Closed) — return 0,
         // don't propagate as a fatal error. The poll loop will retry.
@@ -214,13 +207,8 @@ impl VirtualNetwork {
             .map_err(|e| crate::Error::WireGuard(format!("TCP recv: {e:?}")))
     }
 
-
     /// Write data to a TCP socket.
-    pub fn tcp_send(
-        &mut self,
-        handle: TcpSocketHandle,
-        data: &[u8],
-    ) -> crate::Result<usize> {
+    pub fn tcp_send(&mut self, handle: TcpSocketHandle, data: &[u8]) -> crate::Result<usize> {
         let socket = self.sockets.get_mut::<tcp::Socket>(handle.0);
         socket
             .send_slice(data)
@@ -250,12 +238,7 @@ mod tests {
         let (tx_to_wg, _rx) = mpsc::channel(16);
         let (_tx, rx_from_wg) = mpsc::channel(16);
 
-        let net = VirtualNetwork::new(
-            IpAddress::v4(100, 64, 0, 1),
-            32,
-            rx_from_wg,
-            tx_to_wg,
-        );
+        let net = VirtualNetwork::new(IpAddress::v4(100, 64, 0, 1), 32, rx_from_wg, tx_to_wg);
         assert!(net.is_ok());
     }
 
@@ -264,13 +247,8 @@ mod tests {
         let (tx_to_wg, _rx) = mpsc::channel(16);
         let (_tx, rx_from_wg) = mpsc::channel(16);
 
-        let mut net = VirtualNetwork::new(
-            IpAddress::v4(100, 64, 0, 1),
-            32,
-            rx_from_wg,
-            tx_to_wg,
-        )
-        .unwrap();
+        let mut net =
+            VirtualNetwork::new(IpAddress::v4(100, 64, 0, 1), 32, rx_from_wg, tx_to_wg).unwrap();
 
         // Polling with no packets should return false (no state changes).
         let changed = net.poll();

@@ -144,6 +144,7 @@ pub struct SocksServer {
 /// discovery files via [`SocksServer::write_discovery_files`] so tools like
 /// `sunbeam logs` can find them.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SocksEndpoint {
     pub port: u16,
     pub auth_token: String,
@@ -171,10 +172,12 @@ impl SocksServer {
         }
 
         let bind_addr = SocketAddr::new(config.bind, 0);
-        let listener = TcpListener::bind(bind_addr).await.map_err(|e| crate::Error::Io {
-            context: format!("bind SOCKS5 listener {bind_addr}"),
-            source: e,
-        })?;
+        let listener = TcpListener::bind(bind_addr)
+            .await
+            .map_err(|e| crate::Error::Io {
+                context: format!("bind SOCKS5 listener {bind_addr}"),
+                source: e,
+            })?;
         let local = listener.local_addr().map_err(|e| crate::Error::Io {
             context: "SOCKS5 listener local_addr".into(),
             source: e,
@@ -306,19 +309,20 @@ async fn handle_connection(
     // in-memory cursor instead of `peek` so the SOCKS5 handler can consume
     // the greeting byte cleanly — mirrors Tailscale's approach.
     let mut first = [0u8; 1];
-    let n = stream.read(&mut first).await.map_err(|e| crate::Error::Io {
-        context: format!("peek first byte from {peer}"),
-        source: e,
-    })?;
+    let n = stream
+        .read(&mut first)
+        .await
+        .map_err(|e| crate::Error::Io {
+            context: format!("peek first byte from {peer}"),
+            source: e,
+        })?;
     if n == 0 {
         return Ok(());
     }
 
     match first[0] {
         SOCKS5_VERSION => handle_socks5(stream, ctx).await,
-        b'C' | b'G' | b'P' | b'H' | b'D' | b'O' | b'T' => {
-            handle_http(stream, first[0], ctx).await
-        }
+        b'C' | b'G' | b'P' | b'H' | b'D' | b'O' | b'T' => handle_http(stream, first[0], ctx).await,
         other => {
             tracing::debug!("SOCKS5 listener: unknown protocol byte 0x{other:02x} from {peer}");
             Ok(())
@@ -334,10 +338,16 @@ async fn handle_socks5(mut stream: TcpStream, ctx: ConnectionContext) -> crate::
     // Method negotiation. RFC 1928 §3 — we already read the version byte,
     // now read NMETHODS and the method list.
     let mut nmethods_buf = [0u8; 1];
-    stream.read_exact(&mut nmethods_buf).await.map_err(io_ctx("socks5 nmethods"))?;
+    stream
+        .read_exact(&mut nmethods_buf)
+        .await
+        .map_err(io_ctx("socks5 nmethods"))?;
     let nmethods = nmethods_buf[0] as usize;
     let mut methods = vec![0u8; nmethods];
-    stream.read_exact(&mut methods).await.map_err(io_ctx("socks5 methods"))?;
+    stream
+        .read_exact(&mut methods)
+        .await
+        .map_err(io_ctx("socks5 methods"))?;
 
     // We only accept USERNAME/PASSWORD. No-auth (0x00) is explicitly
     // refused — even on loopback we require a credential.
@@ -356,20 +366,32 @@ async fn handle_socks5(mut stream: TcpStream, ctx: ConnectionContext) -> crate::
 
     // Username/password subnegotiation. RFC 1929.
     let mut hdr = [0u8; 2];
-    stream.read_exact(&mut hdr).await.map_err(io_ctx("socks5 auth hdr"))?;
+    stream
+        .read_exact(&mut hdr)
+        .await
+        .map_err(io_ctx("socks5 auth hdr"))?;
     if hdr[0] != SOCKS5_AUTH_VERSION {
         let _ = stream.write_all(&[SOCKS5_AUTH_VERSION, 0x01]).await;
         return Ok(());
     }
     let ulen = hdr[1] as usize;
     let mut uname = vec![0u8; ulen];
-    stream.read_exact(&mut uname).await.map_err(io_ctx("socks5 uname"))?;
+    stream
+        .read_exact(&mut uname)
+        .await
+        .map_err(io_ctx("socks5 uname"))?;
 
     let mut plen_buf = [0u8; 1];
-    stream.read_exact(&mut plen_buf).await.map_err(io_ctx("socks5 plen"))?;
+    stream
+        .read_exact(&mut plen_buf)
+        .await
+        .map_err(io_ctx("socks5 plen"))?;
     let plen = plen_buf[0] as usize;
     let mut passwd = vec![0u8; plen];
-    stream.read_exact(&mut passwd).await.map_err(io_ctx("socks5 passwd"))?;
+    stream
+        .read_exact(&mut passwd)
+        .await
+        .map_err(io_ctx("socks5 passwd"))?;
 
     // Constant-time comparison on both fields. Username is public but we
     // still compare in CT so a short-circuit on username doesn't leak the
@@ -379,7 +401,11 @@ async fn handle_socks5(mut stream: TcpStream, ctx: ConnectionContext) -> crate::
     if !(user_ok && pass_ok) {
         let _ = stream.write_all(&[SOCKS5_AUTH_VERSION, 0x01]).await;
         tracing::debug!("SOCKS5 auth rejected");
-        ctx.audit.record("socks5", "(auth failed)".into(), AuditOutcome::DeniedProtocol);
+        ctx.audit.record(
+            "socks5",
+            "(auth failed)".into(),
+            AuditOutcome::DeniedProtocol,
+        );
         return Ok(());
     }
     stream
@@ -389,15 +415,26 @@ async fn handle_socks5(mut stream: TcpStream, ctx: ConnectionContext) -> crate::
 
     // Request. RFC 1928 §4: VER CMD RSV ATYP DST.ADDR DST.PORT
     let mut req_hdr = [0u8; 4];
-    stream.read_exact(&mut req_hdr).await.map_err(io_ctx("socks5 req hdr"))?;
+    stream
+        .read_exact(&mut req_hdr)
+        .await
+        .map_err(io_ctx("socks5 req hdr"))?;
     if req_hdr[0] != SOCKS5_VERSION {
         send_socks5_reply(&mut stream, Reply::GeneralFailure, SOCKS5_UNSPEC_ADDR).await?;
-        ctx.audit.record("socks5", "(bad version)".into(), AuditOutcome::DeniedProtocol);
+        ctx.audit.record(
+            "socks5",
+            "(bad version)".into(),
+            AuditOutcome::DeniedProtocol,
+        );
         return Ok(());
     }
     if req_hdr[1] != SOCKS5_CMD_CONNECT {
         send_socks5_reply(&mut stream, Reply::CommandNotSupported, SOCKS5_UNSPEC_ADDR).await?;
-        ctx.audit.record("socks5", "(non-CONNECT cmd)".into(), AuditOutcome::DeniedProtocol);
+        ctx.audit.record(
+            "socks5",
+            "(non-CONNECT cmd)".into(),
+            AuditOutcome::DeniedProtocol,
+        );
         return Ok(());
     }
 
@@ -405,8 +442,12 @@ async fn handle_socks5(mut stream: TcpStream, ctx: ConnectionContext) -> crate::
     let dst = match read_socks5_destination(&mut stream, atyp).await? {
         Some(dst) => dst,
         None => {
-            send_socks5_reply(&mut stream, Reply::AddressTypeNotSupported, SOCKS5_UNSPEC_ADDR)
-                .await?;
+            send_socks5_reply(
+                &mut stream,
+                Reply::AddressTypeNotSupported,
+                SOCKS5_UNSPEC_ADDR,
+            )
+            .await?;
             ctx.audit.record(
                 "socks5",
                 format!("(unknown atyp 0x{atyp:02x})"),
@@ -484,7 +525,10 @@ async fn send_socks5_reply(
         }
     }
     out.extend_from_slice(&bnd.port().to_be_bytes());
-    stream.write_all(&out).await.map_err(io_ctx("socks5 reply"))?;
+    stream
+        .write_all(&out)
+        .await
+        .map_err(io_ctx("socks5 reply"))?;
     Ok(())
 }
 
@@ -498,22 +542,34 @@ async fn read_socks5_destination(
     match atyp {
         x if x == AddrType::Ipv4 as u8 => {
             let mut buf = [0u8; 4];
-            stream.read_exact(&mut buf).await.map_err(io_ctx("socks5 ipv4"))?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(io_ctx("socks5 ipv4"))?;
             let port = read_u16(stream).await?;
             Ok(Some(Destination::Ip(IpAddr::V4(Ipv4Addr::from(buf)), port)))
         }
         x if x == AddrType::Ipv6 as u8 => {
             let mut buf = [0u8; 16];
-            stream.read_exact(&mut buf).await.map_err(io_ctx("socks5 ipv6"))?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(io_ctx("socks5 ipv6"))?;
             let port = read_u16(stream).await?;
             Ok(Some(Destination::Ip(IpAddr::V6(Ipv6Addr::from(buf)), port)))
         }
         x if x == AddrType::Domain as u8 => {
             let mut dlen_buf = [0u8; 1];
-            stream.read_exact(&mut dlen_buf).await.map_err(io_ctx("socks5 dlen"))?;
+            stream
+                .read_exact(&mut dlen_buf)
+                .await
+                .map_err(io_ctx("socks5 dlen"))?;
             let dlen = dlen_buf[0] as usize;
             let mut dbuf = vec![0u8; dlen];
-            stream.read_exact(&mut dbuf).await.map_err(io_ctx("socks5 domain"))?;
+            stream
+                .read_exact(&mut dbuf)
+                .await
+                .map_err(io_ctx("socks5 domain"))?;
             let port = read_u16(stream).await?;
             let name = String::from_utf8_lossy(&dbuf).into_owned();
             Ok(Some(Destination::Domain(name, port)))
@@ -524,7 +580,10 @@ async fn read_socks5_destination(
 
 async fn read_u16(stream: &mut TcpStream) -> crate::Result<u16> {
     let mut buf = [0u8; 2];
-    stream.read_exact(&mut buf).await.map_err(io_ctx("socks5 u16"))?;
+    stream
+        .read_exact(&mut buf)
+        .await
+        .map_err(io_ctx("socks5 u16"))?;
     Ok(u16::from_be_bytes(buf))
 }
 
@@ -552,7 +611,11 @@ async fn handle_http(
         }
         if buf.len() > 8192 {
             send_http_status(&mut stream, 414, "Request-URI Too Long").await?;
-            ctx.audit.record("http", "(request too long)".into(), AuditOutcome::DeniedProtocol);
+            ctx.audit.record(
+                "http",
+                "(request too long)".into(),
+                AuditOutcome::DeniedProtocol,
+            );
             return Ok(());
         }
     }
@@ -561,7 +624,11 @@ async fn handle_http(
         Some(r) => r,
         None => {
             send_http_status(&mut stream, 400, "Bad Request").await?;
-            ctx.audit.record("http", "(parse failed)".into(), AuditOutcome::DeniedProtocol);
+            ctx.audit.record(
+                "http",
+                "(parse failed)".into(),
+                AuditOutcome::DeniedProtocol,
+            );
             return Ok(());
         }
     };
@@ -581,17 +648,17 @@ async fn handle_http(
 
     // Auth: Proxy-Authorization: Basic base64(user:password)
     if !validate_http_auth(&request, &ctx.auth_token) {
-        let mut reply = format!(
-            "HTTP/1.1 407 Proxy Authentication Required\r\n\
+        let mut reply = "HTTP/1.1 407 Proxy Authentication Required\r\n\
              Proxy-Authenticate: Basic realm=\"sunbeam-net\"\r\n\
              Content-Length: 0\r\n\
              Connection: close\r\n\r\n"
-        );
+            .to_string();
         // Tiny hardening: force headers out before we drop the socket so
         // curl doesn't report ECONNRESET instead of the 407.
         let _ = stream.write_all(reply.as_bytes()).await;
         reply.clear();
-        ctx.audit.record("http", "(auth failed)".into(), AuditOutcome::DeniedProtocol);
+        ctx.audit
+            .record("http", "(auth failed)".into(), AuditOutcome::DeniedProtocol);
         return Ok(());
     }
 
@@ -616,9 +683,7 @@ async fn handle_http(
                 AclDenial::PortDenied => (403, "Forbidden (port)"),
                 // 421 Misdirected Request — "you sent a domain name
                 // but this proxy has no resolver configured."
-                AclDenial::DomainUnsupported => {
-                    (421, "Misdirected Request (no DNS configured)")
-                }
+                AclDenial::DomainUnsupported => (421, "Misdirected Request (no DNS configured)"),
                 AclDenial::ResolutionFailed => (502, "Bad Gateway (DNS resolution failed)"),
             };
             send_http_status(&mut stream, code, reason).await?;
@@ -651,7 +716,10 @@ async fn handle_http(
 
 async fn send_http_status(stream: &mut TcpStream, code: u16, reason: &str) -> crate::Result<()> {
     let msg = format!("HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-    stream.write_all(msg.as_bytes()).await.map_err(io_ctx("http status"))?;
+    stream
+        .write_all(msg.as_bytes())
+        .await
+        .map_err(io_ctx("http status"))?;
     Ok(())
 }
 
@@ -782,10 +850,7 @@ async fn authorize_destination(
     let ip = match dst {
         Destination::Ip(ip, _) => *ip,
         Destination::Domain(name, _) => {
-            let resolver = ctx
-                .resolver
-                .as_ref()
-                .ok_or(AclDenial::DomainUnsupported)?;
+            let resolver = ctx.resolver.as_ref().ok_or(AclDenial::DomainUnsupported)?;
             match resolver.resolve(name).await {
                 Ok(ip) => ip,
                 Err(e) => {
@@ -806,9 +871,7 @@ async fn authorize_destination(
     Ok(SocketAddr::new(ip, port))
 }
 
-/// Sync port + route check for an already-resolved destination.
-/// Kept as a separate entry point so tests can exercise the
-/// non-DNS ACL layers without building a runtime.
+#[cfg(test)]
 fn validate_destination_ip(
     ctx: &ConnectionContext,
     dst: &Destination,
@@ -960,7 +1023,11 @@ mod tests {
     async fn spawn_server(
         routes: Arc<RwLock<RouteTable>>,
         allow_ports: Vec<u16>,
-    ) -> (SocksEndpoint, mpsc::Receiver<EngineCommand>, CancellationToken) {
+    ) -> (
+        SocksEndpoint,
+        mpsc::Receiver<EngineCommand>,
+        CancellationToken,
+    ) {
         let dir = tempdir().unwrap();
         let (tx, rx) = mpsc::channel(8);
         let cfg = SocksConfig {
@@ -1017,10 +1084,9 @@ mod tests {
         };
         let dir_path = dir.keep();
         let audit = Arc::new(AuditLog::new());
-        let (server, endpoint) =
-            SocksServer::bind(cfg, routes, engine_tx, Some(resolver), audit)
-                .await
-                .unwrap();
+        let (server, endpoint) = SocksServer::bind(cfg, routes, engine_tx, Some(resolver), audit)
+            .await
+            .unwrap();
         let cancel = CancellationToken::new();
         let cancel_task = cancel.clone();
         tokio::spawn(async move {
@@ -1152,7 +1218,10 @@ mod tests {
             std::fs::read_to_string(&port_file).unwrap(),
             endpoint.port.to_string()
         );
-        assert_eq!(std::fs::read_to_string(&auth_file).unwrap(), endpoint.auth_token);
+        assert_eq!(
+            std::fs::read_to_string(&auth_file).unwrap(),
+            endpoint.auth_token
+        );
 
         #[cfg(unix)]
         {
@@ -1174,7 +1243,10 @@ mod tests {
         dst_port: u16,
     ) {
         // greeting
-        stream.write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS]).await.unwrap();
+        stream
+            .write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS])
+            .await
+            .unwrap();
         let mut buf = [0u8; 2];
         stream.read_exact(&mut buf).await.unwrap();
         assert_eq!(buf, [SOCKS5_VERSION, SOCKS5_METHOD_USERPASS]);
@@ -1213,7 +1285,7 @@ mod tests {
         let skip = match hdr[3] {
             x if x == AddrType::Ipv4 as u8 => 4 + 2,
             x if x == AddrType::Ipv6 as u8 => 16 + 2,
-            _ => 0 + 2,
+            _ => 2,
         };
         let mut skip_buf = vec![0u8; skip];
         stream.read_exact(&mut skip_buf).await.unwrap();
@@ -1224,7 +1296,9 @@ mod tests {
     async fn socks5_connect_allowed() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, mut rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         socks5_connect_request(
             &mut client,
             &endpoint.auth_token,
@@ -1232,7 +1306,10 @@ mod tests {
             443,
         )
         .await;
-        assert_eq!(read_socks5_reply_code(&mut client).await, Reply::Succeeded as u8);
+        assert_eq!(
+            read_socks5_reply_code(&mut client).await,
+            Reply::Succeeded as u8
+        );
 
         // The connection should have been handed to the engine channel.
         let cmd = rx.recv().await.expect("engine got a connection");
@@ -1248,7 +1325,9 @@ mod tests {
     async fn socks5_rejects_no_auth_method() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         // Offer only NO_AUTH (0x00).
         client.write_all(&[SOCKS5_VERSION, 1, 0x00]).await.unwrap();
         let mut buf = [0u8; 2];
@@ -1261,9 +1340,14 @@ mod tests {
     async fn socks5_rejects_wrong_password() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         // greeting
-        client.write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS]).await.unwrap();
+        client
+            .write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS])
+            .await
+            .unwrap();
         let mut buf = [0u8; 2];
         client.read_exact(&mut buf).await.unwrap();
         // auth with bad password
@@ -1284,7 +1368,9 @@ mod tests {
     async fn socks5_rejects_disallowed_port() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         socks5_connect_request(
             &mut client,
             &endpoint.auth_token,
@@ -1303,7 +1389,9 @@ mod tests {
     async fn socks5_rejects_unrouted_ip() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         socks5_connect_request(
             &mut client,
             &endpoint.auth_token,
@@ -1322,9 +1410,14 @@ mod tests {
     async fn socks5_rejects_bind_command() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         // greeting
-        client.write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS]).await.unwrap();
+        client
+            .write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS])
+            .await
+            .unwrap();
         let mut buf = [0u8; 2];
         client.read_exact(&mut buf).await.unwrap();
         // auth
@@ -1352,9 +1445,14 @@ mod tests {
     async fn socks5_domain_deferred_to_phase3() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         // greeting + auth
-        client.write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS]).await.unwrap();
+        client
+            .write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS])
+            .await
+            .unwrap();
         let mut buf = [0u8; 2];
         client.read_exact(&mut buf).await.unwrap();
         let mut auth = vec![SOCKS5_AUTH_VERSION];
@@ -1366,7 +1464,12 @@ mod tests {
         client.read_exact(&mut buf).await.unwrap();
         // Request with domain name
         let host = b"svc.cluster.local";
-        let mut req = vec![SOCKS5_VERSION, SOCKS5_CMD_CONNECT, 0x00, AddrType::Domain as u8];
+        let mut req = vec![
+            SOCKS5_VERSION,
+            SOCKS5_CMD_CONNECT,
+            0x00,
+            AddrType::Domain as u8,
+        ];
         req.push(host.len() as u8);
         req.extend_from_slice(host);
         req.extend_from_slice(&443u16.to_be_bytes());
@@ -1383,10 +1486,15 @@ mod tests {
         // fd7a:115c:a1e0::/48 is in the default whitelist.
         let routes = test_routes(&["fd7a:115c:a1e0::/48"]);
         let (endpoint, mut rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         let ip = Ipv6Addr::from_str("fd7a:115c:a1e0:ab12::1").unwrap();
         socks5_connect_request(&mut client, &endpoint.auth_token, IpAddr::V6(ip), 443).await;
-        assert_eq!(read_socks5_reply_code(&mut client).await, Reply::Succeeded as u8);
+        assert_eq!(
+            read_socks5_reply_code(&mut client).await,
+            Reply::Succeeded as u8
+        );
         rx.recv().await.unwrap();
         cancel.cancel();
     }
@@ -1398,7 +1506,9 @@ mod tests {
         target: &str,
         auth_token: Option<&str>,
     ) -> TcpStream {
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         let auth_line = match auth_token {
             Some(tok) => {
                 let b64 = base64::engine::general_purpose::STANDARD
@@ -1407,9 +1517,7 @@ mod tests {
             }
             None => String::new(),
         };
-        let req = format!(
-            "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{auth_line}\r\n"
-        );
+        let req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{auth_line}\r\n");
         client.write_all(req.as_bytes()).await.unwrap();
         client
     }
@@ -1466,7 +1574,9 @@ mod tests {
     async fn http_connect_wrong_method_rejected() {
         let routes = test_routes(&["10.42.0.0/16"]);
         let (endpoint, _rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         let b64 = base64::engine::general_purpose::STANDARD
             .encode(format!("{SOCKS_USERNAME}:{}", endpoint.auth_token));
         let req = format!(
@@ -1515,8 +1625,12 @@ mod tests {
     async fn http_connect_ipv6_bracketed() {
         let routes = test_routes(&["fd7a:115c:a1e0::/48"]);
         let (endpoint, mut rx, cancel) = spawn_server(routes, vec![443]).await;
-        let mut client =
-            http_connect(&endpoint, "[fd7a:115c:a1e0:ab12::1]:443", Some(&endpoint.auth_token)).await;
+        let mut client = http_connect(
+            &endpoint,
+            "[fd7a:115c:a1e0:ab12::1]:443",
+            Some(&endpoint.auth_token),
+        )
+        .await;
         assert_eq!(read_http_status(&mut client).await, 200);
         rx.recv().await.unwrap();
         cancel.cancel();
@@ -1530,7 +1644,10 @@ mod tests {
         host: &str,
         port: u16,
     ) {
-        stream.write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS]).await.unwrap();
+        stream
+            .write_all(&[SOCKS5_VERSION, 1, SOCKS5_METHOD_USERPASS])
+            .await
+            .unwrap();
         let mut buf = [0u8; 2];
         stream.read_exact(&mut buf).await.unwrap();
         let mut auth = vec![SOCKS5_AUTH_VERSION];
@@ -1542,7 +1659,12 @@ mod tests {
         stream.read_exact(&mut buf).await.unwrap();
 
         let host_bytes = host.as_bytes();
-        let mut req = vec![SOCKS5_VERSION, SOCKS5_CMD_CONNECT, 0x00, AddrType::Domain as u8];
+        let mut req = vec![
+            SOCKS5_VERSION,
+            SOCKS5_CMD_CONNECT,
+            0x00,
+            AddrType::Domain as u8,
+        ];
         req.push(host_bytes.len() as u8);
         req.extend_from_slice(host_bytes);
         req.extend_from_slice(&port.to_be_bytes());
@@ -1555,7 +1677,9 @@ mod tests {
         let resolved = IpAddr::V4(Ipv4Addr::new(10, 42, 0, 42));
         let (endpoint, mut fwd_rx, cancel) =
             spawn_server_with_resolver(routes, vec![443], resolved).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         socks5_domain_connect_request(
             &mut client,
             &endpoint.auth_token,
@@ -1563,8 +1687,14 @@ mod tests {
             443,
         )
         .await;
-        assert_eq!(read_socks5_reply_code(&mut client).await, Reply::Succeeded as u8);
-        let cmd = fwd_rx.recv().await.expect("engine got forwarded connection");
+        assert_eq!(
+            read_socks5_reply_code(&mut client).await,
+            Reply::Succeeded as u8
+        );
+        let cmd = fwd_rx
+            .recv()
+            .await
+            .expect("engine got forwarded connection");
         match cmd {
             EngineCommand::NewConnection { remote, .. } => {
                 assert_eq!(remote, SocketAddr::new(resolved, 443));
@@ -1579,7 +1709,9 @@ mod tests {
         let resolved = IpAddr::V6(Ipv6Addr::from_str("fd7a:115c:a1e0:ab12::99").unwrap());
         let (endpoint, mut fwd_rx, cancel) =
             spawn_server_with_resolver(routes, vec![443], resolved).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
         socks5_domain_connect_request(
             &mut client,
             &endpoint.auth_token,
@@ -1587,8 +1719,14 @@ mod tests {
             443,
         )
         .await;
-        assert_eq!(read_socks5_reply_code(&mut client).await, Reply::Succeeded as u8);
-        let cmd = fwd_rx.recv().await.expect("engine got forwarded connection");
+        assert_eq!(
+            read_socks5_reply_code(&mut client).await,
+            Reply::Succeeded as u8
+        );
+        let cmd = fwd_rx
+            .recv()
+            .await
+            .expect("engine got forwarded connection");
         match cmd {
             EngineCommand::NewConnection { remote, .. } => {
                 assert_eq!(remote, SocketAddr::new(resolved, 443));
@@ -1604,14 +1742,11 @@ mod tests {
         let resolved = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
         let (endpoint, _fwd_rx, cancel) =
             spawn_server_with_resolver(routes, vec![443], resolved).await;
-        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port)).await.unwrap();
-        socks5_domain_connect_request(
-            &mut client,
-            &endpoint.auth_token,
-            "evil.example.com",
-            443,
-        )
-        .await;
+        let mut client = TcpStream::connect(("127.0.0.1", endpoint.port))
+            .await
+            .unwrap();
+        socks5_domain_connect_request(&mut client, &endpoint.auth_token, "evil.example.com", 443)
+            .await;
         assert_eq!(
             read_socks5_reply_code(&mut client).await,
             Reply::NetworkUnreachable as u8
@@ -1632,7 +1767,10 @@ mod tests {
         )
         .await;
         assert_eq!(read_http_status(&mut client).await, 200);
-        let cmd = fwd_rx.recv().await.expect("engine got forwarded connection");
+        let cmd = fwd_rx
+            .recv()
+            .await
+            .expect("engine got forwarded connection");
         match cmd {
             EngineCommand::NewConnection { remote, .. } => {
                 assert_eq!(remote, SocketAddr::new(resolved, 443));
@@ -1692,7 +1830,8 @@ mod tests {
 
     #[test]
     fn http_request_parse_basic() {
-        let raw = b"CONNECT host:443 HTTP/1.1\r\nHost: host\r\nProxy-Authorization: Basic abc\r\n\r\n";
+        let raw =
+            b"CONNECT host:443 HTTP/1.1\r\nHost: host\r\nProxy-Authorization: Basic abc\r\n\r\n";
         let req = HttpRequest::parse(raw).unwrap();
         assert_eq!(req.method, "CONNECT");
         assert_eq!(req.target, "host:443");
@@ -1719,8 +1858,8 @@ mod tests {
     #[test]
     fn validate_http_auth_success() {
         let token = "abc123";
-        let b64 = base64::engine::general_purpose::STANDARD
-            .encode(format!("{SOCKS_USERNAME}:{token}"));
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(format!("{SOCKS_USERNAME}:{token}"));
         let req = HttpRequest {
             method: "CONNECT".into(),
             target: "h:1".into(),

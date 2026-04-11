@@ -1,43 +1,55 @@
 [package]
 name = "sunbeam-net"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Pure Rust Headscale/Tailscale-compatible VPN client"
-license = "MIT"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-blake2 = "0.10"
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-hmac = "0.12"
-h2 = "0.4"
-http = "1"
-boringtun = "0.7"
-smoltcp = { version = "0.13", default-features = false, features = ["medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "std"] }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-crypto_box = "0.9"
-rand = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-zstd = "0.13"
-bytes = "1"
-tokio-util = { version = "0.7", features = ["codec"] }
-base64 = "0.22"
-tracing = "0.1"
-thiserror = "2"
-ipnet = "2"
-subtle = "2"
-tokio-rustls = "0.26.4"
-webpki-roots = "1.0.6"
-rustls-pemfile = "2.2.0"
+# Async / tracing
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-rustls.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+# Serde
+serde.workspace = true
+serde_json.workspace = true
+
+# Errors
+thiserror.workspace = true
+
+# HTTP / TLS
+h2.workspace = true
+http.workspace = true
+webpki-roots.workspace = true
+rustls-pemfile.workspace = true
+
+# Crypto
+blake2.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+x25519-dalek.workspace = true
+crypto_box.workspace = true
+rand.workspace = true
+subtle.workspace = true
+base64.workspace = true
+
+# Networking / VPN
+boringtun.workspace = true
+smoltcp.workspace = true
+ipnet.workspace = true
+zstd.workspace = true
+bytes.workspace = true
 
 [features]
 integration = []
 
 [dev-dependencies]
-tokio-test = "0.4"
-pretty_assertions = "1"
-tempfile = "3"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokio-test.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true

@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-use super::framing::{NoiseFrame, NoiseFrameCodec, FRAME_TYPE_DATA, MAX_FRAME_SIZE};
+use super::framing::{FRAME_TYPE_DATA, MAX_FRAME_SIZE, NoiseFrame, NoiseFrameCodec};
 
 /// AEAD tag size for ChaCha20Poly1305.
 const TAG_SIZE: usize = 16;
@@ -107,7 +107,9 @@ where
         // Read first frame
         let frame = match self.inner.next().await {
             Some(Ok(frame)) => frame,
-            Some(Err(e)) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+            Some(Err(e)) => {
+                return Err(std::io::Error::other(e.to_string()));
+            }
             None => return Ok(vec![]),
         };
         let plaintext = self.decrypt_frame(&frame)?;
@@ -130,8 +132,15 @@ where
         while accum.len() < 9 {
             let frame = match self.inner.next().await {
                 Some(Ok(f)) => f,
-                Some(Err(e)) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-                None => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early payload truncated")),
+                Some(Err(e)) => {
+                    return Err(std::io::Error::other(e.to_string()));
+                }
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "early payload truncated",
+                    ));
+                }
             };
             accum.extend_from_slice(&self.decrypt_frame(&frame)?);
         }
@@ -142,8 +151,15 @@ where
         while accum.len() < 9 + json_len {
             let frame = match self.inner.next().await {
                 Some(Ok(f)) => f,
-                Some(Err(e)) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-                None => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "early payload JSON truncated")),
+                Some(Err(e)) => {
+                    return Err(std::io::Error::other(e.to_string()));
+                }
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "early payload JSON truncated",
+                    ));
+                }
             };
             accum.extend_from_slice(&self.decrypt_frame(&frame)?);
         }
@@ -163,7 +179,12 @@ where
     fn decrypt_frame(&self, frame: &NoiseFrame) -> std::io::Result<Vec<u8>> {
         let counter = self.read_nonce.fetch_add(1, Ordering::Relaxed);
         let nonce = build_nonce(counter);
-        tracing::trace!("decrypt_frame: type={:02x}, payload_len={}, nonce={}", frame.frame_type, frame.payload.len(), counter);
+        tracing::trace!(
+            "decrypt_frame: type={:02x}, payload_len={}, nonce={}",
+            frame.frame_type,
+            frame.payload.len(),
+            counter
+        );
 
         if frame.payload.len() < TAG_SIZE {
             return Err(std::io::Error::new(
@@ -325,6 +346,6 @@ mod tests {
 
     #[test]
     fn max_plaintext_chunk_leaves_room_for_tag() {
-        assert!(MAX_PLAINTEXT_CHUNK + 16 <= MAX_FRAME_SIZE);
+        const { assert!(MAX_PLAINTEXT_CHUNK + 16 <= MAX_FRAME_SIZE) }
     }
 }

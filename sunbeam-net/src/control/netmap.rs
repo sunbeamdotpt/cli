@@ -39,17 +39,21 @@ impl std::fmt::Debug for MapStream {
 #[derive(Debug)]
 pub enum MapUpdate {
     /// First response: full network map.
-    Full {
-        self_node: Node,
-        peers: Vec<Node>,
-        derp_map: Option<DerpMap>,
-    },
+    Full(Box<FullMap>),
     /// Delta: peers changed.
     PeersChanged(Vec<Node>),
     /// Delta: peers removed (by node key).
     PeersRemoved(Vec<String>),
     /// Keep-alive (empty response).
     KeepAlive,
+}
+
+/// Full network map payload (boxed inside `MapUpdate::Full` to keep variants small).
+#[derive(Debug)]
+pub struct FullMap {
+    pub self_node: Node,
+    pub peers: Vec<Node>,
+    pub derp_map: Option<DerpMap>,
 }
 
 impl MapStream {
@@ -66,9 +70,7 @@ impl MapStream {
                     self.body
                         .flow_control()
                         .release_capacity(chunk.len())
-                        .map_err(|e| {
-                            crate::Error::Control(format!("flow control: {e}"))
-                        })?;
+                        .map_err(|e| crate::Error::Control(format!("flow control: {e}")))?;
                     self.buf.extend_from_slice(&chunk);
                 }
                 Some(Err(e)) => {
@@ -79,12 +81,8 @@ impl MapStream {
         }
 
         // Read the 4-byte LE length prefix.
-        let msg_len = u32::from_le_bytes([
-            self.buf[0],
-            self.buf[1],
-            self.buf[2],
-            self.buf[3],
-        ]) as usize;
+        let msg_len =
+            u32::from_le_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
         self.buf.advance(4);
 
         // Read the full message body.
@@ -94,9 +92,7 @@ impl MapStream {
                     self.body
                         .flow_control()
                         .release_capacity(chunk.len())
-                        .map_err(|e| {
-                            crate::Error::Control(format!("flow control: {e}"))
-                        })?;
+                        .map_err(|e| crate::Error::Control(format!("flow control: {e}")))?;
                     self.buf.extend_from_slice(&chunk);
                 }
                 Some(Err(e)) => {
@@ -120,10 +116,14 @@ impl MapStream {
         // Detect zstd compression by magic bytes (0x28 0xB5 0x2F 0xFD).
         // Headscale only zstd-compresses if the client requested it via the
         // `Compress` field in MapRequest; otherwise messages are raw JSON.
-        let json_bytes = if raw.len() >= 4 && raw[0] == 0x28 && raw[1] == 0xB5 && raw[2] == 0x2F && raw[3] == 0xFD {
-            zstd::stream::decode_all(raw.as_ref()).map_err(|e| {
-                crate::Error::Control(format!("zstd decompress: {e}"))
-            })?
+        let json_bytes = if raw.len() >= 4
+            && raw[0] == 0x28
+            && raw[1] == 0xB5
+            && raw[2] == 0x2F
+            && raw[3] == 0xFD
+        {
+            zstd::stream::decode_all(raw.as_ref())
+                .map_err(|e| crate::Error::Control(format!("zstd decompress: {e}")))?
         } else {
             raw.to_vec()
         };
@@ -164,14 +164,12 @@ impl MapStream {
 /// peers" wipes the route table, so post-first `Node`-only frames are
 /// mapped to `KeepAlive` here.
 fn classify_response(resp: MapResponse, is_first: bool) -> MapUpdate {
-    if is_first {
-        if let Some(self_node) = resp.node {
-            return MapUpdate::Full {
-                self_node,
-                peers: resp.peers.unwrap_or_default(),
-                derp_map: resp.derp_map,
-            };
-        }
+    if is_first && let Some(self_node) = resp.node {
+        return MapUpdate::Full(Box::new(FullMap {
+            self_node,
+            peers: resp.peers.unwrap_or_default(),
+            derp_map: resp.derp_map,
+        }));
     }
 
     // Delta: peers changed.
@@ -333,15 +331,11 @@ mod tests {
 
         let update = classify_response(resp, true);
         match update {
-            MapUpdate::Full {
-                self_node,
-                peers,
-                derp_map,
-            } => {
-                assert_eq!(self_node.id, 1);
-                assert_eq!(peers.len(), 1);
-                assert_eq!(peers[0].id, 2);
-                assert!(derp_map.is_none());
+            MapUpdate::Full(full) => {
+                assert_eq!(full.self_node.id, 1);
+                assert_eq!(full.peers.len(), 1);
+                assert_eq!(full.peers[0].id, 2);
+                assert!(full.derp_map.is_none());
             }
             other => panic!("expected Full, got {other:?}"),
         }
@@ -365,9 +359,9 @@ mod tests {
             collection_name: None,
         };
         match classify_response(resp, true) {
-            MapUpdate::Full { peers, self_node, .. } => {
-                assert_eq!(self_node.id, 1);
-                assert!(peers.is_empty());
+            MapUpdate::Full(full) => {
+                assert_eq!(full.self_node.id, 1);
+                assert!(full.peers.is_empty());
             }
             other => panic!("expected Full with empty peers, got {other:?}"),
         }
@@ -393,8 +387,10 @@ mod tests {
             collection_name: None,
         };
         let update = classify_response(resp, false);
-        assert!(matches!(update, MapUpdate::KeepAlive),
-            "post-first node-only frame must not be reclassified as Full: got {update:?}");
+        assert!(
+            matches!(update, MapUpdate::KeepAlive),
+            "post-first node-only frame must not be reclassified as Full: got {update:?}"
+        );
     }
 
     #[test]

@@ -175,18 +175,14 @@ async fn run_session(
         .ok_or_else(|| crate::Error::Control("map stream closed before first update".into()))?;
 
     let (peers, addresses, derp_map) = match &first_update {
-        MapUpdate::Full {
-            peers,
-            self_node,
-            derp_map,
-            ..
-        } => {
-            let addrs: Vec<IpAddr> = self_node
+        MapUpdate::Full(full) => {
+            let addrs: Vec<IpAddr> = full
+                .self_node
                 .addresses
                 .iter()
                 .filter_map(|a| a.split('/').next()?.parse().ok())
                 .collect();
-            (peers.clone(), addrs, derp_map.clone())
+            (full.peers.clone(), addrs, full.derp_map.clone())
         }
         _ => {
             return Err(crate::Error::Control(
@@ -208,20 +204,19 @@ async fn run_session(
     //     the original ControlClient hostage, so we open a fresh control
     //     connection just for this lite-update — one extra Noise handshake
     //     per session is a small price for correct DERP addressing.
-    if let Some(ref dm) = derp_map {
-        if let Some(region) = dm.regions.values().next() {
-            tracing::info!(
-                "sending lite-update with preferred_derp={}",
-                region.region_id
-            );
-            let mut lite_client =
-                crate::control::ControlClient::connect(config, keys).await?;
-            lite_client
-                .lite_update(keys, &config.hostname, None, Some(region.region_id.into()))
-                .await?;
-            // Drop lite_client → closes its h2 connection. The map stream
-            // on the original ControlClient is unaffected.
-        }
+    if let Some(ref dm) = derp_map
+        && let Some(region) = dm.regions.values().next()
+    {
+        tracing::info!(
+            "sending lite-update with preferred_derp={}",
+            region.region_id
+        );
+        let mut lite_client = crate::control::ControlClient::connect(config, keys).await?;
+        lite_client
+            .lite_update(keys, &config.hostname, None, Some(region.region_id.into()))
+            .await?;
+        // Drop lite_client → closes its h2 connection. The map stream
+        // on the original ControlClient is unaffected.
     }
 
     // 4a. Build the peer route table from the first netmap. Phase 1: the
@@ -255,8 +250,8 @@ async fn run_session(
         .first()
         .ok_or_else(|| crate::Error::Control("no addresses assigned".into()))?;
     let smoltcp_ip = match local_ip {
-        IpAddr::V4(v4) => IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from(*v4)),
-        IpAddr::V6(v6) => IpAddress::Ipv6(smoltcp::wire::Ipv6Address::from(*v6)),
+        IpAddr::V4(v4) => IpAddress::Ipv4(*v4),
+        IpAddr::V6(v6) => IpAddress::Ipv6(*v6),
     };
 
     let (engine, channels) = NetworkEngine::new(smoltcp_ip, 10)?;
@@ -652,7 +647,7 @@ fn identify_udp_peer(
     }
     let msg_type = packet[0];
     match msg_type {
-        2 | 3 | 4 => {
+        2..=4 => {
             let idx = u32::from_le_bytes([packet[4], packet[5], packet[6], packet[7]]);
             tunnel
                 .find_peer_by_local_index(idx)
@@ -829,13 +824,13 @@ async fn map_stream_loop(
     loop {
         match stream.next().await? {
             Some(update) => match &update {
-                MapUpdate::Full { peers, .. } => {
-                    update_peer_count(status, peers.len());
+                MapUpdate::Full(full) => {
+                    update_peer_count(status, full.peers.len());
                     if let Ok(mut rt) = route_table.write() {
-                        rt.rebuild(peers, route_whitelist);
-                        tracing::info!("netmap: {} peers, {} routes", peers.len(), rt.len());
+                        rt.rebuild(&full.peers, route_whitelist);
+                        tracing::info!("netmap: {} peers, {} routes", full.peers.len(), rt.len());
                     } else {
-                        tracing::info!("netmap: {} peers", peers.len());
+                        tracing::info!("netmap: {} peers", full.peers.len());
                     }
                 }
                 MapUpdate::PeersChanged(peers) => {
@@ -886,10 +881,10 @@ fn set_status(status: &Arc<RwLock<DaemonStatus>>, new: DaemonStatus) {
 }
 
 fn update_peer_count(status: &Arc<RwLock<DaemonStatus>>, count: usize) {
-    if let Ok(mut s) = status.write() {
-        if let DaemonStatus::Running { peer_count, .. } = &mut *s {
-            *peer_count = count;
-        }
+    if let Ok(mut s) = status.write()
+        && let DaemonStatus::Running { peer_count, .. } = &mut *s
+    {
+        *peer_count = count;
     }
 }
 

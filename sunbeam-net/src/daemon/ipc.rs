@@ -87,8 +87,10 @@ impl IpcServer {
     ) -> crate::Result<Self> {
         // Remove stale socket file if it exists.
         let _ = std::fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path)
-            .map_err(|e| crate::Error::Io { context: "bind IPC socket".into(), source: e })?;
+        let listener = UnixListener::bind(socket_path).map_err(|e| crate::Error::Io {
+            context: "bind IPC socket".into(),
+            source: e,
+        })?;
         Ok(Self {
             listener,
             status,
@@ -101,8 +103,10 @@ impl IpcServer {
     /// Accept and handle IPC connections until cancelled.
     pub async fn run(&self) -> crate::Result<()> {
         loop {
-            let (stream, _) = self.listener.accept().await
-                .map_err(|e| crate::Error::Io { context: "accept IPC".into(), source: e })?;
+            let (stream, _) = self.listener.accept().await.map_err(|e| crate::Error::Io {
+                context: "accept IPC".into(),
+                source: e,
+            })?;
             let status = self.status.clone();
             let routes = self.routes.clone();
             let audit = self.audit.clone();
@@ -143,12 +147,13 @@ impl IpcClient {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use tokio::net::UnixStream;
 
-        let stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
-            crate::Error::Io {
-                context: format!("connect to {}", self.socket_path.display()),
-                source: e,
-            }
-        })?;
+        let stream =
+            UnixStream::connect(&self.socket_path)
+                .await
+                .map_err(|e| crate::Error::Io {
+                    context: format!("connect to {}", self.socket_path.display()),
+                    source: e,
+                })?;
         let (reader, mut writer) = stream.into_split();
 
         let mut req_bytes = serde_json::to_vec(&cmd)?;
@@ -160,13 +165,10 @@ impl IpcClient {
                 context: "write IPC request".into(),
                 source: e,
             })?;
-        writer
-            .shutdown()
-            .await
-            .map_err(|e| crate::Error::Io {
-                context: "shutdown IPC writer".into(),
-                source: e,
-            })?;
+        writer.shutdown().await.map_err(|e| crate::Error::Io {
+            context: "shutdown IPC writer".into(),
+            source: e,
+        })?;
 
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
@@ -246,18 +248,27 @@ async fn handle_ipc_connection(
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
-    reader.read_line(&mut line).await
-        .map_err(|e| crate::Error::Io { context: "read IPC".into(), source: e })?;
+    reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| crate::Error::Io {
+            context: "read IPC".into(),
+            source: e,
+        })?;
 
     let cmd: IpcCommand = serde_json::from_str(line.trim())?;
 
     let response = match cmd {
         IpcCommand::Status => {
-            let s = status.read().map_err(|e| crate::Error::Ipc(e.to_string()))?;
+            let s = status
+                .read()
+                .map_err(|e| crate::Error::Ipc(e.to_string()))?;
             IpcResponse::Status(s.clone())
         }
         IpcCommand::Routes => {
-            let r = routes.read().map_err(|e| crate::Error::Ipc(e.to_string()))?;
+            let r = routes
+                .read()
+                .map_err(|e| crate::Error::Ipc(e.to_string()))?;
             let list = r
                 .routes()
                 .map(|(net, key)| RouteInfo {
@@ -283,8 +294,13 @@ async fn handle_ipc_connection(
 
     let mut resp_bytes = serde_json::to_vec(&response)?;
     resp_bytes.push(b'\n');
-    writer.write_all(&resp_bytes).await
-        .map_err(|e| crate::Error::Io { context: "write IPC".into(), source: e })?;
+    writer
+        .write_all(&resp_bytes)
+        .await
+        .map_err(|e| crate::Error::Io {
+            context: "write IPC".into(),
+            source: e,
+        })?;
 
     Ok(())
 }
@@ -333,7 +349,10 @@ mod tests {
         // Connect and send a Status command.
         let mut stream = UnixStream::connect(&sock_path).await.unwrap();
         let cmd = serde_json::to_string(&IpcCommand::Status).unwrap();
-        stream.write_all(format!("{cmd}\n").as_bytes()).await.unwrap();
+        stream
+            .write_all(format!("{cmd}\n").as_bytes())
+            .await
+            .unwrap();
 
         let (reader, _writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -385,7 +404,10 @@ mod tests {
         // Server should still be running — send a valid command on a new connection.
         let mut stream2 = UnixStream::connect(&sock_path).await.unwrap();
         let cmd = serde_json::to_string(&IpcCommand::Status).unwrap();
-        stream2.write_all(format!("{cmd}\n").as_bytes()).await.unwrap();
+        stream2
+            .write_all(format!("{cmd}\n").as_bytes())
+            .await
+            .unwrap();
 
         let (reader2, _) = stream2.into_split();
         let mut reader2 = BufReader::new(reader2);
@@ -506,11 +528,7 @@ mod tests {
             "10.42.0.1:443".to_string(),
             AuditOutcome::Accepted,
         );
-        audit.record(
-            "http",
-            "blocked:9999".to_string(),
-            AuditOutcome::DeniedPort,
-        );
+        audit.record("http", "blocked:9999".to_string(), AuditOutcome::DeniedPort);
         audit.record(
             "socks5",
             "postgres.data.svc:5432".to_string(),

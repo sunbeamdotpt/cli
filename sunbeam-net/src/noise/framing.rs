@@ -25,7 +25,10 @@ impl Decoder for NoiseFrameCodec {
     type Item = NoiseFrame;
     type Error = std::io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
+    fn decode(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         if src.len() < HEADER_SIZE {
             return Ok(None);
         }
@@ -60,7 +63,11 @@ impl Decoder for NoiseFrameCodec {
 impl Encoder<NoiseFrame> for NoiseFrameCodec {
     type Error = std::io::Error;
 
-    fn encode(&mut self, item: NoiseFrame, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
+    fn encode(
+        &mut self,
+        item: NoiseFrame,
+        dst: &mut BytesMut,
+    ) -> std::result::Result<(), Self::Error> {
         if item.payload.len() > MAX_FRAME_SIZE {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -94,7 +101,10 @@ mod tests {
         let mut buf = BytesMut::new();
         codec.encode(frame.clone(), &mut buf).unwrap();
 
-        let decoded = codec.decode(&mut buf).unwrap().expect("should decode a frame");
+        let decoded = codec
+            .decode(&mut buf)
+            .unwrap()
+            .expect("should decode a frame");
         assert_eq!(decoded, frame);
     }
 

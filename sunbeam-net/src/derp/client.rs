@@ -44,10 +44,7 @@ impl DerpClient {
     /// `url` accepts `http://host:port`, `https://host:port`, or bare
     /// `host:port` (treated as plain HTTP). HTTPS uses standard webpki
     /// certificate verification.
-    pub async fn connect(
-        url: &str,
-        node_keys: &crate::keys::NodeKeys,
-    ) -> crate::Result<Self> {
+    pub async fn connect(url: &str, node_keys: &crate::keys::NodeKeys) -> crate::Result<Self> {
         Self::connect_with_tls(url, node_keys, DerpTlsMode::Verify).await
     }
 
@@ -72,9 +69,9 @@ impl DerpClient {
         };
 
         // TCP connect
-        let tcp = TcpStream::connect(addr).await.map_err(|e| {
-            Error::Derp(format!("failed to connect to DERP server {addr}: {e}"))
-        })?;
+        let tcp = TcpStream::connect(addr)
+            .await
+            .map_err(|e| Error::Derp(format!("failed to connect to DERP server {addr}: {e}")))?;
 
         // Optionally wrap in TLS.
         let host = addr.split(':').next().unwrap_or(addr);
@@ -93,9 +90,10 @@ impl DerpClient {
              \r\n"
         );
 
-        stream.write_all(upgrade_req.as_bytes()).await.map_err(|e| {
-            Error::Derp(format!("failed to send upgrade request: {e}"))
-        })?;
+        stream
+            .write_all(upgrade_req.as_bytes())
+            .await
+            .map_err(|e| Error::Derp(format!("failed to send upgrade request: {e}")))?;
 
         // Read until we see the end-of-headers `\r\n\r\n`. We must NOT use a
         // BufReader: the DERP server sends the first frame inline immediately
@@ -104,9 +102,10 @@ impl DerpClient {
         let mut header_buf = Vec::with_capacity(512);
         loop {
             let mut byte = [0u8; 1];
-            let n = stream.read(&mut byte).await.map_err(|e| {
-                Error::Derp(format!("failed to read upgrade response: {e}"))
-            })?;
+            let n = stream
+                .read(&mut byte)
+                .await
+                .map_err(|e| Error::Derp(format!("failed to read upgrade response: {e}")))?;
             if n == 0 {
                 return Err(Error::Derp("connection closed during HTTP upgrade".into()));
             }
@@ -350,9 +349,10 @@ mod tests {
     async fn mock_derp_server(
         listener: &TcpListener,
     ) -> crate::Result<(Framed<TcpStream, DerpFrameCodec>, [u8; 32])> {
-        let (stream, _) = listener.accept().await.map_err(|e| {
-            Error::Derp(format!("accept: {e}"))
-        })?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| Error::Derp(format!("accept: {e}")))?;
 
         let (reader, mut writer) = tokio::io::split(stream);
         let mut buf_reader = BufReader::new(reader);
@@ -360,9 +360,10 @@ mod tests {
         // Read the HTTP upgrade request
         loop {
             let mut line = String::new();
-            buf_reader.read_line(&mut line).await.map_err(|e| {
-                Error::Derp(format!("read: {e}"))
-            })?;
+            buf_reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| Error::Derp(format!("read: {e}")))?;
             if line.trim().is_empty() {
                 break;
             }
@@ -382,7 +383,7 @@ mod tests {
         // Generate server key
         let server_secret = SecretKey::generate(&mut OsRng);
         let server_public = server_secret.public_key();
-        let server_pub_bytes: [u8; 32] = server_public.as_bytes().clone();
+        let server_pub_bytes: [u8; 32] = *server_public.as_bytes();
 
         // Send ServerKey frame
         framed
@@ -475,8 +476,7 @@ mod tests {
 
         // Run the full test as a spawned task so we can add a timeout
         let test_body = async move {
-            let server_handle =
-                tokio::spawn(async move { mock_derp_server(&listener).await });
+            let server_handle = tokio::spawn(async move { mock_derp_server(&listener).await });
 
             let mut client = DerpClient::connect(&addr.to_string(), &node_keys)
                 .await
@@ -512,8 +512,7 @@ mod tests {
                     .unwrap();
             });
 
-            let (server_res, client_res) =
-                tokio::join!(server_task, client.recv_packet());
+            let (server_res, client_res) = tokio::join!(server_task, client.recv_packet());
 
             server_res.unwrap();
             let (src, data) = client_res.unwrap();

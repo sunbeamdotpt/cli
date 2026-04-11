@@ -229,7 +229,10 @@ impl ControlClient {
             )));
         }
 
-        tracing::debug!("{path} response: {}", String::from_utf8_lossy(&response_bytes));
+        tracing::debug!(
+            "{path} response: {}",
+            String::from_utf8_lossy(&response_bytes)
+        );
         let parsed = serde_json::from_slice(&response_bytes)?;
         Ok(parsed)
     }
@@ -276,9 +279,7 @@ async fn fetch_server_key(
 
     let use_tls = coordination_url.starts_with("https://");
     let host = addr.split(':').next().unwrap_or(addr);
-    let request = format!(
-        "GET /key?v=69 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-    );
+    let request = format!("GET /key?v=69 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
 
     let buf = if use_tls {
         let tcp = TcpStream::connect(addr)

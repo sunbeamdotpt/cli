@@ -67,10 +67,7 @@ impl NetworkEngine {
     /// Create a new engine with the given local VPN IP address.
     ///
     /// Returns the engine and a set of channels for communicating with it.
-    pub fn new(
-        local_ip: IpAddress,
-        prefix_len: u8,
-    ) -> crate::Result<(Self, EngineChannels)> {
+    pub fn new(local_ip: IpAddress, prefix_len: u8) -> crate::Result<(Self, EngineChannels)> {
         // Channels between WG and smoltcp device
         let (wg_to_smoltcp_tx, wg_to_smoltcp_rx) = mpsc::channel::<Vec<u8>>(256);
         let (smoltcp_to_wg_tx, smoltcp_to_wg_rx) = mpsc::channel::<Vec<u8>>(256);
@@ -81,12 +78,7 @@ impl NetworkEngine {
         // Command channel
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
 
-        let vnet = VirtualNetwork::new(
-            local_ip,
-            prefix_len,
-            wg_to_smoltcp_rx,
-            smoltcp_to_wg_tx,
-        )?;
+        let vnet = VirtualNetwork::new(local_ip, prefix_len, wg_to_smoltcp_rx, smoltcp_to_wg_tx)?;
 
         let engine = Self {
             vnet,
@@ -139,14 +131,17 @@ impl NetworkEngine {
                 let id = self.next_id;
                 self.next_id += 1;
                 tracing::debug!("proxy connection {id} → {remote}");
-                self.connections.insert(id, ProxyConnection {
-                    local,
-                    handle,
-                    local_buf: Vec::with_capacity(8192),
-                    remote_buf: Vec::with_capacity(8192),
-                    local_read_done: false,
-                    remote_done: false,
-                });
+                self.connections.insert(
+                    id,
+                    ProxyConnection {
+                        local,
+                        handle,
+                        local_buf: Vec::with_capacity(8192),
+                        remote_buf: Vec::with_capacity(8192),
+                        local_read_done: false,
+                        remote_done: false,
+                    },
+                );
             }
             Err(e) => {
                 tracing::warn!("failed to open virtual TCP to {remote}: {e}");
@@ -191,10 +186,7 @@ impl NetworkEngine {
 
     /// Bridge data between a local TCP stream and a smoltcp socket.
     /// Returns true if the connection is done and should be removed.
-    async fn bridge_connection(
-        vnet: &mut VirtualNetwork,
-        conn: &mut ProxyConnection,
-    ) -> bool {
+    async fn bridge_connection(vnet: &mut VirtualNetwork, conn: &mut ProxyConnection) -> bool {
         // Local → smoltcp: try to read from local TCP (non-blocking)
         if !conn.local_read_done && conn.local_buf.len() < 32768 {
             let mut tmp = [0u8; 8192];

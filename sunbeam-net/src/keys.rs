@@ -44,7 +44,7 @@ mod hex {
     }
 
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             return Err("odd length hex string".into());
         }
         (0..s.len())
@@ -138,7 +138,8 @@ impl NodeKeys {
 }
 
 fn parse_key_hex(s: &str, name: &str) -> crate::Result<[u8; 32]> {
-    let bytes = hex::decode(s).map_err(|e| crate::Error::Other(format!("bad {name} key hex: {e}")))?;
+    let bytes =
+        hex::decode(s).map_err(|e| crate::Error::Other(format!("bad {name} key hex: {e}")))?;
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| crate::Error::Other(format!("{name} key must be 32 bytes")))?;
