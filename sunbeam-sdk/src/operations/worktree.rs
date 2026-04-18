@@ -365,6 +365,38 @@ pub fn setup(branch: Option<&str>) -> Result<()> {
     run_setup_hook(&target)
 }
 
+/// Drop into an interactive `$SHELL` with cwd set to the worktree for `branch`.
+/// Blocks until the user exits the shell.
+pub fn use_shell(branch: &str) -> Result<()> {
+    let sanitized = sanitize_branch(branch);
+    if sanitized.is_empty() {
+        return Err(SunbeamError::config(format!(
+            "branch name {branch:?} is empty after sanitization"
+        )));
+    }
+    let root = main_worktree_root()?;
+    let dir = worktree_dir(&root, &sanitized);
+    if !dir.is_dir() {
+        return Err(SunbeamError::config(format!(
+            "worktree path does not exist: {} (try `sunbeam wt new {branch}`)",
+            dir.display()
+        )));
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    eprintln!("☀ entering {} (exit to return)", dir.display());
+    let status = Command::new(&shell)
+        .current_dir(&dir)
+        .env("SUNBEAM_WORKTREE", &sanitized)
+        .status()
+        .with_ctx(|| format!("spawning {shell}"))?;
+    if !status.success() {
+        // Non-zero exit from an interactive shell isn't an error for us —
+        // the user may have `exit 1`'d deliberately. Just surface it.
+        tracing::debug!("shell exited with {status}");
+    }
+    Ok(())
+}
+
 fn run_setup_hook(dir: &Path) -> Result<()> {
     let hook = dir.join(".hooks").join("setup");
     if !hook.is_file() {
