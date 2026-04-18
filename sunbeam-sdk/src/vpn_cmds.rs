@@ -173,9 +173,12 @@ async fn run_daemon_foreground() -> Result<()> {
         // conflicts (6443 = kube API) that we shouldn't collide on dev
         // machines. TODO: make this configurable.
         proxy_bind: crate::vpn_env::VPN_K8S_PROXY.parse().expect("static addr"),
-        // Static fallback if the netmap doesn't have the named host.
-        cluster_api_addr: "100.64.0.1".parse().expect("static addr"),
-        cluster_api_port: 6443,
+        // The daemon auto-picks the first non-self peer when this is
+        // None, which is correct for single-cluster deployments. Set an
+        // explicit fallback here only if you have multiple peers and
+        // want to override that heuristic.
+        cluster_api_addr: None,
+        cluster_api_port: 443,
         // If the user set vpn-cluster-host in their context config, the
         // daemon resolves it from the netmap and uses that peer's
         // tailnet IP for the proxy backend.
