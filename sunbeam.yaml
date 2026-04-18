@@ -1,0 +1,23 @@
+schema: 1
+project:
+  name: cli
+  kind: rust-workspace
+  description: "Sunbeam Studios CLI — sunbeam binary, SDK, and networking layer."
+targets:
+  build:
+    exec: "cargo build --workspace --release"
+  test:
+    exec: [cargo, nextest, run, --workspace]
+  lint:
+    exec: "cargo clippy --workspace -- -D warnings"
+  fmt:
+    exec: "cargo fmt --all"
+  clean:
+    exec: "cargo clean"
+  doc:
+    exec: "cargo doc --workspace --no-deps"
+deps:
+  projects:
+    - wfe
+outputs:
+  - target/release/sunbeam
