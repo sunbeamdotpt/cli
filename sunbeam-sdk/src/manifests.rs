@@ -64,6 +64,13 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
     };
     pre_apply_cleanup(ns_list.as_deref()).await;
 
+    // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
+    // A previous interrupted `kustomize build --enable-helm` can leave a
+    // `<base>/charts/<chart>-<ver>/` skeleton that blocks later retries with
+    // "file or directory already exists". Detect and remove those so this
+    // apply is idempotent against crashes/Ctrl-C mid-extract.
+    clean_partial_chart_extracts(&infra_dir);
+
     let before = snapshot_configmaps().await;
     let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
 
@@ -147,6 +154,65 @@ pub async fn cmd_apply_dry_run(domain: &str, email: &str, namespace: &str) -> Re
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Walk `<infra_dir>` for any `charts/<chart>-<ver>/` directory whose inner
+/// extraction looks incomplete (the inner `<chart>/Chart.yaml` is missing).
+/// Remove those partial extracts so the next `kustomize build --enable-helm`
+/// re-pulls cleanly.
+///
+/// Successful extracts are left alone — kustomize happily reuses them.
+/// Detection is best-effort: on any read error we just skip that path. We
+/// never touch dirs outside `charts/`.
+fn clean_partial_chart_extracts(infra_dir: &std::path::Path) {
+    fn walk(dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some("charts") {
+                clean_one_charts_dir(&path);
+            } else {
+                walk(&path);
+            }
+        }
+    }
+    fn clean_one_charts_dir(charts_dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(charts_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let versioned = entry.path();
+            if !versioned.is_dir() {
+                continue;
+            }
+            // Each `<chart>-<ver>/` should contain one `<chart>/` dir with
+            // a `Chart.yaml` inside. If we find the versioned dir but no
+            // valid inner Chart.yaml anywhere, the extract is incomplete.
+            let mut has_chart_yaml = false;
+            if let Ok(inner) = std::fs::read_dir(&versioned) {
+                for inner_entry in inner.flatten() {
+                    let inner_path = inner_entry.path();
+                    if inner_path.is_dir() && inner_path.join("Chart.yaml").is_file() {
+                        has_chart_yaml = true;
+                        break;
+                    }
+                }
+            }
+            if !has_chart_yaml {
+                crate::output::warn(&format!(
+                    "Removing partial helm-chart extract {}",
+                    versioned.display()
+                ));
+                let _ = std::fs::remove_dir_all(&versioned);
+            }
+        }
+    }
+    walk(infra_dir);
+}
 
 /// Delete immutable resources that must be re-created on each apply.
 async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
