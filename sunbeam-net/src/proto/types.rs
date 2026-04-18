@@ -220,7 +220,9 @@ pub struct DerpNode {
     pub ipv4: String,
     #[serde(rename = "IPv6")]
     pub ipv6: String,
+    #[serde(rename = "DERPPort", alias = "DerpPort")]
     pub derp_port: u16,
+    #[serde(rename = "STUNPort", alias = "StunPort")]
     pub stun_port: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stun_only: Option<bool>,

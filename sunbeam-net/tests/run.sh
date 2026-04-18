@@ -13,7 +13,19 @@ trap cleanup EXIT
 
 echo "==> Starting Headscale..."
 $COMPOSE up -d headscale
-$COMPOSE exec -T headscale sh -c 'until headscale health 2>/dev/null; do sleep 1; done'
+
+# Headscale image is distroless (no sh) — poll healthcheck from the host.
+for i in $(seq 1 30); do
+    hs_health=$(docker inspect --format '{{.State.Health.Status}}' tests-headscale-1 2>/dev/null || echo "")
+    if [ "$hs_health" = "healthy" ]; then break; fi
+    sleep 2
+done
+if [ "$hs_health" != "healthy" ]; then
+    echo "!! headscale did not become healthy"; exit 1
+fi
+
+# headscale needs a user before we can create preauth keys
+$COMPOSE exec -T headscale headscale users create test >/dev/null 2>&1 || true
 
 echo "==> Creating pre-auth keys..."
 # Helper that handles both compact and pretty-printed JSON shapes from
@@ -50,18 +62,23 @@ $COMPOSE exec -T peer-b tailscale set --shields-up=false 2>/dev/null || true
 # Get the server's Noise public key
 SERVER_KEY=$($COMPOSE exec -T headscale cat /var/lib/headscale/noise_private.key 2>/dev/null | head -1 || echo "")
 
-echo "==> Peer A tailnet IP:"
-$COMPOSE exec -T peer-a tailscale ip -4 || true
-
-echo "==> Peer B tailnet IP:"
-$COMPOSE exec -T peer-b tailscale ip -4 || true
+PEER_A_IP=$($COMPOSE exec -T peer-a tailscale ip -4 2>/dev/null | tr -d '[:space:]' || true)
+PEER_B_IP=$($COMPOSE exec -T peer-b tailscale ip -4 2>/dev/null | tr -d '[:space:]' || true)
+echo "==> Peer A tailnet IP: $PEER_A_IP"
+echo "==> Peer B tailnet IP: $PEER_B_IP"
 
 echo "==> Running integration tests..."
 cd ../..
+# Unset sccache wrapper — it is optional and often unavailable in local dev.
+# SUNBEAM_NET_DERP_HOST_OVERRIDE rewrites the DerpMap's docker-internal
+# hostname (`headscale`) to 127.0.0.1 so the host-run daemon can reach the
+# embedded DERP published on the host's 8443 port.
+RUSTC_WRAPPER= \
 SUNBEAM_NET_TEST_AUTH_KEY="$CLIENT_KEY" \
 SUNBEAM_NET_TEST_COORD_URL="https://localhost:8443" \
 SUNBEAM_NET_TEST_DERP_INSECURE=1 \
-SUNBEAM_NET_TEST_PEER_A_IP=$($COMPOSE -f sunbeam-net/tests/docker-compose.yml exec -T peer-a tailscale ip -4 2>/dev/null | tr -d '[:space:]') \
+SUNBEAM_NET_DERP_HOST_OVERRIDE="headscale=127.0.0.1" \
+SUNBEAM_NET_TEST_PEER_A_IP="$PEER_A_IP" \
   cargo test -p sunbeam-net --features integration --test integration -- --nocapture
 
 echo "==> Done."

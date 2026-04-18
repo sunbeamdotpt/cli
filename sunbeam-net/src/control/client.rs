@@ -1,10 +1,10 @@
 use bytes::Bytes;
 use h2::client::SendRequest;
-use tokio::net::TcpStream;
 
 use crate::config::VpnConfig;
 use crate::keys::NodeKeys;
 use crate::noise;
+use crate::tls::happy_eyeballs_connect;
 
 /// Client for the coordination server control protocol.
 ///
@@ -49,7 +49,7 @@ impl ControlClient {
         };
         let server_pub_key = x25519_dalek::PublicKey::from(server_public);
 
-        let tcp = TcpStream::connect(&addr)
+        let tcp = happy_eyeballs_connect(&addr)
             .await
             .map_err(|e| crate::Error::Control(format!("tcp connect to {addr}: {e}")))?;
 
@@ -282,8 +282,7 @@ async fn fetch_server_key(
     let request = format!("GET /key?v=69 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
 
     let buf = if use_tls {
-        let tcp = TcpStream::connect(addr)
-            .await
+        let tcp = happy_eyeballs_connect(addr).await
             .map_err(|e| crate::Error::Control(format!("connect to /key: {e}")))?;
         let mut tls = crate::tls::tls_wrap(tcp, host, tls_mode).await?;
         tls.write_all(request.as_bytes())
@@ -295,8 +294,7 @@ async fn fetch_server_key(
             .map_err(|e| crate::Error::Control(format!("read /key response: {e}")))?;
         buf
     } else {
-        let mut tcp = TcpStream::connect(addr)
-            .await
+        let mut tcp = happy_eyeballs_connect(addr).await
             .map_err(|e| crate::Error::Control(format!("connect to /key: {e}")))?;
         tcp.write_all(request.as_bytes())
             .await

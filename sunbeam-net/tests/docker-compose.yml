@@ -17,6 +17,8 @@ services:
   headscale:
     image: headscale/headscale:0.23
     command: serve
+    sysctls:
+      net.ipv6.bindv6only: 0
     ports:
       - "8443:8443"   # control plane + embedded DERP, both over TLS
       - "3478:3478/udp" # STUN

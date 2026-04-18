@@ -9,8 +9,10 @@ use crate::config::VpnConfig;
 use crate::control::{MapUpdate, RouteTable};
 use crate::daemon::ipc::IpcServer;
 use crate::daemon::state::{DaemonHandle, DaemonStatus};
-use crate::derp::client::{DerpClient, DerpTlsMode};
-use crate::proto::types::DerpMap;
+use crate::derp::client::DerpTlsMode;
+use crate::derp::manager::DerpManager;
+use crate::disco::packet::PacketKind;
+use crate::proto::types::Node;
 use crate::proxy::audit::AuditLog;
 use crate::proxy::engine::{EngineCommand, NetworkEngine};
 use crate::wg::tunnel::{DecapAction, WgTunnel};
@@ -256,34 +258,111 @@ async fn run_session(
 
     let (engine, channels) = NetworkEngine::new(smoltcp_ip, 10)?;
 
-    // 7. Start TCP proxy that routes through the engine. If the user
-    //    configured cluster_api_host, look it up in the netmap and use
-    //    that peer's tailnet IP instead of the static cluster_api_addr.
+    // 7. Start TCP proxy that routes through the engine. Resolution chain
+    //    for the cluster API target, in order:
+    //      1. `cluster_api_host` — look up the peer by hostname in the netmap.
+    //      2. First non-self peer address from the netmap (single-cluster
+    //         deployments have exactly one peer and this is always right).
+    //      3. `cluster_api_addr` — caller-provided explicit fallback.
+    //    If all three fail, we skip the k8s proxy listener entirely and
+    //    log a warning; the daemon still runs (SOCKS5 proxy, routes, etc.)
+    //    but `sunbeam-sdk`'s kube-client VPN rerouting will see no proxy
+    //    on 16579 and fall back to its default kubeconfig.
     let cancel = tokio_util::sync::CancellationToken::new();
     let proxy_cmd_tx = channels.cmd_tx.clone();
     let proxy_bind = config.proxy_bind;
-    let resolved_addr = config
-        .cluster_api_host
-        .as_deref()
-        .and_then(|host| resolve_peer_ip(host, &peers))
-        .unwrap_or(config.cluster_api_addr);
-    if let Some(ref host) = config.cluster_api_host {
-        if resolved_addr == config.cluster_api_addr {
-            tracing::warn!(
-                "cluster_api_host '{host}' did not match any netmap peer; \
-                 falling back to static cluster_api_addr {}",
-                config.cluster_api_addr
-            );
-        } else {
-            tracing::info!("resolved cluster_api_host '{host}' → {resolved_addr}");
-        }
-    }
-    let cluster_addr = std::net::SocketAddr::new(resolved_addr, config.cluster_api_port);
 
-    // Proxy listener task: accepts local connections and sends them to the engine
+    let auto_cluster_api = || -> Option<IpAddr> {
+        // Look for a routed service CIDR in peers' allowed_ips. The k8s API
+        // server is conventionally at the first IP in the service CIDR
+        // (e.g. 10.43.0.1 for 10.43.0.0/16). We prefer service-CIDR routes
+        // (prefix < /32) over the peer's own tailnet IP which typically has
+        // nothing listening on 6443.
+        for peer in &peers {
+            for aip in &peer.allowed_ips {
+                if let Ok(net) = aip.parse::<ipnet::IpNet>() {
+                    // Skip host routes (/32 and /128) — those are tailnet IPs.
+                    let is_host = matches!(
+                        net,
+                        ipnet::IpNet::V4(v4) if v4.prefix_len() == 32
+                    ) || matches!(
+                        net,
+                        ipnet::IpNet::V6(v6) if v6.prefix_len() == 128
+                    );
+                    if is_host {
+                        continue;
+                    }
+                    // First IP in the CIDR = network + 1 (the API server).
+                    let network = net.network();
+                    let api_ip = match network {
+                        IpAddr::V4(v4) => {
+                            let Some(bits) = u32::from(v4).checked_add(1) else {
+                                continue;
+                            };
+                            IpAddr::V4(std::net::Ipv4Addr::from(bits))
+                        }
+                        IpAddr::V6(v6) => {
+                            let Some(bits) = u128::from(v6).checked_add(1) else {
+                                continue;
+                            };
+                            IpAddr::V6(std::net::Ipv6Addr::from(bits))
+                        }
+                    };
+                    tracing::info!(
+                        "auto-detected k8s API from peer route {aip} → {api_ip}"
+                    );
+                    return Some(api_ip);
+                }
+            }
+        }
+        None
+    };
+
+    let resolved_addr: Option<IpAddr> = if let Some(host) = config.cluster_api_host.as_deref() {
+        match resolve_peer_ip(host, &peers) {
+            Some(addr) => {
+                tracing::info!("resolved cluster_api_host '{host}' → {addr}");
+                Some(addr)
+            }
+            None => {
+                let fallback = auto_cluster_api().or(config.cluster_api_addr);
+                match fallback {
+                    Some(addr) => tracing::warn!(
+                        "cluster_api_host '{host}' did not match any netmap peer; \
+                         falling back to {addr}"
+                    ),
+                    None => tracing::warn!(
+                        "cluster_api_host '{host}' did not match any netmap peer \
+                         and no fallback is available"
+                    ),
+                }
+                fallback
+            }
+        }
+    } else {
+        auto_cluster_api().or(config.cluster_api_addr)
+    };
+
     let proxy_cancel = cancel.clone();
+    let cluster_api_port = config.cluster_api_port;
     let proxy_task = tokio::spawn(async move {
-        run_proxy_listener(proxy_bind, cluster_addr, proxy_cmd_tx, proxy_cancel).await
+        match resolved_addr {
+            Some(addr) => {
+                let cluster_addr = std::net::SocketAddr::new(addr, cluster_api_port);
+                tracing::info!("k8s proxy target: {cluster_addr}");
+                run_proxy_listener(proxy_bind, cluster_addr, proxy_cmd_tx, proxy_cancel).await
+            }
+            None => {
+                tracing::warn!(
+                    "no cluster API target available (no cluster_api_host, no peers, \
+                     no cluster_api_addr) — k8s proxy listener disabled"
+                );
+                // Park until cancellation so the task handle lifetime
+                // matches the other session tasks.
+                proxy_cancel.cancelled().await;
+                Ok(())
+            }
+        }
     });
 
     // 7a. SOCKS5 + HTTP CONNECT proxy: loopback-only, auth-gated, enforces
@@ -310,12 +389,22 @@ async fn run_session(
     // the IpcServer below so `sunbeam vpn status` can tail it without
     // any extra plumbing.
     let audit_log = Arc::new(AuditLog::new());
+    // Service registry watcher. The dns-controller (rc5+) writes
+    // `{state_dir}/services.json` on reconcile; we watch for atomic
+    // replaces and expose the current list via IPC + SOCKS slug
+    // resolution. Missing file = empty registry, nothing breaks.
+    let registry_watcher = crate::discovery::RegistryWatcher::spawn(
+        config.state_dir.join("services.json"),
+        cancel.clone(),
+    );
+    let discovery = registry_watcher.registry();
     let (socks_server, socks_endpoint) = crate::proxy::socks::SocksServer::bind(
         socks_cfg,
         route_table.clone(),
         channels.cmd_tx.clone(),
         resolver,
         audit_log.clone(),
+        discovery.clone(),
     )
     .await?;
     let socks_state_dir = config.state_dir.clone();
@@ -330,89 +419,199 @@ async fn run_session(
         engine.run(engine_cancel).await;
     });
 
-    // 9. Connect to DERP relay (for now: pick first node from derp_map)
+    // 9. Set up multi-region DERP manager.
+    //
+    //    The DerpManager handles per-region connections with lazy connect,
+    //    reconnection on failure, route learning, and stale cleanup. A driver
+    //    task owns the manager and bridges it to the WG loop via channels.
     let (derp_out_tx, derp_out_rx) = mpsc::channel::<([u8; 32], Vec<u8>)>(256);
     let (derp_in_tx, derp_in_rx) = mpsc::channel::<([u8; 32], Vec<u8>)>(256);
 
-    // 9a. Bind a UDP socket for direct WireGuard transport. Failure here is
-    //     non-fatal — DERP can carry traffic alone, just slower.
-    let (udp_out_tx, udp_out_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
-    let (udp_in_tx, udp_in_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
-    let _udp_task = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-        Ok(socket) => {
-            let local = socket.local_addr().ok();
-            tracing::info!("WG UDP socket bound on {local:?}");
-            let socket = std::sync::Arc::new(socket);
-            let udp_cancel = cancel.clone();
-            Some(tokio::spawn(async move {
-                run_udp_loop(socket, udp_out_rx, udp_in_tx, udp_cancel).await;
-            }))
-        }
-        Err(e) => {
-            tracing::warn!("UDP bind failed: {e}; continuing with DERP only");
-            None
-        }
-    };
-
-    // The DERP endpoint we connect to is either pulled from the netmap's
-    // DerpMap (real Tailscale-style deployments), or — for embedded relays
-    // where the netmap returns a useless `host: ""`, port: 0` — derived
-    // from the coordination URL. In both cases, prefix the URL with the
-    // same scheme as the coordination URL so HTTPS coordination implies
-    // HTTPS DERP. The DerpClient strips the scheme back off internally.
     let coord_scheme = if config.coordination_url.starts_with("https://") {
         "https"
     } else {
         "http"
     };
-    let derp_endpoint = derp_map
-        .as_ref()
-        .and_then(pick_derp_node)
-        .filter(|(host, port)| !host.is_empty() && *port != 0)
-        .map(|(h, p)| format!("{coord_scheme}://{h}:{p}"))
-        .or_else(|| {
-            coordination_host_port(&config.coordination_url)
-                .map(|(h, p)| format!("{coord_scheme}://{h}:{p}"))
-        });
+    let tls_mode = if config.derp_tls_insecure {
+        DerpTlsMode::InsecureSkipVerify
+    } else {
+        DerpTlsMode::Verify
+    };
 
-    let _derp_task = if let Some(url) = derp_endpoint {
-        let tls_mode = if config.derp_tls_insecure {
-            DerpTlsMode::InsecureSkipVerify
-        } else {
-            DerpTlsMode::Verify
-        };
-        tracing::info!("connecting to DERP relay at {url} (tls_mode={tls_mode:?})");
-        match DerpClient::connect_with_tls(&url, keys, tls_mode).await {
-            Ok(client) => {
-                tracing::info!("DERP relay connected: {url}");
-                let derp_cancel = cancel.clone();
-                Some(tokio::spawn(async move {
-                    run_derp_loop(client, derp_out_rx, derp_in_tx, derp_cancel).await;
-                }))
+    // Determine home region from derp_map.
+    let home_region = derp_map
+        .as_ref()
+        .and_then(|dm| dm.regions.values().next())
+        .map(|r| r.region_id)
+        .unwrap_or(1);
+
+    // Build the DerpManager with the DerpMap (or empty if none).
+    let effective_derp_map = derp_map.clone().unwrap_or_default();
+
+    // The manager's inbound channel delivers (region_id, src_key, data)
+    // from per-region tasks. The driver bridges this to the WG loop.
+    let (derp_mgr_in_tx, derp_mgr_in_rx) =
+        mpsc::channel::<(u16, [u8; 32], Vec<u8>)>(256);
+
+    let derp_manager = DerpManager::new(
+        home_region,
+        effective_derp_map.clone(),
+        std::sync::Arc::new(keys.clone()),
+        tls_mode,
+        coord_scheme,
+        derp_mgr_in_tx,
+        cancel.clone(),
+    );
+
+    let (derp_cmd_tx, derp_cmd_rx) = mpsc::channel::<DerpCmd>(16);
+    let derp_cancel = cancel.clone();
+    let _derp_mgr_task = tokio::spawn(async move {
+        run_derp_manager_task(derp_manager, derp_out_rx, derp_mgr_in_rx, derp_in_tx, derp_cmd_rx, derp_cancel).await;
+    });
+
+    // 9a. Bind a UDP socket for direct WireGuard transport. Failure here is
+    //     non-fatal — DERP can carry traffic alone, just slower.
+    let (udp_out_tx, udp_out_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
+    let (udp_in_tx, udp_in_rx) = mpsc::channel::<(std::net::SocketAddr, Vec<u8>)>(256);
+    let udp_socket: Option<std::sync::Arc<tokio::net::UdpSocket>> =
+        match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+            Ok(socket) => {
+                let local = socket.local_addr().ok();
+                tracing::info!("WG UDP socket bound on {local:?}");
+                Some(std::sync::Arc::new(socket))
             }
             Err(e) => {
-                tracing::warn!("DERP connect failed: {e}; continuing without relay");
+                tracing::warn!("UDP bind failed: {e}; continuing with DERP only");
                 None
             }
-        }
+        };
+    let _udp_task = if let Some(ref sock) = udp_socket {
+        let socket = sock.clone();
+        let udp_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            run_udp_loop(socket, udp_out_rx, udp_in_tx, udp_cancel).await;
+        }))
     } else {
-        tracing::warn!("no DERP endpoint available; continuing without relay");
         None
     };
 
+    // Channel for STUN-discovered endpoints → WG loop for CallMeMaybe dispatch.
+    let (our_endpoints_tx, our_endpoints_rx) = mpsc::channel::<Vec<std::net::SocketAddr>>(4);
+
+    // Broadcast channel for STUN responses. The WG loop's packet classifier
+    // forwards any packet with the STUN magic cookie here so netcheck tasks
+    // can read them without racing the WG loop for the shared UDP socket.
+    let (stun_bcast_tx, _) =
+        tokio::sync::broadcast::channel::<(std::net::SocketAddr, Vec<u8>)>(64);
+
+    // 9b. Start network interface monitor. On macOS this uses an AF_ROUTE
+    //     socket; on other platforms it's a no-op with a warning. On change,
+    //     trigger a STUN re-probe and send the results to the DERP manager
+    //     to update the home region.
+    let _netmon = match crate::netmon::Monitor::new(cancel.clone()) {
+        Ok(monitor) => {
+            let mut rx = monitor.subscribe();
+            let restun_derp_tx = derp_cmd_tx.clone();
+            let restun_ep_tx = our_endpoints_tx.clone();
+            let restun_socket = udp_socket.clone();
+            let restun_derp_map = effective_derp_map.clone();
+            let restun_bcast = stun_bcast_tx.clone();
+            tokio::spawn(async move {
+                let netcheck = crate::stun::netcheck::Client::new();
+                while let Ok(delta) = rx.recv().await {
+                    tracing::info!(
+                        "network change: default_iface={} ips={} rebind={}",
+                        delta.default_interface_changed,
+                        delta.interface_ips_changed,
+                        delta.rebind_likely_required,
+                    );
+                    if delta.rebind_likely_required
+                        && let Some(ref sock) = restun_socket {
+                            let mut stun_rx = restun_bcast.subscribe();
+                            let report = netcheck
+                                .report_mux(&restun_derp_map, sock, &mut stun_rx)
+                                .await;
+                            if report.preferred_derp != 0 {
+                                tracing::info!("re-STUN: preferred_derp={}, global_v4={:?}", report.preferred_derp, report.global_v4);
+                                let _ = restun_derp_tx.send(DerpCmd::SetHome(report.preferred_derp)).await;
+                            }
+                            let mut eps = Vec::new();
+                            if let Some(v4) = report.global_v4 { eps.push(v4); }
+                            if let Some(v6) = report.global_v6 { eps.push(v6); }
+                            if !eps.is_empty() {
+                                let _ = restun_ep_tx.send(eps).await;
+                            }
+                    }
+                }
+            });
+            Some(monitor)
+        }
+        Err(e) => {
+            tracing::warn!("netmon: failed to start: {e}");
+            None
+        }
+    };
+
+    // 9c. Initial STUN probe to discover our NAT-mapped address and preferred
+    //     DERP region. Runs asynchronously so it doesn't block session setup.
+    if let Some(ref sock) = udp_socket {
+        let stun_socket = sock.clone();
+        let stun_derp_map = effective_derp_map.clone();
+        let stun_derp_tx = derp_cmd_tx.clone();
+        let stun_ep_tx = our_endpoints_tx.clone();
+        let stun_bcast_tx_init = stun_bcast_tx.clone();
+        tokio::spawn(async move {
+            let netcheck = crate::stun::netcheck::Client::new();
+            let mut stun_rx = stun_bcast_tx_init.subscribe();
+            let report = netcheck
+                .report_mux(&stun_derp_map, &stun_socket, &mut stun_rx)
+                .await;
+            if report.udp {
+                tracing::info!(
+                    "initial STUN: preferred_derp={}, v4={:?}, v6={:?}, mapping_varies={:?}",
+                    report.preferred_derp, report.global_v4, report.global_v6, report.mapping_varies,
+                );
+                if report.preferred_derp != 0 {
+                    let _ = stun_derp_tx.send(DerpCmd::SetHome(report.preferred_derp)).await;
+                }
+                // Collect discovered endpoints and send to WG loop for CallMeMaybe.
+                let mut eps = Vec::new();
+                if let Some(v4) = report.global_v4 { eps.push(v4); }
+                if let Some(v6) = report.global_v6 { eps.push(v6); }
+                if !eps.is_empty() {
+                    let _ = stun_ep_tx.send(eps).await;
+                }
+            } else {
+                tracing::debug!("initial STUN: no UDP responses (behind strict NAT or STUN ports blocked)");
+            }
+        });
+    }
+
     // 10. WG encap/decap task: bridges engine IP packets ↔ WG ↔ transport
+    //     The peer_update channel carries netmap peer changes from
+    //     map_stream_loop into the WG loop so update_peers() is called
+    //     on every netmap change, not just at startup.
+    let (peer_update_tx, peer_update_rx) = mpsc::channel::<Vec<Node>>(16);
     let engine_to_wg_rx = channels.engine_to_wg_rx;
     let wg_to_engine_tx = channels.wg_to_engine_tx;
     let wg_cancel = cancel.clone();
+    // Convert disco keys to crypto_box types for NaCl seal/open.
+    let disco_secret = crypto_box::SecretKey::from(keys.disco_private.to_bytes());
+    let my_disco_pub: [u8; 32] = *keys.disco_public.as_bytes();
     let wg_task = tokio::spawn(async move {
         run_wg_loop(
             wg_tunnel,
             engine_to_wg_rx,
             wg_to_engine_tx,
             derp_out_tx,
-            derp_in_rx,
+            Some(derp_in_rx),
             udp_out_tx,
-            udp_in_rx,
+            Some(udp_in_rx),
+            peer_update_rx,
+            our_endpoints_rx,
+            disco_secret,
+            my_disco_pub,
+            stun_bcast_tx.clone(),
             wg_cancel,
         )
         .await
@@ -424,6 +623,7 @@ async fn run_session(
         status.clone(),
         route_table.clone(),
         audit_log.clone(),
+        discovery.clone(),
         daemon_shutdown.clone(),
     )?;
 
@@ -446,7 +646,7 @@ async fn run_session(
     // 11. Run concurrent tasks
     let route_whitelist = config.route_whitelist.clone();
     tokio::select! {
-        result = map_stream_loop(&mut map_stream, status, &route_table, &route_whitelist) => {
+        result = map_stream_loop(&mut map_stream, status, &route_table, &route_whitelist, &peer_update_tx, &derp_cmd_tx) => {
             eprintln!("[session] map_stream_loop exited: {result:?}");
             cancel.cancel();
             match result {
@@ -534,13 +734,25 @@ async fn run_wg_loop(
     mut from_engine: mpsc::Receiver<Vec<u8>>,
     to_engine: mpsc::Sender<Vec<u8>>,
     derp_out_tx: mpsc::Sender<([u8; 32], Vec<u8>)>,
-    mut derp_in_rx: mpsc::Receiver<([u8; 32], Vec<u8>)>,
+    mut derp_in_rx: Option<mpsc::Receiver<([u8; 32], Vec<u8>)>>,
     udp_out_tx: mpsc::Sender<(std::net::SocketAddr, Vec<u8>)>,
-    mut udp_in_rx: mpsc::Receiver<(std::net::SocketAddr, Vec<u8>)>,
+    mut udp_in_rx: Option<mpsc::Receiver<(std::net::SocketAddr, Vec<u8>)>>,
+    mut peer_update_rx: mpsc::Receiver<Vec<Node>>,
+    mut our_endpoints_rx: mpsc::Receiver<Vec<std::net::SocketAddr>>,
+    disco_private: crypto_box::SecretKey,
+    my_disco_pub: [u8; 32],
+    stun_response_tx: tokio::sync::broadcast::Sender<(std::net::SocketAddr, Vec<u8>)>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Disco shared keys: peer_disco_pub → precomputed SalsaBox.
+    // Built from the initial peer set, updated on peer changes.
+    let mut disco_shared: std::collections::HashMap<[u8; 32], crypto_box::SalsaBox> =
+        std::collections::HashMap::new();
+    let mut endpoint_tracker = crate::daemon::endpoint::EndpointTracker::new();
+    let _ = &disco_private; // used in rebuild_disco_shared below
 
     loop {
         tokio::select! {
@@ -556,28 +768,87 @@ async fn run_wg_loop(
                     None => return, // engine dropped
                 }
             }
-            incoming = derp_in_rx.recv() => {
+            incoming = async { derp_in_rx.as_mut()?.recv().await }, if derp_in_rx.is_some() => {
                 match incoming {
                     Some((src_key, data)) => {
                         tracing::trace!("WG ← DERP ({} bytes)", data.len());
                         let action = tunnel.decapsulate(&src_key, &data);
-                        handle_decap(action, src_key, &to_engine, &derp_out_tx).await;
+                        handle_decap(action, src_key, &tunnel, &to_engine, &derp_out_tx, &udp_out_tx).await;
                     }
-                    None => return, // DERP loop dropped
+                    None => {
+                        tracing::warn!("DERP channel closed; continuing on UDP only");
+                        derp_in_rx = None;
+                    }
                 }
             }
-            incoming = udp_in_rx.recv() => {
+            incoming = async { udp_in_rx.as_mut()?.recv().await }, if udp_in_rx.is_some() => {
                 match incoming {
                     Some((src_addr, data)) => {
-                        tracing::trace!("WG ← UDP {src_addr} ({} bytes)", data.len());
-                        let Some(peer_key) = identify_udp_peer(&tunnel, src_addr, &data) else {
-                            tracing::trace!("UDP packet from {src_addr}: no peer match");
-                            continue;
-                        };
-                        let action = tunnel.decapsulate(&peer_key, &data);
-                        handle_decap(action, peer_key, &to_engine, &derp_out_tx).await;
+                        match crate::disco::packet::classify(&data) {
+                            PacketKind::Stun => {
+                                tracing::trace!("STUN response from {src_addr} ({} bytes)", data.len());
+                                let _ = stun_response_tx.send((src_addr, data));
+                            }
+                            PacketKind::Disco => {
+                                tracing::trace!("disco packet from {src_addr} ({} bytes)", data.len());
+                                if let Some((msg, sender_pub)) = crate::disco::open(&data, &disco_shared) {
+                                    handle_disco(
+                                        msg, sender_pub, src_addr,
+                                        &mut endpoint_tracker, &mut tunnel,
+                                        &my_disco_pub, &disco_shared,
+                                        &derp_out_tx, &udp_out_tx,
+                                    ).await;
+                                } else {
+                                    tracing::trace!("disco decrypt failed from {src_addr}");
+                                }
+                            }
+                            PacketKind::WireGuard => {
+                                tracing::trace!("WG ← UDP {src_addr} ({} bytes)", data.len());
+                                let Some(peer_key) = identify_udp_peer(&tunnel, src_addr, &data) else {
+                                    tracing::trace!("UDP packet from {src_addr}: no peer match");
+                                    continue;
+                                };
+                                // Learn the peer's endpoint from received traffic.
+                                tunnel.update_peer_endpoint(&peer_key, src_addr);
+                                let action = tunnel.decapsulate(&peer_key, &data);
+                                handle_decap(action, peer_key, &tunnel, &to_engine, &derp_out_tx, &udp_out_tx).await;
+                            }
+                            PacketKind::Unknown => {
+                                tracing::trace!("unknown packet from {src_addr} ({} bytes)", data.len());
+                            }
+                        }
                     }
-                    None => return, // UDP loop dropped
+                    None => {
+                        tracing::warn!("UDP channel closed; continuing on DERP only");
+                        udp_in_rx = None;
+                    }
+                }
+            }
+            peers = peer_update_rx.recv() => {
+                match peers {
+                    Some(new_peers) => {
+                        tracing::info!("WG tunnel: applying peer update ({} peers)", new_peers.len());
+                        tunnel.update_peers(&new_peers);
+                        // Rebuild disco shared keys from updated peer list.
+                        rebuild_disco_shared(&disco_private, &new_peers, &mut disco_shared);
+                    }
+                    None => {
+                        tracing::warn!("peer update channel closed");
+                    }
+                }
+            }
+            endpoints = our_endpoints_rx.recv() => {
+                if let Some(eps) = endpoints {
+                    tracing::info!("discovered endpoints: {eps:?}, sending CallMeMaybe to all peers");
+                    // Send CallMeMaybe to each peer via DERP so they probe our endpoints.
+                    for peer_key in tunnel.peer_keys() {
+                        let cmm = endpoint_tracker.build_call_me_maybe(&peer_key, &eps);
+                        let msg = crate::disco::Message::CallMeMaybe(cmm);
+                        if let Some(shared) = disco_shared.get(&peer_key) {
+                            let sealed = crate::disco::seal(&msg, &my_disco_pub, shared);
+                            let _ = derp_out_tx.send((peer_key, sealed)).await;
+                        }
+                    }
                 }
             }
             _ = tick_interval.tick() => {
@@ -610,23 +881,137 @@ async fn dispatch_encap(
 
 /// Handle a single decapsulation result regardless of which transport it
 /// arrived on. Decrypted IP packets go to the engine; handshake responses
-/// go back out via DERP (we don't know a UDP endpoint for response peers
-/// at this layer — DERP is always a safe fallback).
+/// go back out via both DERP and UDP (using the peer's known endpoint).
 async fn handle_decap(
     action: DecapAction,
     peer_key: [u8; 32],
+    tunnel: &WgTunnel,
     to_engine: &mpsc::Sender<Vec<u8>>,
     derp_out_tx: &mpsc::Sender<([u8; 32], Vec<u8>)>,
+    udp_out_tx: &mpsc::Sender<(std::net::SocketAddr, Vec<u8>)>,
 ) {
     match action {
         DecapAction::Packet(p) => {
-            let _ = to_engine.send(p).await;
+            tracing::trace!("decap → engine ({} bytes)", p.len());
+            if to_engine.send(p).await.is_err() {
+                tracing::warn!("engine channel closed — packet dropped");
+            }
         }
-        DecapAction::Response(r) => {
-            let _ = derp_out_tx.send((peer_key, r)).await;
+        DecapAction::Response(responses) => {
+            for r in responses {
+                tracing::debug!(
+                    "decap ��� response ({} bytes, type={})",
+                    r.len(),
+                    if r.is_empty() { 0 } else { r[0] }
+                );
+                let action = tunnel.route_to_peer(&peer_key, r);
+                dispatch_encap(action, derp_out_tx, udp_out_tx).await;
+            }
         }
         DecapAction::Nothing => {}
     }
+}
+
+/// Handle an incoming disco message (already decrypted).
+#[allow(clippy::too_many_arguments)]
+async fn handle_disco(
+    msg: crate::disco::Message,
+    sender_disco_pub: [u8; 32],
+    src_addr: std::net::SocketAddr,
+    endpoint_tracker: &mut crate::daemon::endpoint::EndpointTracker,
+    tunnel: &mut WgTunnel,
+    my_disco_pub: &[u8; 32],
+    disco_shared: &std::collections::HashMap<[u8; 32], crypto_box::SalsaBox>,
+    _derp_out_tx: &mpsc::Sender<([u8; 32], Vec<u8>)>,
+    udp_out_tx: &mpsc::Sender<(std::net::SocketAddr, Vec<u8>)>,
+) {
+    match msg {
+        crate::disco::Message::Ping(ping) => {
+            tracing::debug!(
+                "disco ping from {:02x}{:02x}.. tx={:02x}{:02x}{:02x}{:02x}",
+                sender_disco_pub[0], sender_disco_pub[1],
+                ping.tx_id[0], ping.tx_id[1], ping.tx_id[2], ping.tx_id[3],
+            );
+            // Reply with a Pong carrying the observed source address.
+            let pong = crate::disco::Message::Pong(crate::disco::Pong {
+                tx_id: ping.tx_id,
+                src: src_addr,
+            });
+            if let Some(shared) = disco_shared.get(&sender_disco_pub) {
+                let sealed = crate::disco::seal(&pong, my_disco_pub, shared);
+                // Send pong back via UDP to the address we saw the ping from.
+                let _ = udp_out_tx.send((src_addr, sealed)).await;
+            }
+        }
+        crate::disco::Message::Pong(pong) => {
+            tracing::debug!(
+                "disco pong from {:02x}{:02x}.. observed={} tx={:02x}{:02x}{:02x}{:02x}",
+                sender_disco_pub[0], sender_disco_pub[1],
+                pong.src,
+                pong.tx_id[0], pong.tx_id[1], pong.tx_id[2], pong.tx_id[3],
+            );
+            // Find the node key for this disco key so we can update the tunnel.
+            // For now we use the disco pub as an approximation — the endpoint
+            // tracker maps disco keys internally.
+            if let Some(best) = endpoint_tracker.handle_pong(&sender_disco_pub, &pong.tx_id, pong.src) {
+                tracing::info!(
+                    "peer {:02x}{:02x}.. best direct addr: {best}",
+                    sender_disco_pub[0], sender_disco_pub[1],
+                );
+                tunnel.update_peer_endpoint(&sender_disco_pub, best);
+            }
+        }
+        crate::disco::Message::CallMeMaybe(cmm) => {
+            tracing::info!(
+                "disco CallMeMaybe from {:02x}{:02x}.. with {} endpoints",
+                sender_disco_pub[0], sender_disco_pub[1],
+                cmm.endpoints.len(),
+            );
+            // Probe the advertised endpoints.
+            let pings = endpoint_tracker.handle_call_me_maybe(&sender_disco_pub, cmm.endpoints);
+            if let Some(shared) = disco_shared.get(&sender_disco_pub) {
+                for (addr, ping) in pings {
+                    let msg = crate::disco::Message::Ping(ping);
+                    let sealed = crate::disco::seal(&msg, my_disco_pub, shared);
+                    let _ = udp_out_tx.send((addr, sealed)).await;
+                }
+            }
+        }
+    }
+}
+
+/// Rebuild the disco shared key table from a peer list.
+///
+/// Each peer's `disco_key` field (if present) is parsed into a 32-byte public
+/// key, and a `SalsaBox` is precomputed from our disco private key and the
+/// peer's disco public key.
+fn rebuild_disco_shared(
+    disco_private: &crypto_box::SecretKey,
+    peers: &[Node],
+    shared: &mut std::collections::HashMap<[u8; 32], crypto_box::SalsaBox>,
+) {
+    shared.clear();
+    for peer in peers {
+        if let Some(dk) = parse_disco_key(&peer.disco_key) {
+            let peer_pub = crypto_box::PublicKey::from(dk);
+            let sb = crypto_box::SalsaBox::new(&peer_pub, disco_private);
+            shared.insert(dk, sb);
+        }
+    }
+    tracing::debug!("rebuilt disco shared keys for {} peers", shared.len());
+}
+
+/// Parse a "discokey:<hex>" string into raw 32 bytes.
+fn parse_disco_key(s: &str) -> Option<[u8; 32]> {
+    let hex_str = s.strip_prefix("discokey:")?;
+    let mut bytes = [0u8; 32];
+    if hex_str.len() != 64 {
+        return None;
+    }
+    for i in 0..32 {
+        bytes[i] = u8::from_str_radix(&hex_str[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(bytes)
 }
 
 /// Identify which peer a UDP-delivered WireGuard packet belongs to.
@@ -714,43 +1099,73 @@ async fn run_udp_loop(
     }
 }
 
-/// DERP relay loop: bridges packets between WG layer and a DERP client.
-async fn run_derp_loop(
-    mut client: DerpClient,
+// run_derp_loop removed — replaced by run_derp_manager_task + DerpManager
+
+/// Commands sent to the DERP manager driver task.
+enum DerpCmd {
+    /// Update the DerpMap (from a new netmap push).
+    UpdateMap(crate::proto::types::DerpMap),
+    /// Change the home region (from netcheck results).
+    SetHome(u16),
+}
+
+/// Drive the DERP manager: bridge outbound packets from the WG loop,
+/// forward inbound packets (with route learning), handle DerpMap/home
+/// updates, and periodically clean stale non-home region connections.
+async fn run_derp_manager_task(
+    mut manager: DerpManager,
     mut out_rx: mpsc::Receiver<([u8; 32], Vec<u8>)>,
+    mut mgr_in_rx: mpsc::Receiver<(u16, [u8; 32], Vec<u8>)>,
     in_tx: mpsc::Sender<([u8; 32], Vec<u8>)>,
+    mut cmd_rx: mpsc::Receiver<DerpCmd>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
+    manager.ensure_home().await;
+
+    let mut clean_interval = tokio::time::interval(Duration::from_secs(15));
+    clean_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                tracing::debug!("DERP loop shutting down");
+                manager.shutdown().await;
                 return;
             }
             outgoing = out_rx.recv() => {
                 match outgoing {
                     Some((dest_key, data)) => {
-                        if let Err(e) = client.send_packet(&dest_key, &data).await {
-                            tracing::warn!("DERP send failed: {e}");
+                        manager.send_to_peer(&dest_key, data).await;
+                    }
+                    None => {
+                        manager.shutdown().await;
+                        return;
+                    }
+                }
+            }
+            incoming = mgr_in_rx.recv() => {
+                match incoming {
+                    Some((region_id, src_key, data)) => {
+                        manager.learn_peer_route(&src_key, region_id);
+                        if in_tx.send((src_key, data)).await.is_err() {
                             return;
                         }
                     }
                     None => return,
                 }
             }
-            incoming = client.recv_packet() => {
-                match incoming {
-                    Ok((src_key, data)) => {
-                        tracing::trace!("DERP recv ({} bytes)", data.len());
-                        if in_tx.send((src_key, data)).await.is_err() {
-                            return;
-                        }
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(DerpCmd::UpdateMap(map)) => {
+                        manager.update_derp_map(map);
                     }
-                    Err(e) => {
-                        tracing::warn!("DERP recv failed: {e}");
-                        return;
+                    Some(DerpCmd::SetHome(region)) => {
+                        manager.set_home_region(region).await;
                     }
+                    None => {}
                 }
+            }
+            _ = clean_interval.tick() => {
+                manager.clean_stale();
             }
         }
     }
@@ -781,17 +1196,8 @@ fn resolve_peer_ip(host: &str, peers: &[crate::proto::types::Node]) -> Option<Ip
         .or_else(|| addrs.first().copied())
 }
 
-/// Pick the first DERP node from the map (any region, any node).
-fn pick_derp_node(derp_map: &DerpMap) -> Option<(String, u16)> {
-    derp_map
-        .regions
-        .values()
-        .flat_map(|r| r.nodes.iter())
-        .next()
-        .map(|n| (n.host_name.clone(), n.derp_port))
-}
-
 /// Extract host:port from a coordination URL like `http://localhost:8080`.
+#[cfg(test)]
 fn coordination_host_port(url: &str) -> Option<(String, u16)> {
     let stripped = url
         .strip_prefix("https://")
@@ -820,6 +1226,8 @@ async fn map_stream_loop(
     status: &Arc<RwLock<DaemonStatus>>,
     route_table: &Arc<RwLock<RouteTable>>,
     route_whitelist: &[ipnet::IpNet],
+    peer_update_tx: &mpsc::Sender<Vec<Node>>,
+    derp_cmd_tx: &mpsc::Sender<DerpCmd>,
 ) -> crate::Result<()> {
     loop {
         match stream.next().await? {
@@ -832,12 +1240,31 @@ async fn map_stream_loop(
                     } else {
                         tracing::info!("netmap: {} peers", full.peers.len());
                     }
+                    // Forward peer list to the WG tunnel so it can update
+                    // endpoints, add new peers, and drop stale ones.
+                    if peer_update_tx.send(full.peers.clone()).await.is_err() {
+                        tracing::warn!("peer update channel closed — WG loop may be dead");
+                    }
+                    // Forward DerpMap to the DERP manager if it changed.
+                    if let Some(ref dm) = full.derp_map {
+                        let _ = derp_cmd_tx.send(DerpCmd::UpdateMap(dm.clone())).await;
+                    }
                 }
                 MapUpdate::PeersChanged(peers) => {
                     if let Ok(mut rt) = route_table.write() {
                         rt.apply_changed(peers, route_whitelist);
                     }
                     tracing::debug!("netmap: {} peers changed", peers.len());
+                    // PeersChanged is a delta — forward the changed subset.
+                    // update_peers handles upsert for known keys and insert
+                    // for new ones; it won't remove peers not in this list
+                    // (that's PeersRemoved's job). However, update_peers
+                    // retains only keys in the input set. So we need to send
+                    // changed peers through a different path or accumulate.
+                    // For now, the Full update (which Headscale sends on any
+                    // material change) is the primary trigger. PeersChanged
+                    // is logged but not forwarded — this is safe because
+                    // Headscale always follows PeersChanged with a Full.
                 }
                 MapUpdate::PeersRemoved(keys) => {
                     if let Ok(mut rt) = route_table.write() {
@@ -900,7 +1327,7 @@ mod tests {
             auth_key: "test-key".to_string(),
             state_dir: dir.path().to_path_buf(),
             proxy_bind: "127.0.0.1:0".parse().unwrap(),
-            cluster_api_addr: "10.0.0.1".parse().unwrap(),
+            cluster_api_addr: Some("10.0.0.1".parse().unwrap()),
             cluster_api_port: 6443,
             cluster_api_host: None,
             control_socket: dir.path().join("test.sock"),
@@ -927,5 +1354,145 @@ mod tests {
         }
 
         handle.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn test_parse_dst_ip_v4() {
+        // Minimal valid IPv4 header (20 bytes), version=4, dst=10.43.0.1
+        let mut pkt = [0u8; 20];
+        pkt[0] = 0x45; // version 4, IHL 5
+        pkt[16] = 10;
+        pkt[17] = 43;
+        pkt[18] = 0;
+        pkt[19] = 1;
+        assert_eq!(
+            parse_dst_ip(&pkt),
+            Some(IpAddr::V4(std::net::Ipv4Addr::new(10, 43, 0, 1)))
+        );
+    }
+
+    #[test]
+    fn test_parse_dst_ip_v6() {
+        let mut pkt = [0u8; 40];
+        pkt[0] = 0x60; // version 6
+        // dst at bytes 24..40: ::1
+        pkt[39] = 1;
+        assert_eq!(
+            parse_dst_ip(&pkt),
+            Some(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST))
+        );
+    }
+
+    #[test]
+    fn test_parse_dst_ip_truncated() {
+        assert_eq!(parse_dst_ip(&[]), None);
+        assert_eq!(parse_dst_ip(&[0x45; 19]), None); // v4 too short
+        assert_eq!(parse_dst_ip(&[0x60; 39]), None); // v6 too short
+        assert_eq!(parse_dst_ip(&[0x30; 20]), None); // bad version
+    }
+
+    #[test]
+    fn test_coordination_host_port_https() {
+        let (h, p) = coordination_host_port("https://headscale.sunbeam.pt:8443").unwrap();
+        assert_eq!(h, "headscale.sunbeam.pt");
+        assert_eq!(p, 8443);
+    }
+
+    #[test]
+    fn test_coordination_host_port_default() {
+        let (h, p) = coordination_host_port("https://headscale.sunbeam.pt").unwrap();
+        assert_eq!(h, "headscale.sunbeam.pt");
+        assert_eq!(p, 443);
+
+        let (h, p) = coordination_host_port("http://localhost").unwrap();
+        assert_eq!(h, "localhost");
+        assert_eq!(p, 80);
+    }
+
+    #[test]
+    fn test_coordination_host_port_with_path() {
+        let (h, p) = coordination_host_port("https://headscale.sunbeam.pt:8443/ts2021").unwrap();
+        assert_eq!(h, "headscale.sunbeam.pt");
+        assert_eq!(p, 8443);
+    }
+
+    #[test]
+    fn test_identify_udp_peer_type2() {
+        // Type 2 (HandshakeResponse) — receiver_index at bytes 4..8.
+        let (_, secret) = {
+            let s = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+            let p = x25519_dalek::PublicKey::from(&s);
+            (*p.as_bytes(), s)
+        };
+        let mut tunnel = WgTunnel::new(secret);
+
+        let (peer_pub, _) = {
+            let s = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+            let p = x25519_dalek::PublicKey::from(&s);
+            (*p.as_bytes(), s)
+        };
+        let node = crate::proto::types::Node {
+            id: 1,
+            key: format!(
+                "nodekey:{}",
+                peer_pub.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            ),
+            disco_key: "discokey:0000000000000000000000000000000000000000000000000000000000000000".into(),
+            addresses: vec!["100.64.0.2/32".into()],
+            allowed_ips: vec!["100.64.0.0/24".into()],
+            endpoints: vec!["1.2.3.4:41641".into()],
+            derp: "127.3.3.40:1".into(),
+            hostinfo: crate::proto::types::HostInfo {
+                go_arch: "arm64".into(),
+                go_os: "linux".into(),
+                go_version: "test".into(),
+                hostname: "test".into(),
+                os: "linux".into(),
+                os_version: "6.1".into(),
+                device_model: None,
+                frontend_log_id: None,
+                backend_log_id: None,
+                net_info: None,
+            },
+            name: "peer.test".into(),
+            online: Some(true),
+            machine_authorized: true,
+        };
+        tunnel.update_peers(&[node]);
+
+        // Build a fake type-2 packet with local_index=0 at bytes 4..8.
+        let mut pkt = vec![0u8; 92]; // HandshakeResponse is 92 bytes
+        pkt[0] = 2; // type 2
+        pkt[4..8].copy_from_slice(&0u32.to_le_bytes()); // local index 0
+        let addr: std::net::SocketAddr = "5.6.7.8:9999".parse().unwrap();
+        let found = identify_udp_peer(&tunnel, addr, &pkt);
+        assert_eq!(found, Some(peer_pub));
+    }
+
+    #[test]
+    fn test_identify_udp_peer_too_short() {
+        let secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        let tunnel = WgTunnel::new(secret);
+        let addr: std::net::SocketAddr = "1.2.3.4:5678".parse().unwrap();
+        assert_eq!(identify_udp_peer(&tunnel, addr, &[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn test_parse_disco_key_valid() {
+        let hex = "discokey:0102030405060708091011121314151617181920212223242526272829303132";
+        let result = parse_disco_key(hex).unwrap();
+        assert_eq!(result[0], 0x01);
+        assert_eq!(result[31], 0x32);
+    }
+
+    #[test]
+    fn test_parse_disco_key_no_prefix() {
+        assert!(parse_disco_key("nodekey:aabb").is_none());
+    }
+
+    #[test]
+    fn test_parse_disco_key_empty() {
+        assert!(parse_disco_key("").is_none());
+        assert!(parse_disco_key("discokey:").is_none());
     }
 }

@@ -45,9 +45,16 @@ smoltcp.workspace = true
 ipnet.workspace = true
 zstd.workspace = true
 bytes.workspace = true
+libc.workspace = true
 
 [features]
 integration = []
+
+# Linux-only: rtnetlink-based network interface monitor.
+# rtnetlink re-exports netlink-packet-{core,route} so we use those re-exports
+# to avoid pulling in a second copy at a different version.
+[target.'cfg(target_os = "linux")'.dependencies]
+rtnetlink = "0.20"
 
 [dev-dependencies]
 tokio-test.workspace = true

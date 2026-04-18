@@ -55,6 +55,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::control::RouteTable;
+use crate::discovery::{ServiceRegistry, is_valid_slug};
 use crate::dns::resolver::{ResolveError, Resolver};
 use crate::proxy::audit::{AuditLog, AuditOutcome};
 use crate::proxy::engine::EngineCommand;
@@ -137,6 +138,11 @@ pub struct SocksServer {
     /// exactly one entry here — accepted or denied — so `sunbeam vpn
     /// status` can show the tail.
     audit: Arc<AuditLog>,
+    /// Service registry for bare-slug pre-resolution. When a SOCKS5 /
+    /// HTTP CONNECT request names a short alias that matches a registry
+    /// entry (see `docs/service-discovery.md`), we substitute the
+    /// service's cluster DNS name before handing off to the resolver.
+    discovery: Arc<RwLock<ServiceRegistry>>,
 }
 
 /// Public view of the running SOCKS5 endpoint — the port and auth token
@@ -163,6 +169,7 @@ impl SocksServer {
         cmd_tx: mpsc::Sender<EngineCommand>,
         resolver: Option<Arc<Resolver>>,
         audit: Arc<AuditLog>,
+        discovery: Arc<RwLock<ServiceRegistry>>,
     ) -> crate::Result<(Self, SocksEndpoint)> {
         if !is_loopback(&config.bind) {
             return Err(crate::Error::Control(format!(
@@ -206,6 +213,7 @@ impl SocksServer {
                 cmd_tx,
                 resolver,
                 audit,
+                discovery,
             },
             endpoint,
         ))
@@ -241,6 +249,7 @@ impl SocksServer {
                     let cmd_tx = self.cmd_tx.clone();
                     let resolver = self.resolver.clone();
                     let audit = self.audit.clone();
+                    let discovery = self.discovery.clone();
                     let cancel = cancel.clone();
                     tokio::spawn(async move {
                         let ctx = ConnectionContext {
@@ -250,6 +259,7 @@ impl SocksServer {
                             cmd_tx,
                             resolver,
                             audit,
+                            discovery,
                             cancel,
                         };
                         if let Err(e) = handle_connection(stream, peer, ctx).await {
@@ -273,6 +283,10 @@ struct ConnectionContext {
     /// Ring-buffer audit log. Every decision the handlers make about a
     /// destination — accepted or denied — is recorded here.
     audit: Arc<AuditLog>,
+    /// Shared service registry. When a destination host is a bare slug
+    /// (no dots, slug-shaped) that matches an entry, we rewrite it to
+    /// the service's `svc_dns` before resolution.
+    discovery: Arc<RwLock<ServiceRegistry>>,
     #[allow(dead_code)]
     cancel: CancellationToken,
 }
@@ -851,10 +865,11 @@ async fn authorize_destination(
         Destination::Ip(ip, _) => *ip,
         Destination::Domain(name, _) => {
             let resolver = ctx.resolver.as_ref().ok_or(AclDenial::DomainUnsupported)?;
-            match resolver.resolve(name).await {
+            let resolve_name = rewrite_slug(name, &ctx.discovery);
+            match resolver.resolve(&resolve_name).await {
                 Ok(ip) => ip,
                 Err(e) => {
-                    tracing::debug!("SOCKS5 resolve {name}: {e}");
+                    tracing::debug!("SOCKS5 resolve {resolve_name}: {e}");
                     return Err(match e {
                         ResolveError::Disabled => AclDenial::DomainUnsupported,
                         _ => AclDenial::ResolutionFailed,
@@ -869,6 +884,22 @@ async fn authorize_destination(
         return Err(AclDenial::NotRoutable);
     }
     Ok(SocketAddr::new(ip, port))
+}
+
+/// Bare-slug pre-resolution. A hostname that is slug-shaped
+/// (e.g. `hydra`) and matches a registry entry is rewritten to the
+/// service's cluster DNS name (e.g. `hydra-public.ory.svc.cluster.local`)
+/// before hitting the resolver. Slugs have no dots, so they can never
+/// be a valid cluster DNS name on their own — non-matching names pass
+/// through unchanged.
+fn rewrite_slug(name: &str, discovery: &Arc<RwLock<ServiceRegistry>>) -> String {
+    if is_valid_slug(name)
+        && let Ok(reg) = discovery.read()
+        && let Some(entry) = reg.lookup(name)
+    {
+        return entry.svc_dns.clone();
+    }
+    name.to_string()
 }
 
 #[cfg(test)]
@@ -996,6 +1027,10 @@ mod tests {
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    fn empty_discovery() -> Arc<RwLock<ServiceRegistry>> {
+        Arc::new(RwLock::new(ServiceRegistry::new()))
+    }
+
     fn test_node(key: &str, cidrs: &[&str]) -> Node {
         Node {
             id: 1,
@@ -1038,9 +1073,10 @@ mod tests {
         // Keep tempdir alive for the test — leak intentionally.
         let dir_path = dir.keep();
         let audit = Arc::new(AuditLog::new());
-        let (server, endpoint) = SocksServer::bind(cfg, routes, tx, None, audit)
-            .await
-            .unwrap();
+        let (server, endpoint) =
+            SocksServer::bind(cfg, routes, tx, None, audit, empty_discovery())
+                .await
+                .unwrap();
         let cancel = CancellationToken::new();
         let cancel_task = cancel.clone();
         tokio::spawn(async move {
@@ -1084,9 +1120,16 @@ mod tests {
         };
         let dir_path = dir.keep();
         let audit = Arc::new(AuditLog::new());
-        let (server, endpoint) = SocksServer::bind(cfg, routes, engine_tx, Some(resolver), audit)
-            .await
-            .unwrap();
+        let (server, endpoint) = SocksServer::bind(
+            cfg,
+            routes,
+            engine_tx,
+            Some(resolver),
+            audit,
+            empty_discovery(),
+        )
+        .await
+        .unwrap();
         let cancel = CancellationToken::new();
         let cancel_task = cancel.clone();
         tokio::spawn(async move {
@@ -1189,7 +1232,7 @@ mod tests {
             state_dir: dir.path().to_path_buf(),
         };
         let audit = Arc::new(AuditLog::new());
-        let err = SocksServer::bind(cfg, routes, tx, None, audit)
+        let err = SocksServer::bind(cfg, routes, tx, None, audit, empty_discovery())
             .await
             .unwrap_err();
         assert!(format!("{err}").contains("non-loopback"));
@@ -1206,9 +1249,10 @@ mod tests {
             state_dir: dir.path().to_path_buf(),
         };
         let audit = Arc::new(AuditLog::new());
-        let (_server, endpoint) = SocksServer::bind(cfg, routes, tx, None, audit)
-            .await
-            .unwrap();
+        let (_server, endpoint) =
+            SocksServer::bind(cfg, routes, tx, None, audit, empty_discovery())
+                .await
+                .unwrap();
         assert!(endpoint.port > 0);
         assert_eq!(endpoint.auth_token.len(), AUTH_TOKEN_BYTES * 2);
 
@@ -1901,6 +1945,45 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_slug_substitutes_registry_entry() {
+        use crate::discovery::{RegistryFile, ServiceEntry};
+        let entry = ServiceEntry {
+            slug: "hydra".into(),
+            name: "Hydra".into(),
+            namespace: "ory".into(),
+            svc_dns: "hydra-public.ory.svc.cluster.local".into(),
+            port: 4444,
+            ..serde_json::from_str::<RegistryFile>(
+                r#"{"services":[{"slug":"x","name":"x","namespace":"x","svc_dns":"x","port":1}]}"#,
+            )
+            .unwrap()
+            .services
+            .remove(0)
+        };
+        let reg = Arc::new(RwLock::new(ServiceRegistry::from_entries(vec![entry])));
+        assert_eq!(
+            rewrite_slug("hydra", &reg),
+            "hydra-public.ory.svc.cluster.local"
+        );
+    }
+
+    #[test]
+    fn rewrite_slug_passes_through_unknown_slug() {
+        let reg = empty_discovery();
+        assert_eq!(rewrite_slug("hydra", &reg), "hydra");
+    }
+
+    #[test]
+    fn rewrite_slug_passes_through_non_slug_host() {
+        let reg = empty_discovery();
+        assert_eq!(
+            rewrite_slug("foo.svc.cluster.local", &reg),
+            "foo.svc.cluster.local"
+        );
+        assert_eq!(rewrite_slug("10.0.0.1", &reg), "10.0.0.1");
+    }
+
+    #[test]
     fn validate_destination_rejects_domain_when_no_resolver() {
         let (tx, _rx) = mpsc::channel(1);
         let ctx = ConnectionContext {
@@ -1910,6 +1993,7 @@ mod tests {
             cmd_tx: tx,
             resolver: None,
             audit: Arc::new(AuditLog::new()),
+            discovery: empty_discovery(),
             cancel: CancellationToken::new(),
         };
         let err = validate_destination_ip(&ctx, &Destination::Domain("h".into(), 443)).unwrap_err();

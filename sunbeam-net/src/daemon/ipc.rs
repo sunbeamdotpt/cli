@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::state::DaemonStatus;
 use crate::control::RouteTable;
+use crate::discovery::{ServiceEntry, ServiceRegistry};
 use crate::proxy::audit::{AuditEntry, AuditLog};
 
 /// IPC command sent to the daemon.
@@ -31,6 +32,9 @@ pub enum IpcCommand {
     RecentConnections { max: usize },
     /// Force reconnection.
     Reconnect,
+    /// Dump the current service registry. Empty until the dns-controller
+    /// writes `~/.sunbeam/vpn/services.json`.
+    Services,
     /// Gracefully stop the daemon.
     Stop,
 }
@@ -55,6 +59,8 @@ pub enum IpcResponse {
     Routes(Vec<RouteInfo>),
     /// Tail of the proxy audit log, newest first.
     RecentConnections(Vec<AuditEntry>),
+    /// Service registry snapshot.
+    Services(Vec<ServiceEntry>),
     /// Acknowledgement.
     Ok,
     /// Error.
@@ -70,6 +76,9 @@ pub(crate) struct IpcServer {
     routes: Arc<RwLock<RouteTable>>,
     /// Ring-buffer audit log shared with the SOCKS proxy.
     audit: Arc<AuditLog>,
+    /// Service registry, maintained by [`RegistryWatcher`]. Empty until
+    /// the dns-controller writes `services.json`.
+    discovery: Arc<RwLock<ServiceRegistry>>,
     /// Cancellation token shared with the daemon loop. Cancelling this from
     /// an IPC `Stop` request triggers graceful shutdown of the whole
     /// daemon, the same as `DaemonHandle::shutdown()`.
@@ -83,6 +92,7 @@ impl IpcServer {
         status: Arc<RwLock<DaemonStatus>>,
         routes: Arc<RwLock<RouteTable>>,
         audit: Arc<AuditLog>,
+        discovery: Arc<RwLock<ServiceRegistry>>,
         daemon_shutdown: CancellationToken,
     ) -> crate::Result<Self> {
         // Remove stale socket file if it exists.
@@ -96,6 +106,7 @@ impl IpcServer {
             status,
             routes,
             audit,
+            discovery,
             daemon_shutdown,
         })
     }
@@ -110,10 +121,13 @@ impl IpcServer {
             let status = self.status.clone();
             let routes = self.routes.clone();
             let audit = self.audit.clone();
+            let discovery = self.discovery.clone();
             let shutdown = self.daemon_shutdown.clone();
             tokio::spawn(async move {
-                if let Err(e) =
-                    handle_ipc_connection(stream, &status, &routes, &audit, &shutdown).await
+                if let Err(e) = handle_ipc_connection(
+                    stream, &status, &routes, &audit, &discovery, &shutdown,
+                )
+                .await
                 {
                     tracing::warn!("IPC error: {e}");
                 }
@@ -234,6 +248,17 @@ impl IpcClient {
             ))),
         }
     }
+
+    /// Convenience: dump the daemon's current service registry.
+    pub async fn services(&self) -> crate::Result<Vec<ServiceEntry>> {
+        match self.request(IpcCommand::Services).await? {
+            IpcResponse::Services(list) => Ok(list),
+            IpcResponse::Error(e) => Err(crate::Error::Ipc(e)),
+            other => Err(crate::Error::Ipc(format!(
+                "unexpected response to Services: {other:?}"
+            ))),
+        }
+    }
 }
 
 async fn handle_ipc_connection(
@@ -241,6 +266,7 @@ async fn handle_ipc_connection(
     status: &Arc<RwLock<DaemonStatus>>,
     routes: &Arc<RwLock<RouteTable>>,
     audit: &Arc<AuditLog>,
+    discovery: &Arc<RwLock<ServiceRegistry>>,
     daemon_shutdown: &CancellationToken,
 ) -> crate::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -286,6 +312,12 @@ async fn handle_ipc_connection(
             // the daemon). For now treat it the same as a no-op.
             IpcResponse::Ok
         }
+        IpcCommand::Services => {
+            let r = discovery
+                .read()
+                .map_err(|e| crate::Error::Ipc(e.to_string()))?;
+            IpcResponse::Services(r.entries().to_vec())
+        }
         IpcCommand::Stop => {
             daemon_shutdown.cancel();
             IpcResponse::Ok
@@ -321,6 +353,10 @@ mod tests {
         Arc::new(AuditLog::new())
     }
 
+    fn empty_discovery() -> Arc<RwLock<ServiceRegistry>> {
+        Arc::new(RwLock::new(ServiceRegistry::new()))
+    }
+
     #[tokio::test]
     async fn test_ipc_status_query() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -338,6 +374,7 @@ mod tests {
             status,
             empty_routes(),
             empty_audit(),
+            empty_discovery(),
             CancellationToken::new(),
         )
         .unwrap();
@@ -381,6 +418,7 @@ mod tests {
             status,
             empty_routes(),
             empty_audit(),
+            empty_discovery(),
             CancellationToken::new(),
         )
         .unwrap();
@@ -472,6 +510,7 @@ mod tests {
             status,
             routes,
             empty_audit(),
+            empty_discovery(),
             CancellationToken::new(),
         )
         .unwrap();
@@ -503,6 +542,7 @@ mod tests {
             status,
             empty_routes(),
             empty_audit(),
+            empty_discovery(),
             CancellationToken::new(),
         )
         .unwrap();
@@ -540,6 +580,7 @@ mod tests {
             status,
             empty_routes(),
             audit,
+            empty_discovery(),
             CancellationToken::new(),
         )
         .unwrap();

@@ -56,8 +56,9 @@ impl EncapAction {
 pub(crate) enum DecapAction {
     /// Decrypted IP packet ready for the virtual network stack.
     Packet(Vec<u8>),
-    /// Need to send a response (handshake response, cookie, etc.)
-    Response(Vec<u8>),
+    /// Need to send one or more responses (handshake response, cookie, etc.)
+    /// Each entry is a separate WG packet that must be sent individually.
+    Response(Vec<Vec<u8>>),
     /// Nothing (keep-alive, etc.)
     Nothing,
 }
@@ -147,7 +148,11 @@ impl WgTunnel {
                 let packet = data.to_vec();
                 route_packet(peer, &peer_key, packet)
             }
-            TunnResult::Err(_) | TunnResult::Done => EncapAction::nothing(),
+            TunnResult::Err(e) => {
+                tracing::warn!("WG encapsulate error: {e:?} ({} bytes to {dst_ip})", payload.len());
+                EncapAction::nothing()
+            }
+            TunnResult::Done => EncapAction::nothing(),
             // These shouldn't happen during encapsulate, but handle gracefully.
             TunnResult::WriteToTunnelV4(_, _) | TunnResult::WriteToTunnelV6(_, _) => {
                 EncapAction::nothing()
@@ -159,7 +164,13 @@ impl WgTunnel {
     pub fn decapsulate(&mut self, peer_key: &[u8; 32], packet: &[u8]) -> DecapAction {
         let peer = match self.peers.get_mut(peer_key) {
             Some(p) => p,
-            None => return DecapAction::Nothing,
+            None => {
+                tracing::debug!(
+                    "decapsulate: no peer for key {:02x}{:02x}..{:02x}{:02x} ({} bytes)",
+                    peer_key[0], peer_key[1], peer_key[30], peer_key[31], packet.len()
+                );
+                return DecapAction::Nothing;
+            }
         };
 
         let mut buf = vec![0u8; BUF_SIZE];
@@ -169,23 +180,32 @@ impl WgTunnel {
             TunnResult::WriteToTunnelV4(data, _addr) => DecapAction::Packet(data.to_vec()),
             TunnResult::WriteToTunnelV6(data, _addr) => DecapAction::Packet(data.to_vec()),
             TunnResult::WriteToNetwork(data) => {
-                // This is a handshake response or cookie that needs to be sent back.
-                let response = data.to_vec();
-                // Check for chained results — loop to drain.
+                let mut responses = vec![data.to_vec()];
                 let mut chain_buf = vec![0u8; BUF_SIZE];
                 loop {
                     match peer.tunn.decapsulate(None, &[], &mut chain_buf) {
                         TunnResult::WriteToNetwork(more) => {
-                            // Multiple chained responses; we return the first.
-                            let _ = more;
+                            responses.push(more.to_vec());
                         }
                         TunnResult::Done => break,
                         _ => break,
                     }
                 }
-                DecapAction::Response(response)
+                if responses.len() > 1 {
+                    tracing::debug!("decap: {} chained response(s)", responses.len() - 1);
+                }
+                DecapAction::Response(responses)
             }
-            TunnResult::Err(_) | TunnResult::Done => DecapAction::Nothing,
+            TunnResult::Err(e) => {
+                tracing::warn!(
+                    "WG decapsulate error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?} ({} bytes, type={})",
+                    peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                    packet.len(),
+                    if packet.is_empty() { 0 } else { packet[0] }
+                );
+                DecapAction::Nothing
+            }
+            TunnResult::Done => DecapAction::Nothing,
         }
     }
 
@@ -209,7 +229,13 @@ impl WgTunnel {
                     let action = route_packet(peer, &peer_key, packet);
                     actions.push(TimerAction { action });
                 }
-                TunnResult::Err(_) | TunnResult::Done => {}
+                TunnResult::Err(e) => {
+                    tracing::warn!(
+                        "WG tick error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?}",
+                        peer_key[0], peer_key[1], peer_key[30], peer_key[31]
+                    );
+                }
+                TunnResult::Done => {}
                 TunnResult::WriteToTunnelV4(_, _) | TunnResult::WriteToTunnelV6(_, _) => {}
             }
         }
@@ -250,6 +276,34 @@ impl WgTunnel {
             }
         }
         None
+    }
+
+    /// Build an `EncapAction` to route a raw WG packet to the given peer,
+    /// using whatever transports (UDP endpoint, DERP region) are known.
+    pub fn route_to_peer(&self, peer_key: &[u8; 32], data: Vec<u8>) -> EncapAction {
+        match self.peers.get(peer_key) {
+            Some(peer) => route_packet(peer, peer_key, data),
+            None => EncapAction::nothing(),
+        }
+    }
+
+    /// Update a peer's UDP endpoint from observed traffic (e.g. a received
+    /// UDP packet from a new address).
+    pub fn update_peer_endpoint(&mut self, peer_key: &[u8; 32], endpoint: SocketAddr) {
+        if let Some(peer) = self.peers.get_mut(peer_key)
+            && peer.endpoint != Some(endpoint) {
+                tracing::debug!(
+                    "peer {:02x}{:02x}..{:02x}{:02x} endpoint changed: {:?} → {endpoint}",
+                    peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                    peer.endpoint,
+                );
+                peer.endpoint = Some(endpoint);
+            }
+    }
+
+    /// Return all peer public keys.
+    pub fn peer_keys(&self) -> Vec<[u8; 32]> {
+        self.peers.keys().copied().collect()
     }
 
     /// Expose peer count for testing.
@@ -425,5 +479,141 @@ mod tests {
         // IP outside the allowed range.
         let found = tunnel.find_peer_for_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_update_peers_idempotent() {
+        let (_, my_secret) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+
+        let (peer_pub, _) = generate_key();
+        let node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+
+        tunnel.update_peers(std::slice::from_ref(&node));
+        assert_eq!(tunnel.peer_count(), 1);
+        let idx_after_first = tunnel.next_index;
+
+        // Second call with same peer should not increment next_index.
+        tunnel.update_peers(&[node]);
+        assert_eq!(tunnel.peer_count(), 1);
+        assert_eq!(tunnel.next_index, idx_after_first);
+    }
+
+    #[test]
+    fn test_update_peers_endpoint_change() {
+        let (_, my_secret) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+
+        let (peer_pub, _) = generate_key();
+        let mut node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[node.clone()]);
+        assert_eq!(
+            tunnel.peers.get(&peer_pub).unwrap().endpoint,
+            Some("1.2.3.4:41641".parse().unwrap())
+        );
+
+        // Change endpoint.
+        node.endpoints = vec!["5.6.7.8:41641".into()];
+        tunnel.update_peers(&[node]);
+        assert_eq!(
+            tunnel.peers.get(&peer_pub).unwrap().endpoint,
+            Some("5.6.7.8:41641".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_update_peers_key_rotation() {
+        let (_, my_secret) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+
+        let (old_pub, _) = generate_key();
+        let (new_pub, _) = generate_key();
+
+        let old_node = make_peer_node(&old_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[old_node]);
+        assert!(tunnel.peers.contains_key(&old_pub));
+
+        // Replace with new key — old peer should be removed.
+        let new_node = make_peer_node(&new_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[new_node]);
+        assert!(!tunnel.peers.contains_key(&old_pub));
+        assert!(tunnel.peers.contains_key(&new_pub));
+        assert_eq!(tunnel.peer_count(), 1);
+    }
+
+    #[test]
+    fn test_remove_peer_drops_all_session_state() {
+        // Two peers, both with non-trivial state (endpoint, allowed_ips, and
+        // boringtun handshake-init state from a forced encapsulate call).
+        // Removing one must drop *all* per-peer state; the other is untouched.
+        let (_, my_secret) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+
+        let (gone_pub, _) = generate_key();
+        let (kept_pub, _) = generate_key();
+        let gone_node = {
+            let mut n = make_peer_node(&gone_pub, vec!["100.64.0.2/32"]);
+            n.endpoints = vec!["1.2.3.4:41641".into()];
+            n
+        };
+        let kept_node = {
+            let mut n = make_peer_node(&kept_pub, vec!["100.64.0.3/32"]);
+            n.endpoints = vec!["5.6.7.8:41641".into()];
+            n
+        };
+        tunnel.update_peers(&[gone_node, kept_node.clone()]);
+
+        // Force boringtun to build a session (handshake initiation) for the
+        // peer we're about to remove, so per-peer state is non-trivial.
+        let gone_idx = tunnel.peers.get(&gone_pub).unwrap().local_index;
+        let gone_ep: SocketAddr = "1.2.3.4:41641".parse().unwrap();
+        let action = tunnel.encapsulate(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 2)), b"ping");
+        assert!(action.udp.is_some(), "expected handshake init to emit UDP");
+
+        // Drop the peer via the real removal path: a netmap update that omits it.
+        tunnel.update_peers(&[kept_node]);
+
+        // Peer map lookup: gone.
+        assert!(!tunnel.peers.contains_key(&gone_pub));
+        assert_eq!(tunnel.peer_count(), 1);
+        // Index, endpoint, and IP lookups all fail for the removed peer.
+        assert_eq!(tunnel.find_peer_by_local_index(gone_idx), None);
+        assert_eq!(tunnel.find_peer_by_endpoint(gone_ep), None);
+        assert_eq!(
+            tunnel.find_peer_for_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 2))),
+            None
+        );
+        // Inbound packets claiming to be from the removed peer are dropped.
+        assert!(matches!(
+            tunnel.decapsulate(&gone_pub, &[4u8; 32]),
+            DecapAction::Nothing
+        ));
+        // Routing to the removed peer yields nothing on either transport.
+        assert!(tunnel.route_to_peer(&gone_pub, vec![1, 2, 3]).is_nothing());
+        // The surviving peer is untouched.
+        assert!(tunnel.peers.contains_key(&kept_pub));
+        assert_eq!(
+            tunnel.find_peer_for_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 3))),
+            Some(&kept_pub)
+        );
+    }
+
+    #[test]
+    fn test_route_to_peer() {
+        let (_, my_secret) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+
+        let (peer_pub, _) = generate_key();
+        let node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[node]);
+
+        let action = tunnel.route_to_peer(&peer_pub, vec![1, 2, 3]);
+        assert!(action.udp.is_some());
+        assert!(action.derp.is_some());
+
+        // Unknown peer returns nothing.
+        let (unknown, _) = generate_key();
+        let action = tunnel.route_to_peer(&unknown, vec![1, 2, 3]);
+        assert!(action.is_nothing());
     }
 }

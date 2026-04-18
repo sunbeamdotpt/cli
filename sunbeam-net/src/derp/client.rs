@@ -3,7 +3,6 @@ use futures::{SinkExt, StreamExt};
 #[cfg(test)]
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::framing::*;
@@ -68,15 +67,16 @@ impl DerpClient {
             (false, url)
         };
 
-        // TCP connect
-        let tcp = TcpStream::connect(addr)
+        // TCP connect (happy eyeballs for dual-stack)
+        let tcp = crate::tls::happy_eyeballs_connect(addr)
             .await
             .map_err(|e| Error::Derp(format!("failed to connect to DERP server {addr}: {e}")))?;
 
         // Optionally wrap in TLS.
         let host = addr.split(':').next().unwrap_or(addr);
         let mut stream: Box<dyn DerpTransport> = if use_tls {
-            Box::new(crate::tls::tls_wrap(tcp, host, tls_mode).await?)
+            let tls = crate::tls::tls_wrap(tcp, host, tls_mode).await?;
+            Box::new(tls)
         } else {
             Box::new(tcp)
         };
@@ -269,12 +269,6 @@ impl DerpClient {
                 .ok_or(Error::ConnectionClosed)?
                 .map_err(|e| Error::Derp(format!("failed to read frame: {e}")))?;
 
-            tracing::trace!(
-                "DERP frame in: type=0x{:02x} len={}",
-                frame.frame_type,
-                frame.payload.len()
-            );
-
             match frame.frame_type {
                 FRAME_RECV_PACKET => {
                     if frame.payload.len() < 32 {
@@ -341,7 +335,7 @@ mod tests {
     use crypto_box::aead::{Aead, AeadCore, OsRng};
     use crypto_box::{PublicKey, SalsaBox, SecretKey};
     use futures::{SinkExt, StreamExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
     use tokio_util::codec::Framed;
 
     /// Run a mock DERP server that completes the handshake.

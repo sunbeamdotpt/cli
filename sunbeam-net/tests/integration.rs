@@ -30,7 +30,7 @@ async fn test_register_and_receive_netmap() {
         auth_key,
         state_dir: state_dir.path().to_path_buf(),
         proxy_bind: "127.0.0.1:0".parse().unwrap(),
-        cluster_api_addr: "127.0.0.1".parse().unwrap(),
+        cluster_api_addr: Some("127.0.0.1".parse().unwrap()),
         cluster_api_port: 6443,
         cluster_api_host: None,
         control_socket: state_dir.path().join("test.sock"),
@@ -63,7 +63,7 @@ async fn test_register_and_receive_netmap() {
 
     // Start map stream and get first netmap
     let mut map = control
-        .map_stream(&keys, &config.hostname)
+        .map_stream(&keys, &config.hostname, None)
         .await
         .expect("failed to start map stream");
 
@@ -74,13 +74,13 @@ async fn test_register_and_receive_netmap() {
         .expect("map stream ended without data");
 
     match update {
-        sunbeam_net::control::MapUpdate::Full { peers, .. } => {
-            println!("Received netmap with {} peers", peers.len());
+        sunbeam_net::control::MapUpdate::Full(full) => {
+            println!("Received netmap with {} peers", full.peers.len());
             // peer-a and peer-b should be in the netmap
             assert!(
-                peers.len() >= 2,
+                full.peers.len() >= 2,
                 "expected at least 2 peers (peer-a + peer-b), got {}",
-                peers.len()
+                full.peers.len()
             );
         }
         other => panic!("expected Full netmap, got {other:?}"),
@@ -101,7 +101,7 @@ async fn test_proxy_listener_accepts() {
         auth_key,
         state_dir: state_dir.path().to_path_buf(),
         proxy_bind,
-        cluster_api_addr: "100.64.0.1".parse().unwrap(),
+        cluster_api_addr: Some("100.64.0.1".parse().unwrap()),
         cluster_api_port: 6443,
         cluster_api_host: None,
         control_socket: state_dir.path().join("proxy.sock"),
@@ -174,7 +174,7 @@ async fn test_e2e_tcp_through_tunnel() {
         auth_key,
         state_dir: state_dir.path().to_path_buf(),
         proxy_bind,
-        cluster_api_addr: peer_a_ip,
+        cluster_api_addr: Some(peer_a_ip),
         cluster_api_port: 5678,
         cluster_api_host: None,
         control_socket: state_dir.path().join("e2e.sock"),
@@ -259,7 +259,7 @@ async fn test_daemon_lifecycle() {
         auth_key,
         state_dir: state_dir.path().to_path_buf(),
         proxy_bind: "127.0.0.1:0".parse().unwrap(),
-        cluster_api_addr: "127.0.0.1".parse().unwrap(),
+        cluster_api_addr: Some("127.0.0.1".parse().unwrap()),
         cluster_api_port: 6443,
         cluster_api_host: None,
         control_socket: state_dir.path().join("daemon.sock"),

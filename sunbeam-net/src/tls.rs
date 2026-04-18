@@ -1,5 +1,5 @@
-//! Shared TLS helpers used by both the control client (TS2021 over
-//! HTTPS) and the DERP relay client.
+//! Shared TLS and TCP helpers used by both the control client (TS2021
+//! over HTTPS) and the DERP relay client.
 //!
 //! Both clients accept either plain TCP (`http://...`) or TLS-wrapped
 //! TCP (`https://...`). For production they verify against the system's
@@ -7,6 +7,7 @@
 //! cert via [`TlsMode::InsecureSkipVerify`].
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -116,4 +117,61 @@ impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoCertVerifica
             SignatureScheme::ED25519,
         ]
     }
+}
+
+/// TCP connect timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Happy Eyeballs (RFC 8305) TCP connect. Resolves all addresses for the
+/// given host:port, tries IPv4 and IPv6 concurrently with per-address
+/// timeouts. Returns the first successful connection.
+pub async fn happy_eyeballs_connect(addr: &str) -> std::io::Result<TcpStream> {
+    use std::net::{SocketAddr, ToSocketAddrs};
+
+    let addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("no addresses resolved for {addr}"),
+        ));
+    }
+
+    // Sort: IPv4 first (more reliable on dual-stack with broken IPv6),
+    // then IPv6. Each address gets an individual attempt with the full
+    // timeout, but we race ALL of them concurrently so the fastest wins.
+    let mut sorted = addrs.clone();
+    sorted.sort_by_key(|a| if a.is_ipv4() { 0 } else { 1 });
+
+    // Race all addresses concurrently. First to connect wins.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<std::io::Result<TcpStream>>(sorted.len());
+    for target in &sorted {
+        let target = *target;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await;
+            let result = match result {
+                Ok(r) => r,
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("connect to {target} timed out"),
+                )),
+            };
+            let _ = tx.send(result).await;
+        });
+    }
+    drop(tx); // close sender so rx.recv() returns None when all tasks finish
+
+    let mut last_err = std::io::Error::new(
+        std::io::ErrorKind::AddrNotAvailable,
+        format!("no addresses for {addr}"),
+    );
+
+    while let Some(result) = rx.recv().await {
+        match result {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = e,
+        }
+    }
+
+    Err(last_err)
 }

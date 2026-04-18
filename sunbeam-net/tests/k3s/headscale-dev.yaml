@@ -1,0 +1,205 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vpn-dev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: headscale-config
+  namespace: vpn-dev
+data:
+  config.yaml: |
+    server_url: https://192.168.5.15:8443
+    listen_addr: 0.0.0.0:8443
+    metrics_listen_addr: 0.0.0.0:9090
+
+    tls_cert_path: /etc/headscale/tls/tls.crt
+    tls_key_path: /etc/headscale/tls/tls.key
+
+    noise:
+      private_key_path: /var/lib/headscale/noise_private.key
+
+    database:
+      type: sqlite
+      sqlite:
+        path: /var/lib/headscale/headscale.db
+
+    ip_prefixes:
+      - 100.64.0.0/10
+      - fd7a:115c:a1e0::/48
+
+    derp:
+      server:
+        enabled: true
+        region_id: 900
+        region_code: lima
+        region_name: "Lima Dev"
+        stun_listen_addr: 0.0.0.0:3478
+        private_key_path: /var/lib/headscale/derp_server_private.key
+      urls: []
+      auto_update_enabled: false
+
+    dns:
+      magic_dns: false
+      base_domain: lima.sunbeam.internal
+
+    prefixes:
+      v4: 100.64.0.0/10
+      v6: fd7a:115c:a1e0::/48
+      allocation: sequential
+
+    log:
+      level: info
+---
+# TLS cert + key will be populated via a kubectl create secret call —
+# keeping them out of git. See tests/k3s/apply.sh.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headscale
+  namespace: vpn-dev
+  labels:
+    app.kubernetes.io/name: headscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: headscale
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: headscale
+    spec:
+      # hostNetwork so 8443/tcp + 3478/udp land directly on the VM,
+      # which Lima already forwards to the host.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: headscale
+          image: headscale/headscale:0.23
+          args: ["serve"]
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: stun
+              containerPort: 3478
+              protocol: UDP
+          env:
+            - name: TZ
+              value: UTC
+          volumeMounts:
+            - name: config
+              mountPath: /etc/headscale
+              readOnly: true
+            - name: tls
+              mountPath: /etc/headscale/tls
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/headscale
+          livenessProbe:
+            exec:
+              command: ["headscale", "nodes", "list"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["headscale", "nodes", "list"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: headscale-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: tls
+          secret:
+            secretName: headscale-tls
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: headscale
+  namespace: vpn-dev
+spec:
+  selector:
+    app.kubernetes.io/name: headscale
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443
+    - name: stun
+      port: 3478
+      targetPort: 3478
+      protocol: UDP
+---
+# Tailscale subnet router — advertises the k3s service CIDR (10.43.0.0/16)
+# into the tailnet so the sunbeam daemon can reach cluster services and
+# CoreDNS through the WireGuard/DERP path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subnet-router
+  namespace: vpn-dev
+  labels:
+    app.kubernetes.io/name: subnet-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: subnet-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: subnet-router
+    spec:
+      containers:
+        - name: ts
+          image: tailscale/tailscale:stable
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: subnet-router-key
+                  key: authkey
+            - name: TS_EXTRA_ARGS
+              value: "--login-server=https://192.168.5.15:8443 --advertise-routes=10.43.0.0/16 --hostname=subnet-router --accept-dns=false"
+            - name: SSL_CERT_FILE
+              value: /etc/headscale/test-cert.pem
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "false"
+          securityContext:
+            capabilities:
+              add: [NET_ADMIN, NET_RAW]
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/headscale
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/tailscale
+            - name: dev-tun
+              mountPath: /dev/net/tun
+      volumes:
+        - name: tls
+          secret:
+            secretName: headscale-tls
+            items:
+              - key: tls.crt
+                path: test-cert.pem
+        - name: state
+          emptyDir: {}
+        - name: dev-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice

@@ -55,9 +55,12 @@ pub struct VpnConfig {
     pub state_dir: PathBuf,
     /// Address to bind the SOCKS/TCP proxy on.
     pub proxy_bind: SocketAddr,
-    /// Cluster API server IP (inside the VPN). Used as a fallback when
-    /// `cluster_api_host` is None or doesn't resolve from the netmap.
-    pub cluster_api_addr: IpAddr,
+    /// Explicit cluster API server IP (inside the VPN). Used as a
+    /// last-resort fallback when neither `cluster_api_host` resolves in
+    /// the netmap nor a non-self peer address can be auto-selected.
+    /// Set to `None` to let the daemon auto-pick the first non-self peer,
+    /// which is correct for most single-cluster deployments.
+    pub cluster_api_addr: Option<IpAddr>,
     /// Cluster API server port.
     pub cluster_api_port: u16,
     /// Optional peer hostname (or hostname prefix) to look up in the
