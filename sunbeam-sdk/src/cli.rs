@@ -105,6 +105,20 @@ pub enum Verb {
 
     /// Print version info.
     Version,
+
+    /// Per-project build verbs (alias: proj).
+    #[command(alias = "proj")]
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+
+    /// Workspace-level operations (alias: ops).
+    #[command(alias = "ops")]
+    Operations {
+        #[command(subcommand)]
+        action: OperationsAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -264,6 +278,12 @@ pub enum ServiceAction {
         /// Service name.
         service: String,
     },
+
+    /// Manage OpenBao Transit secrets engine (mounts, keys, signing).
+    Transit {
+        #[command(subcommand)]
+        action: TransitAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -272,6 +292,32 @@ pub enum SecretsAction {
     Get {
         /// Field name within the service's KV path.
         key: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TransitAction {
+    /// Enable a transit secrets engine at a mount path (idempotent).
+    Enable {
+        /// Mount path (e.g. "transit/sbbb").
+        mount: String,
+    },
+    /// Create an Ed25519 key under a transit mount (idempotent).
+    CreateKey {
+        /// Mount path (e.g. "transit/sbbb").
+        mount: String,
+        /// Key name (e.g. "sbbb-shell").
+        name: String,
+        /// Key type.
+        #[arg(long, default_value = "ed25519")]
+        key_type: String,
+    },
+    /// Read the public metadata of a transit key.
+    ReadKey {
+        /// Mount path (e.g. "transit/sbbb").
+        mount: String,
+        /// Key name (e.g. "sbbb-shell").
+        name: String,
     },
 }
 
@@ -469,6 +515,121 @@ pub enum UserAction {
     Offboard {
         /// Email or identity ID.
         target: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProjectAction {
+    /// Build the project.
+    Build(ProjectRunArgs),
+    /// Run tests.
+    Test(ProjectRunArgs),
+    /// Lint.
+    Lint(ProjectRunArgs),
+    /// Format.
+    Fmt(ProjectRunArgs),
+    /// Package (container image, tarball, etc.).
+    Package(ProjectRunArgs),
+    /// Deploy.
+    Deploy(ProjectRunArgs),
+    /// Run dev server.
+    Dev(ProjectRunArgs),
+    /// Clean build artifacts.
+    Clean(ProjectRunArgs),
+    /// Generate docs.
+    Doc(ProjectRunArgs),
+    /// Print resolved project config.
+    Info,
+    /// Print topologically-sorted build order for a verb.
+    Order {
+        #[arg(default_value = "build")]
+        verb: String,
+    },
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ProjectRunArgs {
+    /// Run for all projects in the workspace (topo-ordered). If omitted, runs
+    /// for the current project only.
+    #[arg(long)]
+    pub all: bool,
+    /// Run only for the named project(s). Implies workspace mode.
+    #[arg(long = "project", short = 'p')]
+    pub projects: Vec<String>,
+    /// Print commands before running.
+    #[arg(long)]
+    pub verbose: bool,
+    /// Print what would run, don't execute.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum OperationsAction {
+    /// Docker compose operations.
+    Compose {
+        #[command(subcommand)]
+        action: ComposeAction,
+    },
+    /// Stack snapshot operations.
+    Stack {
+        #[command(subcommand)]
+        action: StackAction,
+    },
+    /// Print resolved workspace config.
+    Info,
+    /// List all repos in the workspace (by bucket).
+    Repos,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ComposeAction {
+    /// Generate and materialize docker-compose.yaml under .sunbeam/compose/.
+    Render,
+    /// Bring up shared services.
+    Up {
+        /// Only bring up the named services (default: all).
+        services: Vec<String>,
+        /// Wait for healthy.
+        #[arg(long, default_value_t = true)]
+        wait: bool,
+    },
+    /// Tear down shared services.
+    Down {
+        /// Also remove volumes.
+        #[arg(long)]
+        volumes: bool,
+    },
+    /// List running services.
+    Ps,
+    /// Tail logs for a service.
+    Logs {
+        service: String,
+        #[arg(short, long)]
+        follow: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StackAction {
+    /// List pinned stacks.
+    List,
+    /// Pin current HEAD SHAs into a named stack.
+    Pin {
+        name: String,
+        /// Only pin the named projects (default: all owned).
+        projects: Vec<String>,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Checkout the SHAs recorded in a stack.
+    Apply {
+        name: String,
+    },
+    /// Diff two stacks (or a stack vs current HEAD).
+    Diff {
+        left: String,
+        right: Option<String>,
     },
 }
 
@@ -817,6 +978,10 @@ pub async fn dispatch() -> Result<()> {
             crate::update::cmd_version();
             Ok(())
         }
+
+        Some(Verb::Project { action }) => crate::project::cli::dispatch(action).await,
+
+        Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
     }
 }
 
@@ -1381,6 +1546,109 @@ mod tests {
                 assert_eq!(service, "hydra");
             }
             _ => panic!("expected Service Top via svc alias"),
+        }
+    }
+
+    #[test]
+    fn test_project_build_parses() {
+        let cli = parse(&["sunbeam", "project", "build"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Build(args),
+            }) => {
+                assert!(!args.all);
+                assert!(args.projects.is_empty());
+            }
+            _ => panic!("expected Project Build"),
+        }
+    }
+
+    #[test]
+    fn test_project_build_all() {
+        let cli = parse(&["sunbeam", "project", "build", "--all"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Build(args),
+            }) => {
+                assert!(args.all);
+            }
+            _ => panic!("expected Project Build --all"),
+        }
+    }
+
+    #[test]
+    fn test_project_build_with_p_flag() {
+        let cli = parse(&["sunbeam", "project", "build", "-p", "cli", "-p", "sol"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Build(args),
+            }) => {
+                assert_eq!(args.projects, vec!["cli", "sol"]);
+            }
+            _ => panic!("expected Project Build -p"),
+        }
+    }
+
+    #[test]
+    fn test_ops_compose_up_parses() {
+        let cli = parse(&["sunbeam", "operations", "compose", "up"]);
+        match cli.verb {
+            Some(Verb::Operations {
+                action: OperationsAction::Compose {
+                    action: ComposeAction::Up { services, wait },
+                },
+            }) => {
+                assert!(services.is_empty());
+                assert!(wait);
+            }
+            _ => panic!("expected Operations Compose Up"),
+        }
+    }
+
+    #[test]
+    fn test_ops_compose_down_volumes() {
+        let cli = parse(&["sunbeam", "ops", "compose", "down", "--volumes"]);
+        match cli.verb {
+            Some(Verb::Operations {
+                action: OperationsAction::Compose {
+                    action: ComposeAction::Down { volumes },
+                },
+            }) => {
+                assert!(volumes);
+            }
+            _ => panic!("expected Operations Compose Down --volumes"),
+        }
+    }
+
+    #[test]
+    fn test_ops_stack_pin() {
+        let cli = parse(&[
+            "sunbeam",
+            "ops",
+            "stack",
+            "pin",
+            "release-1.0",
+            "cli",
+            "sol",
+            "--description",
+            "initial release",
+        ]);
+        match cli.verb {
+            Some(Verb::Operations {
+                action: OperationsAction::Stack {
+                    action:
+                        StackAction::Pin {
+                            name,
+                            projects,
+                            description,
+                        },
+                },
+            }) => {
+                assert_eq!(name, "release-1.0");
+                assert_eq!(projects, vec!["cli", "sol"]);
+                assert_eq!(description.as_deref(), Some("initial release"));
+            }
+            _ => panic!("expected Operations Stack Pin"),
         }
     }
 }
