@@ -208,7 +208,7 @@ pub fn load_config() -> SunbeamConfig {
     if !path.exists() {
         return SunbeamConfig::default();
     }
-    let config: SunbeamConfig = match std::fs::read_to_string(&path) {
+    let mut config: SunbeamConfig = match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
             crate::output::warn(&format!(
                 "Failed to parse config from {}: {e}",
@@ -225,11 +225,47 @@ pub fn load_config() -> SunbeamConfig {
         }
     };
 
+    // One-shot migration: legacy top-level `infra_directory` / `acme_email`
+    // get folded into the current context's per-context fields, then cleared.
+    // Per-context is the only source of truth going forward.
+    if !config.infra_directory.is_empty() || !config.acme_email.is_empty() {
+        let ctx_name = if config.current_context.is_empty() {
+            "default".to_string()
+        } else {
+            config.current_context.clone()
+        };
+        let legacy_infra = std::mem::take(&mut config.infra_directory);
+        let legacy_acme = std::mem::take(&mut config.acme_email);
+        let ctx = config.contexts.entry(ctx_name.clone()).or_default();
+        if ctx.infra_dir.is_empty() && !legacy_infra.is_empty() {
+            ctx.infra_dir = legacy_infra;
+        }
+        if ctx.acme_email.is_empty() && !legacy_acme.is_empty() {
+            ctx.acme_email = legacy_acme;
+        }
+        // Persist the migration silently — next read will be clean.
+        let _ = save_config_silent(&config);
+        crate::output::warn(&format!(
+            "migrated legacy `infra_directory`/`acme_email` into context `{ctx_name}`. \
+             Per-context keys are now the only source of truth."
+        ));
+    }
+
     config
 }
 
 /// Save configuration to ~/.sunbeam/config.json.
 pub fn save_config(config: &SunbeamConfig) -> Result<()> {
+    save_config_inner(config, true)
+}
+
+/// Save without printing the "Configuration saved to …" confirmation.
+/// Used by internal flows like the legacy-field migration.
+fn save_config_silent(config: &SunbeamConfig) -> Result<()> {
+    save_config_inner(config, false)
+}
+
+fn save_config_inner(config: &SunbeamConfig, verbose: bool) -> Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -238,7 +274,9 @@ pub fn save_config(config: &SunbeamConfig) -> Result<()> {
     let content = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, content)
         .with_ctx(|| format!("Failed to save config to {}", path.display()))?;
-    crate::output::ok(&format!("Configuration saved to {}", path.display()));
+    if verbose {
+        crate::output::ok(&format!("Configuration saved to {}", path.display()));
+    }
     Ok(())
 }
 
@@ -290,18 +328,18 @@ pub fn resolve_context(
 // ---------------------------------------------------------------------------
 
 /// Infrastructure manifests directory as a Path.
+///
+/// Only the active context's `infra-dir` is authoritative. Legacy top-level
+/// `infra_directory` was folded into the per-context field on config load;
+/// this function never reads it.
 pub fn get_infra_dir() -> PathBuf {
-    // Check active context
     if let Some(ctx) = ACTIVE_CONTEXT.get()
         && !ctx.infra_dir.is_empty()
     {
         return PathBuf::from(&ctx.infra_dir);
     }
-    let configured = load_config().infra_directory;
-    if !configured.is_empty() {
-        return PathBuf::from(configured);
-    }
-    // Dev fallback
+    // Dev fallback — useful when running outside a configured context (e.g.,
+    // unit tests or `cargo run` before `sunbeam config set`).
     std::env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok())
@@ -421,6 +459,70 @@ mod tests {
         // No current-context, no --context flag → defaults to "local"
         let ctx = resolve_context(&config, "", None, "");
         assert_eq!(ctx.kube_context, "sunbeam");
+    }
+
+    #[test]
+    fn test_legacy_fields_fold_into_current_context() {
+        // Simulate a loaded-but-not-yet-migrated config: top-level legacy
+        // fields set, current-context points at a context whose per-context
+        // fields are empty.
+        let mut config = SunbeamConfig {
+            current_context: "production".to_string(),
+            infra_directory: "/legacy/infra".to_string(),
+            acme_email: "legacy@example.com".to_string(),
+            ..Default::default()
+        };
+        config
+            .contexts
+            .insert("production".to_string(), Context::default());
+        // Run the same migration logic used in load_config().
+        let legacy_infra = std::mem::take(&mut config.infra_directory);
+        let legacy_acme = std::mem::take(&mut config.acme_email);
+        let ctx = config.contexts.entry("production".to_string()).or_default();
+        if ctx.infra_dir.is_empty() && !legacy_infra.is_empty() {
+            ctx.infra_dir = legacy_infra;
+        }
+        if ctx.acme_email.is_empty() && !legacy_acme.is_empty() {
+            ctx.acme_email = legacy_acme;
+        }
+        assert_eq!(config.infra_directory, "");
+        assert_eq!(config.acme_email, "");
+        let ctx = config.contexts.get("production").unwrap();
+        assert_eq!(ctx.infra_dir, "/legacy/infra");
+        assert_eq!(ctx.acme_email, "legacy@example.com");
+    }
+
+    #[test]
+    fn test_legacy_fields_do_not_overwrite_non_empty_context() {
+        // Per-context values win over legacy top-level values.
+        let mut config = SunbeamConfig {
+            current_context: "production".to_string(),
+            infra_directory: "/legacy/infra".to_string(),
+            ..Default::default()
+        };
+        config.contexts.insert(
+            "production".to_string(),
+            Context {
+                infra_dir: "/per-context/infra".to_string(),
+                ..Default::default()
+            },
+        );
+        let legacy_infra = std::mem::take(&mut config.infra_directory);
+        let ctx = config.contexts.entry("production".to_string()).or_default();
+        if ctx.infra_dir.is_empty() && !legacy_infra.is_empty() {
+            ctx.infra_dir = legacy_infra;
+        }
+        let ctx = config.contexts.get("production").unwrap();
+        assert_eq!(ctx.infra_dir, "/per-context/infra");
+    }
+
+    #[test]
+    fn test_legacy_fields_serialize_out_when_empty() {
+        // skip_serializing_if means the top-level keys vanish after migration.
+        let config = SunbeamConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("infra_directory"));
+        assert!(!json.contains("acme_email"));
     }
 
     #[test]
