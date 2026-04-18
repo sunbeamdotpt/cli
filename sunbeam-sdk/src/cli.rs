@@ -610,13 +610,29 @@ pub enum WorktreeAction {
     List,
     /// Merge a worktree branch into the current HEAD.
     ///
-    /// Must be run from the main checkout (not from inside a worktree).
+    /// Default strategy: rebase the branch onto current HEAD, then fast-forward
+    /// HEAD to the rebased tip (preserves linear history). Must be run from
+    /// the main checkout (not from inside a worktree).
     Merge {
         /// Branch to merge.
         branch: String,
-        /// Use `git merge --squash` instead of a merge commit.
-        #[arg(long)]
+        /// Use classic `git merge` (creates a merge commit instead of rebasing).
+        #[arg(long, conflicts_with = "squash")]
+        merge_commit: bool,
+        /// Use `git merge --squash` (single squashed commit, no rebase).
+        #[arg(long, conflicts_with = "merge_commit")]
         squash: bool,
+    },
+    /// Rebase a branch onto current HEAD (or `--onto <ref>`) without merging.
+    ///
+    /// Useful for keeping a feature branch current with mainline. Operates in
+    /// the branch's worktree if one exists.
+    Rebase {
+        /// Branch to rebase.
+        branch: String,
+        /// Rebase onto this ref (default: current HEAD of the main checkout).
+        #[arg(long)]
+        onto: Option<String>,
     },
     /// Remove a worktree (and optionally delete its branch).
     Rm {
