@@ -138,10 +138,8 @@ pub async fn describe_deployment(client: Client, ns: &str, name: &str) -> Result
     Ok(out)
 }
 
-fn format_age(t: &chrono::DateTime<chrono::Utc>) -> String {
-    let now = chrono::Utc::now();
-    let delta = now.signed_duration_since(*t);
-    let secs = delta.num_seconds().max(0);
+fn format_age(t: &jiff::Timestamp) -> String {
+    let secs = jiff::Timestamp::now().duration_since(*t).as_secs().max(0);
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
