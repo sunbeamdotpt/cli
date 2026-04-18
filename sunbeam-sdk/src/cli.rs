@@ -991,12 +991,10 @@ pub async fn dispatch() -> Result<()> {
                     ctx.domain = set_domain;
                 }
                 if !infra_dir.is_empty() {
-                    ctx.infra_dir = infra_dir.clone();
-                    config.infra_directory = infra_dir;
+                    ctx.infra_dir = infra_dir;
                 }
                 if !acme_email.is_empty() {
-                    ctx.acme_email = acme_email.clone();
-                    config.acme_email = acme_email;
+                    ctx.acme_email = acme_email;
                 }
                 if config.current_context.is_empty() {
                     config.current_context = ctx_name;
