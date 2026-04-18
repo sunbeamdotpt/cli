@@ -205,8 +205,23 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
             print_worktree_table(entries);
             Ok(())
         }
-        WorktreeAction::Merge { branch, squash } => {
-            crate::operations::worktree::merge(&branch, squash)
+        WorktreeAction::Merge {
+            branch,
+            merge_commit,
+            squash,
+        } => {
+            use crate::operations::worktree::MergeStrategy;
+            let strategy = if squash {
+                MergeStrategy::Squash
+            } else if merge_commit {
+                MergeStrategy::MergeCommit
+            } else {
+                MergeStrategy::Rebase
+            };
+            crate::operations::worktree::merge(&branch, strategy)
+        }
+        WorktreeAction::Rebase { branch, onto } => {
+            crate::operations::worktree::rebase(&branch, onto.as_deref())
         }
         WorktreeAction::Rm {
             branch,
