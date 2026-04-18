@@ -304,9 +304,8 @@ pub fn remove(branch: &str, force: bool, prune_branch: bool) -> Result<()> {
 
     // Pre-deinit submodules. `git worktree remove` refuses to remove worktrees
     // that contain initialized submodules (it doesn't want to orphan them).
-    // Deinit first so the worktree is just a vanilla git checkout from git's
-    // POV, then removal works cleanly. Best-effort — if the target dir is
-    // already gone or never had submodules initialized, this is a no-op.
+    // Deinit first, then we can use `--force --force` safely — by this point
+    // git's submodule-safety check is moot.
     if target.is_dir() {
         let _ = Command::new("git")
             .args(["submodule", "deinit", "--all", "--force"])
@@ -314,28 +313,36 @@ pub fn remove(branch: &str, force: bool, prune_branch: bool) -> Result<()> {
             .status();
     }
 
-    let target_str = target.to_string_lossy().into_owned();
-    let mut args: Vec<String> = vec!["worktree".into(), "remove".into()];
-    if force {
-        // Two `--force` flags: first overrides dirty-file check, second
-        // overrides any remaining submodule-safety check.
-        args.push("--force".into());
-        args.push("--force".into());
+    // Check for uncommitted work unless --force.
+    if !force && target.is_dir() {
+        let st = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&target)
+            .output()
+            .with_ctx(|| format!("git status in {}", target.display()))?;
+        if st.status.success() && !st.stdout.is_empty() {
+            return Err(SunbeamError::config(format!(
+                "worktree has uncommitted work ({} entries); pass --force to discard",
+                st.stdout.iter().filter(|&&b| b == b'\n').count()
+            )));
+        }
     }
-    args.push(target_str);
+
+    let target_str = target.to_string_lossy().into_owned();
+    // Always pass `--force --force`. Single `--force` doesn't bypass git's
+    // check for `.gitmodules` presence in the worktree, even post-deinit.
+    // Second `--force` does. We've already gated dirty-file safety above.
+    let args = ["worktree", "remove", "--force", "--force", &target_str];
 
     let status = Command::new("git")
-        .args(&args)
+        .args(args)
         .current_dir(&root)
         .status()
         .with_ctx(|| format!("spawning git worktree remove in {}", root.display()))?;
     if !status.success() {
         return Err(SunbeamError::tool(
             "git",
-            format!(
-                "worktree remove failed (exit {status}). If the worktree has \
-                 uncommitted work or submodule state, retry with --force."
-            ),
+            format!("worktree remove failed (exit {status})"),
         ));
     }
 
