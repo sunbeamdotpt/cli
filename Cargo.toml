@@ -3,7 +3,7 @@ members = ["sunbeam-sdk", "sunbeam-net"]
 resolver = "3"
 
 [workspace.package]
-version = "2.0.0-rc3"
+version = "2.0.0-rc4"
 edition = "2024"
 license = "MIT"
 repository = "https://src.sunbeam.pt/studio/cli"
@@ -11,8 +11,8 @@ authors = ["Sunbeam Studios"]
 
 [workspace.dependencies]
 # Internal path crates
-sunbeam-sdk = { path = "sunbeam-sdk", version = "2.0.0-rc3", registry = "sunbeam" }
-sunbeam-net = { path = "sunbeam-net", version = "2.0.0-rc3", registry = "sunbeam" }
+sunbeam-sdk = { path = "sunbeam-sdk", version = "2.0.0-rc4", registry = "sunbeam" }
+sunbeam-net = { path = "sunbeam-net", version = "2.0.0-rc4", registry = "sunbeam" }
 
 # Async runtime / tracing
 tokio = { version = "1", features = ["full"] }
