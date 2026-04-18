@@ -172,17 +172,24 @@ pub fn new(branch: &str, from: Option<&str>, run_setup: bool) -> Result<PathBuf>
         ));
     }
 
-    // Initialize submodules inside the new worktree.
+    // Initialize submodules inside the new worktree. Best-effort: if a
+    // submodule's pinned SHA is no longer reachable from its upstream
+    // (force-pushed / rebased), git fetch will fail — but most submodules
+    // still succeed. Continue with a warning rather than failing the whole
+    // worktree creation. Users can re-run `git submodule update --init
+    // --recursive` manually in the worktree, or `sunbeam wt setup`, once
+    // upstream state settles.
     let sm_status = Command::new("git")
         .args(["submodule", "update", "--init", "--recursive"])
         .current_dir(&target)
         .status()
         .with_ctx(|| format!("spawning git submodule update in {target_str}"))?;
     if !sm_status.success() {
-        return Err(SunbeamError::tool(
-            "git",
-            format!("submodule update --init --recursive failed (exit {sm_status})"),
-        ));
+        tracing::warn!(
+            "some submodules failed to init in {target_str} (exit {sm_status}); \
+             worktree created. Re-run `sunbeam wt setup` or `git submodule update \
+             --init --recursive` manually to retry individual submodules."
+        );
     }
 
     if run_setup {
