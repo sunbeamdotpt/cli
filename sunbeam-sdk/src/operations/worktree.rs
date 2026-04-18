@@ -148,16 +148,33 @@ pub fn new(branch: &str, from: Option<&str>, run_setup: bool) -> Result<PathBuf>
         )));
     }
 
+    // Check whether the branch already exists locally. If so, we check it
+    // out in the new worktree instead of creating it. A prior `sunbeam wt rm`
+    // would have kept the branch unless --prune-branch was passed — that's
+    // the normal path for "re-enter a feature branch".
+    let branch_exists = Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{sanitized}")])
+        .current_dir(&root)
+        .status()
+        .ok()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
     let target_str = target.to_string_lossy().into_owned();
-    let mut args: Vec<String> = vec![
-        "worktree".into(),
-        "add".into(),
-        target_str.clone(),
-        "-b".into(),
-        sanitized.clone(),
-    ];
-    if let Some(ref_) = from {
-        args.push(ref_.to_string());
+    let mut args: Vec<String> = vec!["worktree".into(), "add".into(), target_str.clone()];
+    if branch_exists {
+        if from.is_some() {
+            return Err(SunbeamError::config(format!(
+                "branch {sanitized} already exists; --from <ref> only applies when creating a fresh branch"
+            )));
+        }
+        args.push(sanitized.clone());
+    } else {
+        args.push("-b".into());
+        args.push(sanitized.clone());
+        if let Some(ref_) = from {
+            args.push(ref_.to_string());
+        }
     }
 
     let status = Command::new("git")
