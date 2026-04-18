@@ -1,9 +1,9 @@
 [package]
 name = "sunbeam-sdk"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
+version = "2.0.0-rc4"
+edition = "2024"
+license = "MIT"
+repository = "https://src.sunbeam.pt/studio/cli"
 description = "Sunbeam Studios SDK, CLI, and ecosystem integrations"
 publish = ["sunbeam"]
 
