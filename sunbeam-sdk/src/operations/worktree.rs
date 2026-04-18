@@ -302,9 +302,24 @@ pub fn remove(branch: &str, force: bool, prune_branch: bool) -> Result<()> {
         )));
     }
 
+    // Pre-deinit submodules. `git worktree remove` refuses to remove worktrees
+    // that contain initialized submodules (it doesn't want to orphan them).
+    // Deinit first so the worktree is just a vanilla git checkout from git's
+    // POV, then removal works cleanly. Best-effort — if the target dir is
+    // already gone or never had submodules initialized, this is a no-op.
+    if target.is_dir() {
+        let _ = Command::new("git")
+            .args(["submodule", "deinit", "--all", "--force"])
+            .current_dir(&target)
+            .status();
+    }
+
     let target_str = target.to_string_lossy().into_owned();
     let mut args: Vec<String> = vec!["worktree".into(), "remove".into()];
     if force {
+        // Two `--force` flags: first overrides dirty-file check, second
+        // overrides any remaining submodule-safety check.
+        args.push("--force".into());
         args.push("--force".into());
     }
     args.push(target_str);
@@ -317,7 +332,10 @@ pub fn remove(branch: &str, force: bool, prune_branch: bool) -> Result<()> {
     if !status.success() {
         return Err(SunbeamError::tool(
             "git",
-            format!("worktree remove failed (exit {status})"),
+            format!(
+                "worktree remove failed (exit {status}). If the worktree has \
+                 uncommitted work or submodule state, retry with --force."
+            ),
         ));
     }
 
