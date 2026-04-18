@@ -119,6 +119,12 @@ pub enum Verb {
         #[command(subcommand)]
         action: OperationsAction,
     },
+
+    /// Shortcut for `sunbeam ops worktree` — per-branch git worktree lifecycle.
+    Wt {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -576,10 +582,58 @@ pub enum OperationsAction {
         #[command(subcommand)]
         action: StackAction,
     },
+    /// Per-branch git worktree lifecycle (alias: `sunbeam wt`).
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
     /// Print resolved workspace config.
     Info,
     /// List all repos in the workspace (by bucket).
     Repos,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorktreeAction {
+    /// Create a new worktree rooted at `.worktrees/<sanitized-branch>`.
+    New {
+        /// Branch name (will be sanitized for the filesystem path).
+        branch: String,
+        /// Base ref to branch from (default: current HEAD).
+        #[arg(long)]
+        from: Option<String>,
+        /// Skip running `.hooks/setup` after creation.
+        #[arg(long)]
+        no_setup: bool,
+    },
+    /// List all worktrees with dirty-file counts.
+    List,
+    /// Merge a worktree branch into the current HEAD.
+    ///
+    /// Must be run from the main checkout (not from inside a worktree).
+    Merge {
+        /// Branch to merge.
+        branch: String,
+        /// Use `git merge --squash` instead of a merge commit.
+        #[arg(long)]
+        squash: bool,
+    },
+    /// Remove a worktree (and optionally delete its branch).
+    Rm {
+        /// Branch whose worktree should be removed.
+        branch: String,
+        /// Force removal even if the worktree is dirty.
+        #[arg(long)]
+        force: bool,
+        /// Also delete the local branch after removing the worktree.
+        #[arg(long)]
+        prune_branch: bool,
+    },
+    /// Re-run `.hooks/setup` for a named worktree (or the current cwd).
+    Setup {
+        /// Branch whose worktree to run setup in (defaults to cwd).
+        branch: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -982,6 +1036,8 @@ pub async fn dispatch() -> Result<()> {
         Some(Verb::Project { action }) => crate::project::cli::dispatch(action).await,
 
         Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
+
+        Some(Verb::Wt { action }) => crate::operations::cli::dispatch_worktree(action).await,
     }
 }
 
