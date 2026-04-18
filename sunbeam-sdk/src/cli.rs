@@ -634,6 +634,15 @@ pub enum WorktreeAction {
         /// Branch whose worktree to run setup in (defaults to cwd).
         branch: Option<String>,
     },
+    /// Drop into an interactive shell inside the worktree.
+    ///
+    /// Spawns `$SHELL` with its cwd set to the worktree path. Exiting that
+    /// shell returns you to your original cwd. Aliases: `enter`, `cd`, `shell`.
+    #[command(alias = "enter", alias = "cd", alias = "shell")]
+    Use {
+        /// Branch whose worktree to enter.
+        branch: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
