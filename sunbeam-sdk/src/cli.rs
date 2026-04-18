@@ -10,13 +10,15 @@ pub struct Cli {
     #[arg(long)]
     pub context: Option<String>,
 
-    /// Domain suffix override (e.g. sunbeam.pt).
-    #[arg(long, default_value = "")]
-    pub domain: String,
+    /// Domain suffix override (e.g. sunbeam.pt). `None` = use the config
+    /// value; `Some(..)` = override, even if the value is empty.
+    #[arg(long)]
+    pub domain: Option<String>,
 
-    /// ACME email for cert-manager (e.g. ops@sunbeam.pt).
-    #[arg(long, default_value = "")]
-    pub email: String,
+    /// ACME email for cert-manager (e.g. ops@sunbeam.pt). Same None-vs-Some
+    /// override semantics as `--domain`.
+    #[arg(long)]
+    pub email: Option<String>,
 
     #[command(subcommand)]
     pub verb: Option<Verb>,
@@ -888,9 +890,19 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 pub async fn dispatch() -> Result<()> {
     let cli = Cli::parse();
 
-    // Resolve the active context from config + CLI flags (like kubectl)
+    // Resolve the active context from config + CLI flags (like kubectl).
+    // `--domain` / `--email` are Option<String>: `None` means "don't override",
+    // which preserves the config value. The previous empty-string default
+    // could still look "present" to sloppy call sites and was load-bearing
+    // for note #3's bug report — keeping an Option here makes the intent
+    // explicit.
     let config = crate::config::load_config();
-    let active = crate::config::resolve_context(&config, "", cli.context.as_deref(), &cli.domain);
+    let active = crate::config::resolve_context(
+        &config,
+        "",
+        cli.context.as_deref(),
+        cli.domain.as_deref().unwrap_or(""),
+    );
 
     // Thread the active Sunbeam context's kube-context into the shared kube
     // client. An empty value here means the user picked a context that has
@@ -958,7 +970,12 @@ pub async fn dispatch() -> Result<()> {
         }
 
         Some(Verb::Service { action }) => {
-            crate::service_cmds::dispatch(action, &cli.domain, &cli.email).await
+            crate::service_cmds::dispatch(
+                action,
+                cli.domain.as_deref().unwrap_or(""),
+                cli.email.as_deref().unwrap_or(""),
+            )
+            .await
         }
 
         Some(Verb::Config { action }) => match action {
