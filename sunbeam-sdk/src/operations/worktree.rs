@@ -123,6 +123,31 @@ fn current_dir_inside(path: &Path) -> bool {
     cwd_canon.starts_with(&path_canon)
 }
 
+/// Current branch name on the main checkout (e.g. `mainline`).
+fn current_branch_name(root: &Path) -> Result<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .output()
+        .with_ctx(|| format!("git rev-parse --abbrev-ref HEAD in {}", root.display()))?;
+    if !out.status.success() {
+        return Err(SunbeamError::tool(
+            "git",
+            format!("rev-parse --abbrev-ref HEAD failed (exit {})", out.status),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// If a worktree for `sanitized_branch` exists, return its on-disk path.
+fn find_worktree_path(sanitized_branch: &str) -> Result<Option<PathBuf>> {
+    let entries = list()?;
+    Ok(entries
+        .into_iter()
+        .find(|e| e.branch == sanitized_branch)
+        .map(|e| e.path))
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -259,9 +284,20 @@ pub fn list() -> Result<Vec<WorktreeEntry>> {
     Ok(entries)
 }
 
-/// Merge `branch` into HEAD. Refuses to run from inside any worktree —
-/// the caller must be in the main checkout to keep merges predictable.
-pub fn merge(branch: &str, squash: bool) -> Result<()> {
+/// Strategy for `merge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStrategy {
+    /// Rebase feature branch onto HEAD, then fast-forward HEAD. Linear history.
+    Rebase,
+    /// Classic `git merge` — creates a merge commit.
+    MergeCommit,
+    /// `git merge --squash` — one squashed commit on HEAD.
+    Squash,
+}
+
+/// Merge `branch` into HEAD using the chosen strategy. Refuses to run from
+/// inside any worktree — caller must be in the main checkout.
+pub fn merge(branch: &str, strategy: MergeStrategy) -> Result<()> {
     let sanitized = sanitize_branch(branch);
     if sanitized.is_empty() {
         return Err(SunbeamError::config(format!(
@@ -280,8 +316,56 @@ pub fn merge(branch: &str, squash: bool) -> Result<()> {
         ));
     }
 
+    if strategy == MergeStrategy::Rebase {
+        // Rebase the feature branch onto the current HEAD of the main checkout,
+        // then fast-forward the main branch to the rebased feature tip. This
+        // keeps history strictly linear and re-writes the feature's commits
+        // to sit directly on top of target.
+        let target_branch = current_branch_name(&root)?;
+        let wt_path = find_worktree_path(&sanitized)?;
+        let rebase_dir = wt_path.unwrap_or_else(|| root.clone());
+        let rebase_args: Vec<String> = if rebase_dir == root {
+            // No worktree for this branch; rebase by specifying both refs.
+            vec!["rebase".into(), target_branch.clone(), sanitized.clone()]
+        } else {
+            // Branch is checked out in a worktree; rebase there (no explicit
+            // branch arg — git uses the worktree's current HEAD).
+            vec!["rebase".into(), target_branch.clone()]
+        };
+        let rb_status = Command::new("git")
+            .args(&rebase_args)
+            .current_dir(&rebase_dir)
+            .status()
+            .with_ctx(|| format!("spawning git rebase in {}", rebase_dir.display()))?;
+        if !rb_status.success() {
+            return Err(SunbeamError::tool(
+                "git",
+                format!(
+                    "rebase {sanitized} onto {target_branch} failed (exit {rb_status}). \
+                     Resolve conflicts, then retry with `sunbeam wt merge {sanitized}` \
+                     or finish in the worktree directly."
+                ),
+            ));
+        }
+        // Fast-forward main to the rebased tip.
+        let ff_status = Command::new("git")
+            .args(["merge", "--ff-only", &sanitized])
+            .current_dir(&root)
+            .status()
+            .with_ctx(|| format!("spawning git merge --ff-only in {}", root.display()))?;
+        if !ff_status.success() {
+            return Err(SunbeamError::tool(
+                "git",
+                format!(
+                    "fast-forward {target_branch} to {sanitized} failed (exit {ff_status})"
+                ),
+            ));
+        }
+        return Ok(());
+    }
+
     let mut args: Vec<String> = vec!["merge".into()];
-    if squash {
+    if strategy == MergeStrategy::Squash {
         args.push("--squash".into());
     }
     args.push(sanitized);
@@ -295,6 +379,45 @@ pub fn merge(branch: &str, squash: bool) -> Result<()> {
         return Err(SunbeamError::tool(
             "git",
             format!("merge failed (exit {status})"),
+        ));
+    }
+    Ok(())
+}
+
+/// Rebase `branch` onto `onto` (or the main checkout's current HEAD if
+/// `onto` is `None`). Operates in the branch's worktree if one exists;
+/// otherwise rebases by giving git both the target and branch refs.
+pub fn rebase(branch: &str, onto: Option<&str>) -> Result<()> {
+    let sanitized = sanitize_branch(branch);
+    if sanitized.is_empty() {
+        return Err(SunbeamError::config(format!(
+            "branch name {branch:?} is empty after sanitization"
+        )));
+    }
+    let root = main_worktree_root()?;
+    let target = match onto {
+        Some(t) => t.to_string(),
+        None => current_branch_name(&root)?,
+    };
+    let wt_path = find_worktree_path(&sanitized)?;
+    let rebase_dir = wt_path.unwrap_or_else(|| root.clone());
+    let args: Vec<String> = if rebase_dir == root {
+        vec!["rebase".into(), target.clone(), sanitized.clone()]
+    } else {
+        vec!["rebase".into(), target.clone()]
+    };
+    let status = Command::new("git")
+        .args(&args)
+        .current_dir(&rebase_dir)
+        .status()
+        .with_ctx(|| format!("spawning git rebase in {}", rebase_dir.display()))?;
+    if !status.success() {
+        return Err(SunbeamError::tool(
+            "git",
+            format!(
+                "rebase {sanitized} onto {target} failed (exit {status}). Resolve \
+                 conflicts in the worktree, then run `git rebase --continue`."
+            ),
         ));
     }
     Ok(())
