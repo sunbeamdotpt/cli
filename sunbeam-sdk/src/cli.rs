@@ -477,6 +477,10 @@ pub enum ConfigAction {
         /// ACME email for Let's Encrypt certificates.
         #[arg(long, default_value = "")]
         acme_email: String,
+        /// kubectl context name this Sunbeam context targets (must exist in
+        /// your kubeconfig). Required for any command that touches the cluster.
+        #[arg(long, default_value = "")]
+        kube_context: String,
         /// Context name to configure (default: current context).
         #[arg(long, default_value = "")]
         context_name: String,
@@ -888,13 +892,14 @@ pub async fn dispatch() -> Result<()> {
     let config = crate::config::load_config();
     let active = crate::config::resolve_context(&config, "", cli.context.as_deref(), &cli.domain);
 
-    // Initialize kube context from the resolved context
-    let kube_ctx_str = if active.kube_context.is_empty() {
-        "sunbeam".to_string()
-    } else {
-        active.kube_context.clone()
-    };
-    crate::kube::set_context(&kube_ctx_str);
+    // Thread the active Sunbeam context's kube-context into the shared kube
+    // client. An empty value here means the user picked a context that has
+    // no `kube-context` configured — we stash the empty string and let the
+    // first kube operation surface a clear error pointing at
+    // `sunbeam config set --kube-context <kctx>`. The previous behaviour
+    // silently fell back to "sunbeam", which routed applies at a wrong
+    // cluster (see notes/sunbeam-cli-context-gotchas.md).
+    crate::kube::set_context(&active.kube_context);
 
     // Store active context globally for other modules to read
     crate::config::set_active_context(active);
@@ -972,6 +977,7 @@ pub async fn dispatch() -> Result<()> {
                 domain: set_domain,
                 infra_dir,
                 acme_email,
+                kube_context,
                 context_name,
             }) => {
                 let mut config = crate::config::load_config();
@@ -995,6 +1001,9 @@ pub async fn dispatch() -> Result<()> {
                 }
                 if !acme_email.is_empty() {
                     ctx.acme_email = acme_email;
+                }
+                if !kube_context.is_empty() {
+                    ctx.kube_context = kube_context;
                 }
                 if config.current_context.is_empty() {
                     config.current_context = ctx_name;
