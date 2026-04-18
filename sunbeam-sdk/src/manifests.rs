@@ -27,9 +27,11 @@ pub fn filter_by_namespace(manifests: &str, namespace: &str) -> String {
 /// cert-manager registers a ValidatingWebhook that must be running before
 /// ClusterIssuer / Certificate resources can be created.
 pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()> {
-    // Fall back to config for ACME email if not provided via CLI flag.
+    // Fall back to active context for ACME email if not provided via CLI flag.
+    // (The legacy top-level `acme_email` is migrated into the context on config
+    // load — see config::load_config.)
     let email = if email.is_empty() {
-        crate::config::load_config().acme_email
+        crate::config::active_context().acme_email.clone()
     } else {
         email.to_string()
     };
