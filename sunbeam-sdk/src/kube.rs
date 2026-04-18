@@ -21,9 +21,12 @@ pub fn set_context(ctx: &str) {
     let _ = CONTEXT.set(ctx.to_string());
 }
 
-/// Get the active context.
+/// Get the active context name. Returns empty string when the user has
+/// not configured one; callers that need a valid cluster (e.g.
+/// `get_client`) should refuse in that case rather than silently falling
+/// back to a default.
 pub fn context() -> &'static str {
-    CONTEXT.get().map(|s| s.as_str()).unwrap_or("sunbeam")
+    CONTEXT.get().map(|s| s.as_str()).unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------
