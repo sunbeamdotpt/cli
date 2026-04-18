@@ -216,6 +216,9 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
         WorktreeAction::Setup { branch } => {
             crate::operations::worktree::setup(branch.as_deref())
         }
+        WorktreeAction::Use { branch } => {
+            crate::operations::worktree::use_shell(&branch)
+        }
     }
 }
 
