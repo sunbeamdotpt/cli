@@ -256,16 +256,24 @@ pub enum ServiceAction {
     },
 
     /// kustomize build + domain subst + kubectl apply.
+    ///
+    /// The infrastructure directory is NOT a flag on this command — it's a
+    /// per-context config. Set it with:
+    ///   `sunbeam config set --context-name <name> --infra-dir <path>`
+    /// Paths, domains, and ACME email all live on the Sunbeam context
+    /// (use `sunbeam config get` to inspect the active context).
     Apply {
         /// Limit apply to one namespace.
         namespace: Option<String>,
         /// Apply all namespaces without confirmation.
         #[arg(long = "all")]
         apply_all: bool,
-        /// Domain suffix (e.g. sunbeam.pt).
+        /// Domain suffix override (e.g. sunbeam.pt). Defaults to the active
+        /// context's `domain`; set via `sunbeam config set --domain`.
         #[arg(long, default_value = "")]
         domain: String,
-        /// ACME email for cert-manager.
+        /// ACME email override for cert-manager. Defaults to the active
+        /// context's `acme-email`; set via `sunbeam config set --acme-email`.
         #[arg(long, default_value = "")]
         email: String,
         /// Print the post-substitution YAML without calling kubectl apply.
