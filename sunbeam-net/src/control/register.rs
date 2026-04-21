@@ -14,7 +14,7 @@ impl super::client::ControlClient {
         keys: &NodeKeys,
     ) -> crate::Result<RegisterResponse> {
         let req = RegisterRequest {
-            version: 74, // capability version
+            version: crate::CURRENT_CAP_VER,
             node_key: keys.node_key_str(),
             old_node_key: format!("nodekey:{}", "0".repeat(64)),
             disco_key: keys.disco_key_str(),
@@ -79,7 +79,7 @@ mod tests {
     fn test_register_request_construction() {
         let keys = crate::keys::NodeKeys::generate();
         let req = RegisterRequest {
-            version: 74,
+            version: crate::CURRENT_CAP_VER,
             node_key: keys.node_key_str(),
             old_node_key: String::new(),
             disco_key: keys.disco_key_str(),
@@ -94,14 +94,14 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
 
         // Verify key fields are present with expected values.
-        assert!(json.contains("\"Version\":74"));
+        assert!(json.contains(&format!("\"Version\":{}", crate::CURRENT_CAP_VER)));
         assert!(json.contains(&format!("\"NodeKey\":\"{}\"", keys.node_key_str())));
         assert!(json.contains("\"AuthKey\":\"tskey-auth-test123\""));
         assert!(json.contains("\"Hostname\":\"test-host\""));
 
         // Round-trip.
         let parsed: RegisterRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, 74);
+        assert_eq!(parsed.version, crate::CURRENT_CAP_VER);
         assert_eq!(parsed.node_key, keys.node_key_str());
     }
 }
