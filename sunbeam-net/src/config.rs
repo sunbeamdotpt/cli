@@ -14,14 +14,22 @@ pub fn default_socks_allow_ports() -> Vec<u16> {
         53,   // DNS (CoreDNS over cluster)
         80,   // HTTP
         443,  // HTTPS
+        3000, // Grafana
         5432, // PostgreSQL
         6379, // Valkey / Redis
         6443, // kube-apiserver
-        8080, // misc HTTP
+        8080, // misc HTTP (SeaweedFS volume, many defaults)
+        8081, // LiveKit HTTP / misc admin
         8200, // OpenBao
+        8333, // SeaweedFS S3 API
         8443, // misc HTTPS
+        8888, // SeaweedFS filer HTTP
+        9090, // Prometheus
+        9091, // SeaweedFS metrics / generic Prometheus scrape
+        9153, // CoreDNS metrics
         9200, // OpenSearch REST
         9300, // OpenSearch transport
+        9333, // SeaweedFS master HTTP
     ]
 }
 
