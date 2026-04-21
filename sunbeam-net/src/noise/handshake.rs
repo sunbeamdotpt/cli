@@ -15,7 +15,7 @@ type HkdfBlake2s = Hkdf<blake2::Blake2s256, SimpleHmac<blake2::Blake2s256>>;
 
 const PROTOCOL_NAME: &[u8] = b"Noise_IK_25519_ChaChaPoly_BLAKE2s";
 const PROTOCOL_VERSION_PREFIX: &[u8] = b"Tailscale Control Protocol v";
-const PROTOCOL_VERSION: u16 = 49;
+const PROTOCOL_VERSION: u16 = crate::CURRENT_CAP_VER;
 
 // Message types
 const MSG_TYPE_INITIATION: u8 = 1;
