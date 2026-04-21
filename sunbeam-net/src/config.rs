@@ -15,6 +15,10 @@ pub fn default_socks_allow_ports() -> Vec<u16> {
         80,   // HTTP
         443,  // HTTPS
         3000, // Grafana
+        4444, // ory/hydra public
+        4445, // ory/hydra admin
+        4466, // ory/keto read
+        4467, // ory/keto write
         5432, // PostgreSQL
         6379, // Valkey / Redis
         6443, // kube-apiserver
