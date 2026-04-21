@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn test_register_request_serialize() {
         let req = RegisterRequest {
-            version: 74,
+            version: crate::CURRENT_CAP_VER,
             node_key: "nodekey:aabb".into(),
             old_node_key: "".into(),
             disco_key: "discokey:ccdd".into(),
