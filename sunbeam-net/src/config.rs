@@ -14,6 +14,7 @@ pub fn default_socks_allow_ports() -> Vec<u16> {
         53,   // DNS (CoreDNS over cluster)
         80,   // HTTP
         443,  // HTTPS
+        1234, // buildkitd gRPC (mTLS)
         3000, // Grafana
         4444, // ory/hydra public
         4445, // ory/hydra admin
