@@ -23,3 +23,13 @@ pub use daemon::{
 };
 pub use error::{Error, Result};
 pub use proxy::audit::{AuditEntry, AuditOutcome};
+
+/// Tailscale `CapabilityVersion` we advertise everywhere — the noise handshake
+/// prologue (`noise::handshake`), the `MapRequest.Version` field
+/// (`proto::types` + `control::netmap`), and the `RegisterRequest.Version`
+/// field (`control::register`). Headscale rejects any value below its own
+/// `MinSupportedCapabilityVersion` (109 in v0.28.0, raised whenever headscale
+/// drops an older minor-version window). If this goes stale you'll see
+/// `noise upgrade failed: unsupported client version` in the server log —
+/// bump this constant and re-check the server's minimum.
+pub const CURRENT_CAP_VER: u16 = 109;

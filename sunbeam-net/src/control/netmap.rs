@@ -209,7 +209,7 @@ impl super::client::ControlClient {
         preferred_derp: Option<u32>,
     ) -> crate::Result<()> {
         let req = MapRequest {
-            version: 74,
+            version: crate::CURRENT_CAP_VER,
             node_key: keys.node_key_str(),
             disco_key: keys.disco_key_str(),
             stream: false,
@@ -233,7 +233,7 @@ impl super::client::ControlClient {
         preferred_derp: Option<u32>,
     ) -> crate::Result<MapStream> {
         let req = MapRequest {
-            version: 74,
+            version: crate::CURRENT_CAP_VER,
             node_key: keys.node_key_str(),
             disco_key: keys.disco_key_str(),
             stream: true,
