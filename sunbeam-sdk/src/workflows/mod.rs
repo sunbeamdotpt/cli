@@ -60,7 +60,7 @@ impl StepContext {
 
     /// Reconstruct a Kubernetes client from the stored context.
     pub async fn kube_client(&self) -> Result<kube::Client> {
-        crate::kube::get_client().await.cloned()
+        crate::kube::get_client().await
     }
 
     /// Build an OpenBao HTTP client from a local port and token.
