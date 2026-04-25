@@ -17,6 +17,10 @@ use crate::proxy::audit::AuditLog;
 use crate::proxy::engine::{EngineCommand, NetworkEngine};
 use crate::wg::tunnel::{DecapAction, WgTunnel};
 
+/// How long a peer must be present with no successful handshake before the
+/// liveness watchdog emits an error and updates `last_handshake_fail`.
+const LIVENESS_THRESHOLD: Duration = Duration::from_secs(300); // 5 min
+
 /// The main VPN daemon that coordinates all subsystems.
 pub struct VpnDaemon;
 
@@ -783,6 +787,20 @@ async fn run_wg_loop(
     let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Liveness watchdog: fires every 30s, checks each known peer for a
+    // successful handshake within the last 5 minutes. Independent of the
+    // ConnectionExpired/rebuild path — this catches the case where handshake
+    // initiations are sent but never answered (peer unreachable, NAT hole
+    // not punched, DERP relay down) without any WireGuard error firing.
+    let mut liveness_interval = tokio::time::interval(Duration::from_secs(30));
+    liveness_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Track when each peer was first seen so the watchdog doesn't alarm
+    // immediately on a brand-new peer that hasn't had time to handshake yet.
+    let mut peer_first_seen: std::collections::HashMap<[u8; 32], std::time::Instant> =
+        std::collections::HashMap::new();
+    for key in tunnel.peer_keys() {
+        peer_first_seen.insert(key, std::time::Instant::now());
+    }
     // Disco shared keys: peer_disco_pub → precomputed SalsaBox.
     // Seeded from the initial peer set so DERP-arrived disco packets can be
     // decrypted before the first Full netmap push fires.
@@ -889,11 +907,47 @@ async fn run_wg_loop(
                     Some(new_peers) => {
                         tracing::info!("WG tunnel: applying peer update ({} peers)", new_peers.len());
                         tunnel.update_peers(&new_peers);
+                        // Track first-seen time for new peers (for liveness watchdog).
+                        let now = std::time::Instant::now();
+                        for key in tunnel.peer_keys() {
+                            peer_first_seen.entry(key).or_insert(now);
+                        }
+                        // Remove stale entries for peers no longer in the tunnel.
+                        let current_keys: std::collections::HashSet<[u8; 32]> =
+                            tunnel.peer_keys().into_iter().collect();
+                        peer_first_seen.retain(|k, _| current_keys.contains(k));
                         // Rebuild disco shared keys from updated peer list.
                         rebuild_disco_shared(&disco_private, &new_peers, &mut disco_shared);
                     }
                     None => {
                         tracing::warn!("peer update channel closed");
+                    }
+                }
+            }
+            _ = liveness_interval.tick() => {
+                let now = std::time::Instant::now();
+                for peer_key in tunnel.peer_keys() {
+                    let first_seen = peer_first_seen.get(&peer_key).copied().unwrap_or(now);
+                    if now.duration_since(first_seen) < LIVENESS_THRESHOLD {
+                        // Peer too new — give it time to complete a handshake.
+                        continue;
+                    }
+                    match tunnel.last_handshake_success.get(&peer_key) {
+                        Some(last) if now.duration_since(*last) < LIVENESS_THRESHOLD => {
+                            // Recent successful handshake — all good.
+                        }
+                        _ => {
+                            tracing::error!(
+                                "WG no handshake activity for peer {:02x}{:02x}..{:02x}{:02x} in {}s — peer may be unreachable",
+                                peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                                now.duration_since(first_seen).as_secs(),
+                            );
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            update_last_handshake_fail(&status, ts);
+                        }
                     }
                 }
             }
@@ -1584,5 +1638,69 @@ mod tests {
     fn test_parse_disco_key_empty() {
         assert!(parse_disco_key("").is_none());
         assert!(parse_disco_key("discokey:").is_none());
+    }
+
+    /// Verify the liveness-watchdog state-machine logic directly.
+    ///
+    /// A peer that has been present for longer than LIVENESS_THRESHOLD with no
+    /// entry in `last_handshake_success` must cause `last_handshake_fail` to be
+    /// set in the daemon status. This test exercises the predicate used by the
+    /// select-loop watchdog arm without spinning up a full daemon (which requires
+    /// a real network stack and coordination server).
+    #[test]
+    fn liveness_alarm_fires_when_no_handshake_in_5min() {
+        let status = Arc::new(RwLock::new(DaemonStatus::Running {
+            addresses: vec!["100.64.0.1".parse().unwrap()],
+            peer_count: 1,
+            derp_home: None,
+            socks_proxy_port: None,
+            last_handshake_fail: None,
+        }));
+
+        let peer_key = [0xabu8; 32];
+        // Peer was first seen > 5 min ago.
+        let first_seen = std::time::Instant::now()
+            - Duration::from_secs(LIVENESS_THRESHOLD.as_secs() + 10);
+        let now = std::time::Instant::now();
+
+        // No last_handshake_success entry → watchdog should fire.
+        let last_handshake_success: std::collections::HashMap<[u8; 32], std::time::Instant> =
+            std::collections::HashMap::new();
+
+        let alarmed = match last_handshake_success.get(&peer_key) {
+            Some(last) if now.duration_since(*last) < LIVENESS_THRESHOLD => false,
+            _ => now.duration_since(first_seen) >= LIVENESS_THRESHOLD,
+        };
+        assert!(alarmed, "watchdog should alarm when no handshake after 5min");
+
+        if alarmed {
+            let ts = 1_745_000_000u64; // fixed timestamp for test determinism
+            update_last_handshake_fail(&status, ts);
+        }
+
+        let s = status.read().unwrap();
+        assert!(
+            matches!(&*s, DaemonStatus::Running { last_handshake_fail: Some(t), .. } if *t == 1_745_000_000),
+            "last_handshake_fail must be set after watchdog fires"
+        );
+    }
+
+    /// A peer with a recent successful handshake must NOT trigger the alarm.
+    #[test]
+    fn liveness_alarm_silent_when_handshake_recent() {
+        let peer_key = [0xabu8; 32];
+        let now = std::time::Instant::now();
+        let first_seen = now - Duration::from_secs(LIVENESS_THRESHOLD.as_secs() + 10);
+
+        let mut last_handshake_success: std::collections::HashMap<[u8; 32], std::time::Instant> =
+            std::collections::HashMap::new();
+        // Recent handshake: 60 seconds ago.
+        last_handshake_success.insert(peer_key, now - Duration::from_secs(60));
+
+        let alarmed = match last_handshake_success.get(&peer_key) {
+            Some(last) if now.duration_since(*last) < LIVENESS_THRESHOLD => false,
+            _ => now.duration_since(first_seen) >= LIVENESS_THRESHOLD,
+        };
+        assert!(!alarmed, "watchdog must stay silent when handshake is recent");
     }
 }
