@@ -33,8 +33,8 @@ impl StepBody for EnsureCilium {
             .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
-        let found = check_cilium_pods(client, "kube-system").await
-            || check_cilium_pods(client, "cilium-system").await;
+        let found = check_cilium_pods(&client, "kube-system").await
+            || check_cilium_pods(&client, "cilium-system").await;
 
         if found {
             ok("Cilium is healthy.");
