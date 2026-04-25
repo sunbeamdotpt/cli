@@ -153,10 +153,10 @@ impl RegistryWatcher {
                 match tokio::fs::metadata(&path).await {
                     Ok(meta) => {
                         let mt = meta.modified().ok();
-                        if mt != last_mtime {
-                            if let Some(new_mt) = reload(&path, &registry) {
-                                last_mtime = Some(new_mt);
-                            }
+                        if mt != last_mtime
+                            && let Some(new_mt) = reload(&path, &registry)
+                        {
+                            last_mtime = Some(new_mt);
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
