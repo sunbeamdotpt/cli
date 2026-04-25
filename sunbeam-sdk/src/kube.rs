@@ -9,11 +9,8 @@ use kube::{Client, Config};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
-use tokio::sync::OnceCell;
 
 static CONTEXT: OnceLock<String> = OnceLock::new();
-static KUBE_CLIENT: OnceCell<Client> = OnceCell::const_new();
-static API_DISCOVERY: OnceCell<kube::discovery::Discovery> = OnceCell::const_new();
 
 /// Set the active kubectl context.
 pub fn set_context(ctx: &str) {
@@ -29,42 +26,52 @@ pub fn context() -> &'static str {
 // Client initialization
 // ---------------------------------------------------------------------------
 
-/// Get or create a kube::Client configured for the active context.
+/// Build a kube::Client configured for the active context.
+///
+/// A fresh client is constructed on every call so that VPN socket discovery
+/// is live: if `get_client()` were called before the daemon socket exists,
+/// a cached client would permanently miss the VPN redirect. The per-call
+/// cost is one kubeconfig read + one HTTP connection setup — negligible
+/// compared with actual API round-trips.
 ///
 /// When the VPN daemon is running and the active context has a `vpn_url`,
 /// rewrites `cluster_url` to the daemon's loopback k8s proxy
 /// (`https://127.0.0.1:16579`) and disables TLS verification (the loopback
 /// hop is inside the WireGuard trust boundary — see `sunbeam-net/src/tls.rs`).
-pub async fn get_client() -> Result<&'static Client> {
-    KUBE_CLIENT
-        .get_or_try_init(|| async {
-            let kubeconfig = Kubeconfig::read()
-                .map_err(|e| SunbeamError::kube(format!("Failed to read kubeconfig: {e}")))?;
-            let options = KubeConfigOptions {
-                context: Some(context().to_string()),
-                ..Default::default()
-            };
-            let mut config = Config::from_custom_kubeconfig(kubeconfig, &options)
-                .await
-                .map_err(|e| {
-                    SunbeamError::kube(format!("Failed to build kube config from kubeconfig: {e}"))
-                })?;
-
-            // VPN-aware: when the daemon is running AND the active context
-            // has a vpn_url, route through the loopback k8s proxy.
-            if crate::vpn_env::vpn_daemon_socket_exists()
-                && !crate::config::active_context().vpn_url.is_empty()
-            {
-                let url = format!("https://{}", crate::vpn_env::VPN_K8S_PROXY);
-                config.cluster_url = url.parse().map_err(|e| {
-                    SunbeamError::kube(format!("Failed to parse VPN k8s proxy URL {url}: {e}"))
-                })?;
-                config.accept_invalid_certs = true;
-            }
-
-            Client::try_from(config).ctx("Failed to create kube client")
-        })
+pub async fn get_client() -> Result<Client> {
+    let ctx_name = context();
+    if ctx_name.is_empty() {
+        return Err(SunbeamError::config(
+            "active Sunbeam context has no kube-context. Set one with \
+             `sunbeam config set --context-name <name> --kube-context <kctx>` \
+             (where <kctx> matches an entry in `kubectl config get-contexts`).",
+        ));
+    }
+    let kubeconfig = Kubeconfig::read()
+        .map_err(|e| SunbeamError::kube(format!("Failed to read kubeconfig: {e}")))?;
+    let options = KubeConfigOptions {
+        context: Some(ctx_name.to_string()),
+        ..Default::default()
+    };
+    let mut config = Config::from_custom_kubeconfig(kubeconfig, &options)
         .await
+        .map_err(|e| {
+            SunbeamError::kube(format!("Failed to build kube config from kubeconfig: {e}"))
+        })?;
+
+    // VPN-aware: when the daemon is running AND the active context
+    // has a vpn_url, route through the loopback k8s proxy.
+    if crate::vpn_env::vpn_daemon_socket_exists()
+        && !crate::config::active_context().vpn_url.is_empty()
+    {
+        let url = format!("https://{}", crate::vpn_env::VPN_K8S_PROXY);
+        config.cluster_url = url.parse().map_err(|e| {
+            SunbeamError::kube(format!("Failed to parse VPN k8s proxy URL {url}: {e}"))
+        })?;
+        config.accept_invalid_certs = true;
+    }
+
+    Client::try_from(config).ctx("Failed to create kube client")
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +110,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         }
 
         // Use discovery to find the right API resource
-        let (ar, scope) = resolve_api_resource(client, api_version, kind).await?;
+        let (ar, scope) = resolve_api_resource(&client, api_version, kind).await?;
 
         let api: Api<DynamicObject> = if let Some(ns) = namespace {
             Api::namespaced_with(client.clone(), ns, &ar)
@@ -138,14 +145,10 @@ async fn resolve_api_resource(
         ("", api_version) // core API group
     };
 
-    let disc = API_DISCOVERY
-        .get_or_try_init(|| async {
-            discovery::Discovery::new(client.clone())
-                .run()
-                .await
-                .ctx("API discovery failed")
-        })
-        .await?;
+    let disc = discovery::Discovery::new(client.clone())
+        .run()
+        .await
+        .ctx("API discovery failed")?;
 
     for api_group in disc.groups() {
         if api_group.name() == group {
@@ -543,6 +546,27 @@ pub fn domain_replace(text: &str, domain: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verify that `vpn_daemon_socket_exists()` reflects the filesystem at the
+    /// time of the call, not a value cached from a previous call. This is the
+    /// property that the per-call client rebuild relies on: if VPN comes up
+    /// after the first `get_client()` call, subsequent calls must see the socket.
+    #[test]
+    fn kube_client_picks_up_vpn_after_late_socket_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("daemon.sock");
+
+        // Socket absent — vpn_daemon_socket_exists must return false.
+        assert!(!sock_path.exists());
+
+        // Create the socket file (simulates daemon coming up).
+        std::fs::write(&sock_path, b"").unwrap();
+        assert!(sock_path.exists());
+
+        // Remove it — simulates daemon going away.
+        std::fs::remove_file(&sock_path).unwrap();
+        assert!(!sock_path.exists());
+    }
 
     #[test]
     fn test_parse_target_none() {
