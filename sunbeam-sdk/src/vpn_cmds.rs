@@ -269,6 +269,7 @@ pub async fn cmd_vpn_status() -> Result<()> {
             peer_count,
             derp_home,
             socks_proxy_port,
+            last_handshake_fail,
         }) => {
             let addrs: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
             println!("VPN: running");
@@ -279,6 +280,9 @@ pub async fn cmd_vpn_status() -> Result<()> {
             }
             if let Some(port) = socks_proxy_port {
                 println!("  socks proxy: 127.0.0.1:{port}");
+            }
+            if let Some(ts) = last_handshake_fail {
+                println!("  last handshake failure: {}", format_unix_ts(ts));
             }
             print_routes(&client).await;
             print_recent_connections(&client).await;
@@ -343,6 +347,31 @@ async fn print_recent_connections(client: &sunbeam_net::IpcClient) {
             println!("  recent connections: (query failed: {e})");
         }
     }
+}
+
+/// Format a Unix timestamp (seconds) as a minimal RFC3339 UTC string.
+/// No external date crate needed — pure integer arithmetic.
+fn format_unix_ts(secs: u64) -> String {
+    // Days since Unix epoch → calendar date via the algorithm from
+    // https://howardhinnant.github.io/date_algorithms.html (civil_from_days).
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    let z = days as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
 /// Collapse a full `nodekey:...` string to a short display form so the
