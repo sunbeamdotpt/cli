@@ -46,10 +46,9 @@ pub async fn cmd_doctor() -> Result<()> {
     }
 
     // 4. VPN daemon
-    let vpn_sock = dirs::runtime_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local/run")))
-        .unwrap_or_default()
-        .join("sunbeam-vpn.sock");
+    let vpn_sock = crate::vpn_env::vpn_state_dir()
+        .map(|d| d.join("daemon.sock"))
+        .unwrap_or_default();
     if vpn_sock.exists() {
         ok(&format!(
             "VPN daemon: socket exists at {}",
