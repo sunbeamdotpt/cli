@@ -438,7 +438,7 @@ mod tests {
         // Ciphertext should differ from plaintext.
         assert_ne!(&data[..], b"hello");
 
-        assert_eq!(result.protocol_version, 49);
+        assert_eq!(result.protocol_version, crate::CURRENT_CAP_VER);
 
         server_handle.await.unwrap();
     }

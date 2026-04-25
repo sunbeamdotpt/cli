@@ -30,6 +30,12 @@ pub enum DaemonStatus {
         /// matching auth token from `{state_dir}/socks5.auth`.
         #[serde(default)]
         socks_proxy_port: Option<u16>,
+        /// Unix timestamp (seconds) of the most recent `ConnectionExpired`
+        /// from any peer's WireGuard session. `None` if no expiry has
+        /// occurred since the daemon last reached Running. Backwards-compatible:
+        /// old daemons omit this field and clients deserialize it as `None`.
+        #[serde(default)]
+        last_handshake_fail: Option<u64>,
     },
     /// Reconnecting after a connection loss.
     Reconnecting {
@@ -170,6 +176,7 @@ mod tests {
             peer_count: 3,
             derp_home: Some(1),
             socks_proxy_port: Some(16580),
+            last_handshake_fail: None,
         };
         assert_eq!(running.to_string(), "running (100.64.0.1), 3 peers");
     }
@@ -181,10 +188,47 @@ mod tests {
             peer_count: 5,
             derp_home: Some(2),
             socks_proxy_port: None,
+            last_handshake_fail: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         let deserialized: DaemonStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn daemon_status_serializes_optional_last_handshake_fail() {
+        // Round-trip with Some timestamp.
+        let now_secs: u64 = 1_745_000_000;
+        let with_fail = DaemonStatus::Running {
+            addresses: vec!["100.64.0.1".parse().unwrap()],
+            peer_count: 1,
+            derp_home: None,
+            socks_proxy_port: None,
+            last_handshake_fail: Some(now_secs),
+        };
+        let json = serde_json::to_string(&with_fail).unwrap();
+        let back: DaemonStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(with_fail, back);
+
+        // Round-trip with None.
+        let without_fail = DaemonStatus::Running {
+            addresses: vec![],
+            peer_count: 0,
+            derp_home: None,
+            socks_proxy_port: None,
+            last_handshake_fail: None,
+        };
+        let json2 = serde_json::to_string(&without_fail).unwrap();
+        let back2: DaemonStatus = serde_json::from_str(&json2).unwrap();
+        assert_eq!(without_fail, back2);
+
+        // Backwards-compat: JSON missing the field deserializes as None.
+        let legacy_json = r#"{"running":{"addresses":["100.64.0.2"],"peer_count":2,"derp_home":1,"socks_proxy_port":null}}"#;
+        let legacy: DaemonStatus = serde_json::from_str(legacy_json).unwrap();
+        assert!(matches!(
+            legacy,
+            DaemonStatus::Running { last_handshake_fail: None, .. }
+        ));
     }
 
     #[test]
