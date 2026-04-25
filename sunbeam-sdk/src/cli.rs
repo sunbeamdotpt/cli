@@ -141,9 +141,12 @@ pub enum VpnAction {
     Disconnect,
     /// Create a new pre-auth key for onboarding a new client.
     CreateKey {
-        /// Headscale user the key belongs to (default: from CLI user).
+        /// Headscale user name the key belongs to (looked up to obtain a numeric ID).
         #[arg(long, default_value = "sunbeam")]
         user: String,
+        /// Headscale user numeric ID (skips the /api/v1/user lookup).
+        #[arg(long)]
+        user_id: Option<u64>,
         /// Make the key reusable across multiple registrations.
         #[arg(long)]
         reusable: bool,
@@ -1106,10 +1109,11 @@ pub async fn dispatch() -> Result<()> {
             VpnAction::Disconnect => crate::vpn_cmds::cmd_disconnect().await,
             VpnAction::CreateKey {
                 user,
+                user_id,
                 reusable,
                 ephemeral,
                 expiration,
-            } => crate::vpn_cmds::cmd_vpn_create_key(&user, reusable, ephemeral, &expiration).await,
+            } => crate::vpn_cmds::cmd_vpn_create_key(&user, user_id, reusable, ephemeral, &expiration).await,
         },
 
         Some(Verb::Completions { shell }) => {
