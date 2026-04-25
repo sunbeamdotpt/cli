@@ -51,11 +51,14 @@ async fn run_daemon_loop(
     // would see a stale socket file and report "stale socket".
     let _socket_guard = SocketGuard::new(config.control_socket.clone());
 
-    let keys = crate::keys::NodeKeys::load_or_generate(&config.state_dir)?;
     let mut attempt: u32 = 0;
     let max_backoff = Duration::from_secs(60);
 
     loop {
+        // Reload keys every iteration so a key rotation written in the previous
+        // session is picked up before re-registering.
+        let keys = crate::keys::NodeKeys::load_or_generate(&config.state_dir)?;
+
         set_status(&status, DaemonStatus::Connecting);
 
         let session = run_session(&config, &keys, &status, &shutdown);
@@ -71,6 +74,12 @@ async fn run_daemon_loop(
         };
 
         match session_result {
+            Ok(SessionExit::RotatedKey) => {
+                // Keys already written; reload happens at the top of the next
+                // iteration. Skip backoff — we want to re-register quickly.
+                attempt = 0;
+                continue;
+            }
             Ok(SessionExit::Disconnected) | Err(_) => {
                 if let Err(ref e) = session_result {
                     tracing::error!("session ended with error: {e:?}");
@@ -93,6 +102,9 @@ async fn run_daemon_loop(
 
 enum SessionExit {
     Disconnected,
+    /// The stuck-handshake watchdog rotated the node key. The outer loop must
+    /// reload keys before starting the next session.
+    RotatedKey,
 }
 
 /// RAII guard that removes a Unix socket file when dropped. Used by
@@ -592,12 +604,16 @@ async fn run_session(
     //     map_stream_loop into the WG loop so update_peers() is called
     //     on every netmap change, not just at startup.
     let (peer_update_tx, peer_update_rx) = mpsc::channel::<Vec<Node>>(16);
+    // Key-rotation signal: wg_loop → run_session. Capacity 1 — one pending
+    // rotation is enough; extras are silently dropped via try_send.
+    let (rotate_key_tx, mut rotate_key_rx) = mpsc::channel::<()>(1);
     let engine_to_wg_rx = channels.engine_to_wg_rx;
     let wg_to_engine_tx = channels.wg_to_engine_tx;
     let wg_cancel = cancel.clone();
     // Convert disco keys to crypto_box types for NaCl seal/open.
     let disco_secret = crypto_box::SecretKey::from(keys.disco_private.to_bytes());
     let my_disco_pub: [u8; 32] = *keys.disco_public.as_bytes();
+    let wg_status = status.clone();
     let wg_task = tokio::spawn(async move {
         run_wg_loop(
             wg_tunnel,
@@ -612,6 +628,8 @@ async fn run_session(
             disco_secret,
             my_disco_pub,
             stun_bcast_tx.clone(),
+            wg_status,
+            rotate_key_tx,
             wg_cancel,
         )
         .await
@@ -640,11 +658,13 @@ async fn run_session(
             peer_count,
             derp_home,
             socks_proxy_port,
+            last_handshake_fail: None,
         },
     );
 
     // 11. Run concurrent tasks
     let route_whitelist = config.route_whitelist.clone();
+    let state_dir = config.state_dir.clone();
     tokio::select! {
         result = map_stream_loop(&mut map_stream, status, &route_table, &route_whitelist, &peer_update_tx, &derp_cmd_tx) => {
             eprintln!("[session] map_stream_loop exited: {result:?}");
@@ -678,6 +698,17 @@ async fn run_session(
             eprintln!("[session] ipc.run() exited: {result:?}");
             cancel.cancel();
             result.map(|_| SessionExit::Disconnected)
+        }
+        _ = rotate_key_rx.recv() => {
+            tracing::info!("rotating node key after stuck-handshake watchdog escalation");
+            cancel.cancel();
+            match crate::keys::NodeKeys::rotate_node_key(&state_dir) {
+                Ok(()) => Ok(SessionExit::RotatedKey),
+                Err(e) => {
+                    tracing::error!("node key rotation failed: {e:?}");
+                    Ok(SessionExit::Disconnected)
+                }
+            }
         }
     }
 }
@@ -742,6 +773,8 @@ async fn run_wg_loop(
     disco_private: crypto_box::SecretKey,
     my_disco_pub: [u8; 32],
     stun_response_tx: tokio::sync::broadcast::Sender<(std::net::SocketAddr, Vec<u8>)>,
+    status: Arc<RwLock<DaemonStatus>>,
+    rotate_key_tx: mpsc::Sender<()>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
@@ -852,9 +885,20 @@ async fn run_wg_loop(
                 }
             }
             _ = tick_interval.tick() => {
-                let actions = tunnel.tick();
-                for ta in actions {
+                let tick_result = tunnel.tick();
+                for ta in tick_result.actions {
                     dispatch_encap(ta.action, &derp_out_tx, &udp_out_tx).await;
+                }
+                if tick_result.had_connection_expired {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    update_last_handshake_fail(&status, ts);
+                }
+                if tick_result.needs_key_rotation {
+                    tracing::warn!("stuck-handshake watchdog: escalating to node-key rotation");
+                    let _ = rotate_key_tx.try_send(());
                 }
             }
         }
@@ -1312,6 +1356,14 @@ fn update_peer_count(status: &Arc<RwLock<DaemonStatus>>, count: usize) {
         && let DaemonStatus::Running { peer_count, .. } = &mut *s
     {
         *peer_count = count;
+    }
+}
+
+fn update_last_handshake_fail(status: &Arc<RwLock<DaemonStatus>>, ts_secs: u64) {
+    if let Ok(mut s) = status.write()
+        && let DaemonStatus::Running { last_handshake_fail, .. } = &mut *s
+    {
+        *last_handshake_fail = Some(ts_secs);
     }
 }
 
