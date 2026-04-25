@@ -811,7 +811,7 @@ async fn run_wg_loop(
                         tracing::trace!("WG ← DERP ({} bytes)", data.len());
                         match crate::disco::packet::classify(&data) {
                             PacketKind::Disco => {
-                                tracing::trace!("disco packet from DERP {:02x}{:02x}.. ({} bytes)", src_key[0], src_key[1], data.len());
+                                tracing::info!("disco packet from {:02x}{:02x}..{:02x}{:02x} via derp ({} bytes)", src_key[0], src_key[1], src_key[30], src_key[31], data.len());
                                 if let Some((msg, sender_pub)) = crate::disco::open(&data, &disco_shared) {
                                     // No real socket addr for DERP-delivered packets; pong routing
                                     // uses sender_pub + derp_out_tx when via_derp=true.
@@ -849,7 +849,7 @@ async fn run_wg_loop(
                                 let _ = stun_response_tx.send((src_addr, data));
                             }
                             PacketKind::Disco => {
-                                tracing::trace!("disco packet from {src_addr} ({} bytes)", data.len());
+                                tracing::info!("disco packet from {src_addr} via udp ({} bytes)", data.len());
                                 if let Some((msg, sender_pub)) = crate::disco::open(&data, &disco_shared) {
                                     handle_disco(
                                         msg, sender_pub, src_addr,
@@ -1003,8 +1003,8 @@ async fn handle_disco(
 ) {
     match msg {
         crate::disco::Message::Ping(ping) => {
-            tracing::debug!(
-                "disco ping from {:02x}{:02x}.. via={} tx={:02x}{:02x}{:02x}{:02x}",
+            tracing::info!(
+                "disco Ping from {:02x}{:02x}.. via {} tx={:02x}{:02x}{:02x}{:02x}",
                 sender_disco_pub[0], sender_disco_pub[1],
                 if via_derp { "derp" } else { "udp" },
                 ping.tx_id[0], ping.tx_id[1], ping.tx_id[2], ping.tx_id[3],
@@ -1025,9 +1025,10 @@ async fn handle_disco(
             }
         }
         crate::disco::Message::Pong(pong) => {
-            tracing::debug!(
-                "disco pong from {:02x}{:02x}.. observed={} tx={:02x}{:02x}{:02x}{:02x}",
+            tracing::info!(
+                "disco Pong from {:02x}{:02x}.. via {} observed={} tx={:02x}{:02x}{:02x}{:02x}",
                 sender_disco_pub[0], sender_disco_pub[1],
+                if via_derp { "derp" } else { "udp" },
                 pong.src,
                 pong.tx_id[0], pong.tx_id[1], pong.tx_id[2], pong.tx_id[3],
             );
