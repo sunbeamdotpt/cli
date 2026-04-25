@@ -94,6 +94,25 @@ impl NodeKeys {
         Ok(keys)
     }
 
+    /// Rotate only the `node_private` key in `state_dir/keys.json`, preserving
+    /// the disco and wg keys. Writes atomically: temp file then rename so a
+    /// crash mid-write can't corrupt the existing key.
+    pub fn rotate_node_key(state_dir: &Path) -> crate::Result<()> {
+        let path = state_dir.join(KEYS_FILE);
+        let existing_data = std::fs::read_to_string(&path).ctx("reading keys for rotation")?;
+        let mut persisted: PersistedKeys =
+            serde_json::from_str(&existing_data).map_err(crate::Error::Json)?;
+        let new_node_private = StaticSecret::random_from_rng(OsRng);
+        persisted.node_private = hex::encode(new_node_private.as_bytes());
+        let new_data = serde_json::to_string_pretty(&persisted)?;
+        // Write to a temp file in the same directory then atomically rename.
+        let tmp_path = path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, new_data).ctx("writing rotated key to temp file")?;
+        std::fs::rename(&tmp_path, &path).ctx("renaming rotated key file")?;
+        tracing::info!("node key rotated and persisted to {}", path.display());
+        Ok(())
+    }
+
     /// Tailscale-style node key string: `nodekey:<hex>`.
     pub fn node_key_str(&self) -> String {
         format!("nodekey:{}", hex::encode(self.node_public.as_bytes()))
