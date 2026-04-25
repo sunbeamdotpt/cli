@@ -98,7 +98,7 @@ pub async fn cmd_doctor() -> Result<()> {
 
     // 8. Service registry
     if let Ok(client) = crate::kube::get_client().await {
-        match crate::registry::discover(client).await {
+        match crate::registry::discover(&client).await {
             Ok(reg) => {
                 let count = reg.all().len();
                 ok(&format!("service registry: {count} service(s) discovered"));
