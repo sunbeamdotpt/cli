@@ -11,7 +11,7 @@ use crate::registry::{self, ServiceRegistry};
 /// Discover the service registry from the cluster.
 async fn get_registry() -> Result<ServiceRegistry> {
     let client = crate::kube::get_client().await?;
-    registry::discover(client)
+    registry::discover(&client)
         .await
         .map_err(|e| SunbeamError::Other(format!("service discovery failed: {e}")))
 }
