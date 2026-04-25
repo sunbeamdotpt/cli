@@ -367,6 +367,7 @@ mod tests {
             peer_count: 3,
             derp_home: Some(1),
             socks_proxy_port: None,
+            last_handshake_fail: None,
         }));
 
         let server = IpcServer::new(
