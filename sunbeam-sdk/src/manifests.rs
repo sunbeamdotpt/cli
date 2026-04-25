@@ -117,7 +117,7 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
         None => {
             discovered = match crate::kube::get_client().await {
                 Ok(client) => {
-                    let reg = crate::registry::discover(client).await;
+                    let reg = crate::registry::discover(&client).await;
                     reg.map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
                         .unwrap_or_default()
                 }
@@ -239,7 +239,7 @@ async fn snapshot_configmaps() -> std::collections::HashMap<String, String> {
         Err(_) => return result,
     };
 
-    let reg = crate::registry::discover(client).await;
+    let reg = crate::registry::discover(&client).await;
     let namespaces: Vec<String> = reg
         .map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
         .unwrap_or_default();
