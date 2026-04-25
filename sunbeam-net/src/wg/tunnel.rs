@@ -19,6 +19,9 @@ pub(crate) struct WgTunnel {
     /// successful handshake. When it reaches ROTATE_THRESHOLD, the watchdog
     /// signals that the node key should be rotated.
     consecutive_rebuilds: HashMap<[u8; 32], u32>,
+    /// Per-peer timestamp of the most recent successful decap (session established).
+    /// Used by the liveness watchdog (Bug #4) and for observability logging.
+    pub(crate) last_handshake_success: HashMap<[u8; 32], Instant>,
 }
 
 /// After this many consecutive rebuilds without a successful handshake the
@@ -99,6 +102,7 @@ impl WgTunnel {
             next_index: 0,
             last_warn_at: HashMap::new(),
             consecutive_rebuilds: HashMap::new(),
+            last_handshake_success: HashMap::new(),
         }
     }
 
@@ -169,6 +173,17 @@ impl WgTunnel {
         match peer.tunn.encapsulate(payload, &mut buf) {
             TunnResult::WriteToNetwork(data) => {
                 let packet = data.to_vec();
+                let transport = if peer.derp_region.is_some() && peer.endpoint.is_some() {
+                    "udp+derp"
+                } else if peer.endpoint.is_some() {
+                    "udp"
+                } else {
+                    "derp"
+                };
+                tracing::info!(
+                    "WG handshake_initiation sent to peer {:02x}{:02x}..{:02x}{:02x} via {transport}",
+                    peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                );
                 route_packet(peer, &peer_key, packet)
             }
             TunnResult::Err(e) => {
@@ -201,11 +216,27 @@ impl WgTunnel {
 
         match result {
             TunnResult::WriteToTunnelV4(data, _addr) => {
-                self.consecutive_rebuilds.remove(peer_key);
+                let was_new = self.consecutive_rebuilds.remove(peer_key).is_some()
+                    || !self.last_handshake_success.contains_key(peer_key);
+                if was_new {
+                    tracing::info!(
+                        "WG session established with peer {:02x}{:02x}..{:02x}{:02x}",
+                        peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                    );
+                }
+                self.last_handshake_success.insert(*peer_key, Instant::now());
                 DecapAction::Packet(data.to_vec())
             }
             TunnResult::WriteToTunnelV6(data, _addr) => {
-                self.consecutive_rebuilds.remove(peer_key);
+                let was_new = self.consecutive_rebuilds.remove(peer_key).is_some()
+                    || !self.last_handshake_success.contains_key(peer_key);
+                if was_new {
+                    tracing::info!(
+                        "WG session established with peer {:02x}{:02x}..{:02x}{:02x}",
+                        peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                    );
+                }
+                self.last_handshake_success.insert(*peer_key, Instant::now());
                 DecapAction::Packet(data.to_vec())
             }
             TunnResult::WriteToNetwork(data) => {
@@ -264,6 +295,17 @@ impl WgTunnel {
             match result {
                 TunnResult::WriteToNetwork(data) => {
                     let packet = data.to_vec();
+                    let transport = if peer.derp_region.is_some() && peer.endpoint.is_some() {
+                        "udp+derp"
+                    } else if peer.endpoint.is_some() {
+                        "udp"
+                    } else {
+                        "derp"
+                    };
+                    tracing::info!(
+                        "WG handshake_initiation sent to peer {:02x}{:02x}..{:02x}{:02x} via {transport} (timer)",
+                        peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                    );
                     let action = route_packet(peer, &peer_key, packet);
                     actions.push(TimerAction { action });
                 }
