@@ -614,6 +614,7 @@ async fn run_session(
     let disco_secret = crypto_box::SecretKey::from(keys.disco_private.to_bytes());
     let my_disco_pub: [u8; 32] = *keys.disco_public.as_bytes();
     let wg_status = status.clone();
+    let wg_initial_peers = peers.clone();
     let wg_task = tokio::spawn(async move {
         run_wg_loop(
             wg_tunnel,
@@ -631,6 +632,7 @@ async fn run_session(
             wg_status,
             rotate_key_tx,
             wg_cancel,
+            wg_initial_peers,
         )
         .await
     });
@@ -776,16 +778,18 @@ async fn run_wg_loop(
     status: Arc<RwLock<DaemonStatus>>,
     rotate_key_tx: mpsc::Sender<()>,
     cancel: tokio_util::sync::CancellationToken,
+    initial_peers: Vec<Node>,
 ) {
     let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
     tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Disco shared keys: peer_disco_pub → precomputed SalsaBox.
-    // Built from the initial peer set, updated on peer changes.
+    // Seeded from the initial peer set so DERP-arrived disco packets can be
+    // decrypted before the first Full netmap push fires.
     let mut disco_shared: std::collections::HashMap<[u8; 32], crypto_box::SalsaBox> =
         std::collections::HashMap::new();
+    rebuild_disco_shared(&disco_private, &initial_peers, &mut disco_shared);
     let mut endpoint_tracker = crate::daemon::endpoint::EndpointTracker::new();
-    let _ = &disco_private; // used in rebuild_disco_shared below
 
     loop {
         tokio::select! {
@@ -805,8 +809,30 @@ async fn run_wg_loop(
                 match incoming {
                     Some((src_key, data)) => {
                         tracing::trace!("WG ← DERP ({} bytes)", data.len());
-                        let action = tunnel.decapsulate(&src_key, &data);
-                        handle_decap(action, src_key, &tunnel, &to_engine, &derp_out_tx, &udp_out_tx).await;
+                        match crate::disco::packet::classify(&data) {
+                            PacketKind::Disco => {
+                                tracing::trace!("disco packet from DERP {:02x}{:02x}.. ({} bytes)", src_key[0], src_key[1], data.len());
+                                if let Some((msg, sender_pub)) = crate::disco::open(&data, &disco_shared) {
+                                    // No real socket addr for DERP-delivered packets; pong routing
+                                    // uses sender_pub + derp_out_tx when via_derp=true.
+                                    let derp_src_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
+                                    handle_disco(
+                                        msg, sender_pub, derp_src_addr,
+                                        &mut endpoint_tracker, &mut tunnel,
+                                        &my_disco_pub, &disco_shared,
+                                        &derp_out_tx, &udp_out_tx,
+                                        true,
+                                    ).await;
+                                } else {
+                                    tracing::trace!("disco decrypt failed from DERP {:02x}{:02x}..", src_key[0], src_key[1]);
+                                }
+                            }
+                            _ => {
+                                // WireGuard (or unknown) packet — pass to tunnel.
+                                let action = tunnel.decapsulate(&src_key, &data);
+                                handle_decap(action, src_key, &tunnel, &to_engine, &derp_out_tx, &udp_out_tx).await;
+                            }
+                        }
                     }
                     None => {
                         tracing::warn!("DERP channel closed; continuing on UDP only");
@@ -830,6 +856,7 @@ async fn run_wg_loop(
                                         &mut endpoint_tracker, &mut tunnel,
                                         &my_disco_pub, &disco_shared,
                                         &derp_out_tx, &udp_out_tx,
+                                        false,
                                     ).await;
                                 } else {
                                     tracing::trace!("disco decrypt failed from {src_addr}");
@@ -957,6 +984,10 @@ async fn handle_decap(
 }
 
 /// Handle an incoming disco message (already decrypted).
+///
+/// `src_addr` is the observed socket address of the sender. For packets that
+/// arrived via DERP (signalled by `via_derp = true`) this is a sentinel
+/// `0.0.0.0:0`; routing uses the sender's disco key via `derp_out_tx` instead.
 #[allow(clippy::too_many_arguments)]
 async fn handle_disco(
     msg: crate::disco::Message,
@@ -966,14 +997,16 @@ async fn handle_disco(
     tunnel: &mut WgTunnel,
     my_disco_pub: &[u8; 32],
     disco_shared: &std::collections::HashMap<[u8; 32], crypto_box::SalsaBox>,
-    _derp_out_tx: &mpsc::Sender<([u8; 32], Vec<u8>)>,
+    derp_out_tx: &mpsc::Sender<([u8; 32], Vec<u8>)>,
     udp_out_tx: &mpsc::Sender<(std::net::SocketAddr, Vec<u8>)>,
+    via_derp: bool,
 ) {
     match msg {
         crate::disco::Message::Ping(ping) => {
             tracing::debug!(
-                "disco ping from {:02x}{:02x}.. tx={:02x}{:02x}{:02x}{:02x}",
+                "disco ping from {:02x}{:02x}.. via={} tx={:02x}{:02x}{:02x}{:02x}",
                 sender_disco_pub[0], sender_disco_pub[1],
+                if via_derp { "derp" } else { "udp" },
                 ping.tx_id[0], ping.tx_id[1], ping.tx_id[2], ping.tx_id[3],
             );
             // Reply with a Pong carrying the observed source address.
@@ -983,8 +1016,12 @@ async fn handle_disco(
             });
             if let Some(shared) = disco_shared.get(&sender_disco_pub) {
                 let sealed = crate::disco::seal(&pong, my_disco_pub, shared);
-                // Send pong back via UDP to the address we saw the ping from.
-                let _ = udp_out_tx.send((src_addr, sealed)).await;
+                // Send pong back on the same transport the ping arrived on.
+                if via_derp {
+                    let _ = derp_out_tx.send((sender_disco_pub, sealed)).await;
+                } else {
+                    let _ = udp_out_tx.send((src_addr, sealed)).await;
+                }
             }
         }
         crate::disco::Message::Pong(pong) => {
