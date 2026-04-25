@@ -288,51 +288,11 @@ async fn run_session(
     let proxy_cmd_tx = channels.cmd_tx.clone();
     let proxy_bind = config.proxy_bind;
 
-    let auto_cluster_api = || -> Option<IpAddr> {
-        // Look for a routed service CIDR in peers' allowed_ips. The k8s API
-        // server is conventionally at the first IP in the service CIDR
-        // (e.g. 10.43.0.1 for 10.43.0.0/16). We prefer service-CIDR routes
-        // (prefix < /32) over the peer's own tailnet IP which typically has
-        // nothing listening on 6443.
-        for peer in &peers {
-            for aip in &peer.allowed_ips {
-                if let Ok(net) = aip.parse::<ipnet::IpNet>() {
-                    // Skip host routes (/32 and /128) — those are tailnet IPs.
-                    let is_host = matches!(
-                        net,
-                        ipnet::IpNet::V4(v4) if v4.prefix_len() == 32
-                    ) || matches!(
-                        net,
-                        ipnet::IpNet::V6(v6) if v6.prefix_len() == 128
-                    );
-                    if is_host {
-                        continue;
-                    }
-                    // First IP in the CIDR = network + 1 (the API server).
-                    let network = net.network();
-                    let api_ip = match network {
-                        IpAddr::V4(v4) => {
-                            let Some(bits) = u32::from(v4).checked_add(1) else {
-                                continue;
-                            };
-                            IpAddr::V4(std::net::Ipv4Addr::from(bits))
-                        }
-                        IpAddr::V6(v6) => {
-                            let Some(bits) = u128::from(v6).checked_add(1) else {
-                                continue;
-                            };
-                            IpAddr::V6(std::net::Ipv6Addr::from(bits))
-                        }
-                    };
-                    tracing::info!(
-                        "auto-detected k8s API from peer route {aip} → {api_ip}"
-                    );
-                    return Some(api_ip);
-                }
-            }
-        }
-        None
-    };
+    let all_allowed_ips: Vec<&str> = peers
+        .iter()
+        .flat_map(|p| p.allowed_ips.iter().map(|s| s.as_str()))
+        .collect();
+    let auto_cluster_api = || pick_k8s_api_from_routes(&all_allowed_ips);
 
     let resolved_addr: Option<IpAddr> = if let Some(host) = config.cluster_api_host.as_deref() {
         match resolve_peer_ip(host, &peers) {
@@ -1437,6 +1397,70 @@ fn parse_dst_ip(packet: &[u8]) -> Option<IpAddr> {
     }
 }
 
+/// Select the k8s API service-IP from a list of peer allowed-IP strings.
+///
+/// Collects every non-host-route CIDR (prefix < /32 for v4, < /128 for v6),
+/// then returns the first IP of the CIDR with the **highest** network address.
+/// In standard k3s/k8s deployments two CIDRs are advertised per peer:
+///   - pod network   (e.g. 10.42.0.0/16) — gateway is the CNI/Pingora pod
+///   - service network (e.g. 10.43.0.0/16) — first IP is the k8s API service-IP
+/// Sorting by descending network address reliably selects the service network
+/// over the pod network (10.43 > 10.42) without hard-coding any subnets.
+/// If only one CIDR is present a `warn!` is logged so operators know the
+/// heuristic is guessing.
+fn pick_k8s_api_from_routes(allowed_ips: &[&str]) -> Option<IpAddr> {
+    let mut candidates: Vec<(ipnet::IpNet, IpAddr)> = Vec::new();
+
+    for aip in allowed_ips {
+        if let Ok(net) = aip.parse::<ipnet::IpNet>() {
+            let is_host = matches!(net, ipnet::IpNet::V4(v4) if v4.prefix_len() == 32)
+                || matches!(net, ipnet::IpNet::V6(v6) if v6.prefix_len() == 128);
+            if is_host {
+                continue;
+            }
+            let network = net.network();
+            let api_ip = match network {
+                IpAddr::V4(v4) => {
+                    let Some(bits) = u32::from(v4).checked_add(1) else { continue };
+                    IpAddr::V4(std::net::Ipv4Addr::from(bits))
+                }
+                IpAddr::V6(v6) => {
+                    let Some(bits) = u128::from(v6).checked_add(1) else { continue };
+                    IpAddr::V6(std::net::Ipv6Addr::from(bits))
+                }
+            };
+            candidates.push((net, api_ip));
+        }
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|(a, _), (b, _)| {
+        let key = |net: &ipnet::IpNet| match net.network() {
+            IpAddr::V4(v4) => u128::from(u32::from(v4)),
+            IpAddr::V6(v6) => u128::from(v6),
+        };
+        key(b).cmp(&key(a)) // descending: highest network address first
+    });
+
+    let (chosen_net, api_ip) = &candidates[0];
+    if candidates.len() > 1 {
+        tracing::info!(
+            "auto-detected k8s API from peer route {chosen_net} → {api_ip} \
+             (preferred over {} other route(s))",
+            candidates.len() - 1,
+        );
+    } else {
+        tracing::warn!(
+            "auto-detected k8s API from peer route {chosen_net} → {api_ip} \
+             (only one CIDR available; verify this is the service network)",
+        );
+    }
+    Some(*api_ip)
+}
+
 fn set_status(status: &Arc<RwLock<DaemonStatus>>, new: DaemonStatus) {
     if let Ok(mut s) = status.write() {
         *s = new;
@@ -1638,6 +1662,37 @@ mod tests {
     fn test_parse_disco_key_empty() {
         assert!(parse_disco_key("").is_none());
         assert!(parse_disco_key("discokey:").is_none());
+    }
+
+    #[test]
+    fn auto_detect_k8s_api_prefers_service_network_first_ip() {
+        // Pod network 10.42.0.0/16 and service network 10.43.0.0/16.
+        // The function must return 10.43.0.1, not 10.42.0.1.
+        let routes = &["10.42.0.0/16", "10.43.0.0/16", "100.64.0.2/32"];
+        let got = pick_k8s_api_from_routes(routes).unwrap();
+        assert_eq!(
+            got,
+            "10.43.0.1".parse::<IpAddr>().unwrap(),
+            "expected service-network gateway 10.43.0.1, got {got}"
+        );
+    }
+
+    #[test]
+    fn auto_detect_k8s_api_falls_back_to_pod_gateway_when_service_net_missing() {
+        // Only pod network is advertised — fall back to it (with a warn).
+        let routes = &["10.42.0.0/16", "100.64.0.2/32"];
+        let got = pick_k8s_api_from_routes(routes).unwrap();
+        assert_eq!(
+            got,
+            "10.42.0.1".parse::<IpAddr>().unwrap(),
+            "expected pod-network gateway 10.42.0.1 as fallback, got {got}"
+        );
+    }
+
+    #[test]
+    fn auto_detect_k8s_api_returns_none_when_no_cidrs() {
+        let routes = &["100.64.0.2/32", "100.64.0.3/32"];
+        assert!(pick_k8s_api_from_routes(routes).is_none());
     }
 
     /// Verify the liveness-watchdog state-machine logic directly.
