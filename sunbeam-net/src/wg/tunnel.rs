@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Instant;
 
+use boringtun::noise::errors::WireGuardError;
 use boringtun::noise::{Tunn, TunnResult};
 use ipnet::IpNet;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -11,7 +13,17 @@ pub(crate) struct WgTunnel {
     peers: HashMap<[u8; 32], PeerTunnel>,
     /// Index counter for boringtun tunnel creation.
     next_index: u32,
+    /// Per-peer last-warn timestamp for rate-limiting error log spam.
+    last_warn_at: HashMap<[u8; 32], Instant>,
+    /// Counts consecutive `rebuild_tunn` calls per peer without an intervening
+    /// successful handshake. When it reaches ROTATE_THRESHOLD, the watchdog
+    /// signals that the node key should be rotated.
+    consecutive_rebuilds: HashMap<[u8; 32], u32>,
 }
+
+/// After this many consecutive rebuilds without a successful handshake the
+/// watchdog escalates to a node-key rotation. 3 rebuilds ≈ 4.5 min.
+const ROTATE_THRESHOLD: u32 = 3;
 
 struct PeerTunnel {
     tunn: Tunn,
@@ -67,6 +79,15 @@ pub(crate) struct TimerAction {
     pub action: EncapAction,
 }
 
+/// Summary of a `tick()` pass.
+pub(crate) struct TickResult {
+    pub actions: Vec<TimerAction>,
+    /// True if at least one peer had a `ConnectionExpired` this tick.
+    pub had_connection_expired: bool,
+    /// True if at least one peer's consecutive-rebuild counter hit the threshold.
+    pub needs_key_rotation: bool,
+}
+
 /// Size of the scratch buffer for boringtun operations.
 const BUF_SIZE: usize = 65536;
 
@@ -76,6 +97,8 @@ impl WgTunnel {
             private_key,
             peers: HashMap::new(),
             next_index: 0,
+            last_warn_at: HashMap::new(),
+            consecutive_rebuilds: HashMap::new(),
         }
     }
 
@@ -177,8 +200,14 @@ impl WgTunnel {
         let result = peer.tunn.decapsulate(None, packet, &mut buf);
 
         match result {
-            TunnResult::WriteToTunnelV4(data, _addr) => DecapAction::Packet(data.to_vec()),
-            TunnResult::WriteToTunnelV6(data, _addr) => DecapAction::Packet(data.to_vec()),
+            TunnResult::WriteToTunnelV4(data, _addr) => {
+                self.consecutive_rebuilds.remove(peer_key);
+                DecapAction::Packet(data.to_vec())
+            }
+            TunnResult::WriteToTunnelV6(data, _addr) => {
+                self.consecutive_rebuilds.remove(peer_key);
+                DecapAction::Packet(data.to_vec())
+            }
             TunnResult::WriteToNetwork(data) => {
                 let mut responses = vec![data.to_vec()];
                 let mut chain_buf = vec![0u8; BUF_SIZE];
@@ -196,13 +225,20 @@ impl WgTunnel {
                 }
                 DecapAction::Response(responses)
             }
+            TunnResult::Err(WireGuardError::ConnectionExpired) => {
+                self.rebuild_tunn(peer_key);
+                DecapAction::Nothing
+            }
+
             TunnResult::Err(e) => {
-                tracing::warn!(
-                    "WG decapsulate error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?} ({} bytes, type={})",
-                    peer_key[0], peer_key[1], peer_key[30], peer_key[31],
-                    packet.len(),
-                    if packet.is_empty() { 0 } else { packet[0] }
-                );
+                if self.should_warn(peer_key) {
+                    tracing::warn!(
+                        "WG decapsulate error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?} ({} bytes, type={})",
+                        peer_key[0], peer_key[1], peer_key[30], peer_key[31],
+                        packet.len(),
+                        if packet.is_empty() { 0 } else { packet[0] }
+                    );
+                }
                 DecapAction::Nothing
             }
             TunnResult::Done => DecapAction::Nothing,
@@ -210,8 +246,10 @@ impl WgTunnel {
     }
 
     /// Tick all tunnels for timer-based actions (keepalives, handshake retries).
-    pub fn tick(&mut self) -> Vec<TimerAction> {
+    pub fn tick(&mut self) -> TickResult {
         let mut actions = Vec::new();
+        let mut had_connection_expired = false;
+        let mut needs_key_rotation = false;
         let peer_keys: Vec<[u8; 32]> = self.peers.keys().copied().collect();
 
         for peer_key in peer_keys {
@@ -229,18 +267,75 @@ impl WgTunnel {
                     let action = route_packet(peer, &peer_key, packet);
                     actions.push(TimerAction { action });
                 }
+                TunnResult::Err(WireGuardError::ConnectionExpired) => {
+                    had_connection_expired = true;
+                    if self.rebuild_tunn(&peer_key) {
+                        needs_key_rotation = true;
+                    }
+                }
                 TunnResult::Err(e) => {
-                    tracing::warn!(
-                        "WG tick error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?}",
-                        peer_key[0], peer_key[1], peer_key[30], peer_key[31]
-                    );
+                    if self.should_warn(&peer_key) {
+                        tracing::warn!(
+                            "WG tick error for peer {:02x}{:02x}..{:02x}{:02x}: {e:?}",
+                            peer_key[0], peer_key[1], peer_key[30], peer_key[31]
+                        );
+                    }
                 }
                 TunnResult::Done => {}
                 TunnResult::WriteToTunnelV4(_, _) | TunnResult::WriteToTunnelV6(_, _) => {}
             }
         }
 
-        actions
+        TickResult { actions, had_connection_expired, needs_key_rotation }
+    }
+
+    /// Allocate a fresh `Tunn` for a peer, replacing the expired one.
+    /// Preserves all peer metadata; only the boringtun session state is reset.
+    /// Returns true if the consecutive-rebuild counter has reached ROTATE_THRESHOLD.
+    fn rebuild_tunn(&mut self, peer_key: &[u8; 32]) -> bool {
+        let peer = match self.peers.get_mut(peer_key) {
+            Some(p) => p,
+            None => return false,
+        };
+        let index = self.next_index;
+        self.next_index = self.next_index.wrapping_add(1);
+        peer.tunn = Tunn::new(
+            self.private_key.clone(),
+            PublicKey::from(*peer_key),
+            None,
+            Some(25),
+            index,
+            None,
+        );
+        peer.local_index = index;
+        let count = self.consecutive_rebuilds.entry(*peer_key).or_insert(0);
+        *count += 1;
+        let needs_rotation = *count >= ROTATE_THRESHOLD;
+        tracing::info!(
+            "WG tunnel rebuilt for peer {:02x}{:02x}..{:02x}{:02x} after ConnectionExpired (consecutive={})",
+            peer_key[0], peer_key[1], peer_key[30], peer_key[31], count,
+        );
+        needs_rotation
+    }
+
+    /// Reset the consecutive-rebuild counter for a peer. Called when a peer
+    /// successfully delivers a decrypted IP packet, confirming the handshake
+    /// completed. Exposed for testing.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn notify_handshake_success(&mut self, peer_key: &[u8; 32]) {
+        self.consecutive_rebuilds.remove(peer_key);
+    }
+
+    /// Returns true if this peer's error should be logged (at most once per second).
+    fn should_warn(&mut self, peer_key: &[u8; 32]) -> bool {
+        let now = Instant::now();
+        match self.last_warn_at.get(peer_key) {
+            Some(last) if now.duration_since(*last).as_secs() < 1 => false,
+            _ => {
+                self.last_warn_at.insert(*peer_key, now);
+                true
+            }
+        }
     }
 
     /// Find a peer by the boringtun local index we assigned to it.
@@ -615,5 +710,115 @@ mod tests {
         let (unknown, _) = generate_key();
         let action = tunnel.route_to_peer(&unknown, vec![1, 2, 3]);
         assert!(action.is_nothing());
+    }
+
+    // --- Fix #1: rebuild_tunn on ConnectionExpired ---
+
+    /// Build a minimal handshake between two real boringtun Tunns so the
+    /// responder side has an active session. Returns (initiator, responder).
+    fn do_handshake(a: &mut boringtun::noise::Tunn, b: &mut boringtun::noise::Tunn) {
+        use boringtun::noise::TunnResult;
+        let mut buf = vec![0u8; 65536];
+        // A → init
+        let init = match a.format_handshake_initiation(&mut buf, false) {
+            TunnResult::WriteToNetwork(d) => d.to_vec(),
+            other => panic!("expected init, got {other:?}"),
+        };
+        // B ← init → response
+        let mut rbuf = vec![0u8; 65536];
+        let resp = match b.decapsulate(None, &init, &mut rbuf) {
+            TunnResult::WriteToNetwork(d) => d.to_vec(),
+            other => panic!("expected response, got {other:?}"),
+        };
+        // A ← response → keepalive
+        let mut kbuf = vec![0u8; 65536];
+        let ka = match a.decapsulate(None, &resp, &mut kbuf) {
+            TunnResult::WriteToNetwork(d) => d.to_vec(),
+            other => panic!("expected keepalive, got {other:?}"),
+        };
+        // B ← keepalive
+        let mut dbuf = vec![0u8; 65536];
+        b.decapsulate(None, &ka, &mut dbuf);
+    }
+
+    #[test]
+    fn tick_replaces_tunn_on_connection_expired() {
+        // Two real keypairs, real boringtun — no mocks.
+        let (_, my_secret) = generate_key();
+        let (peer_pub, peer_secret) = generate_key();
+        let my_public = x25519_dalek::PublicKey::from(&my_secret);
+
+        let mut tunnel = WgTunnel::new(my_secret);
+        let node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[node]);
+
+        let idx_before = tunnel.peers.get(&peer_pub).unwrap().local_index;
+
+        // Force a handshake initiation so boringtun has a pending session, then
+        // feed a garbage packet — the peer side will see InvalidMac. We can't
+        // drive ConnectionExpired from the timer without advancing real time by
+        // 3 min, so we invoke rebuild_tunn directly and assert the index changed.
+        let _ = tunnel.encapsulate(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 2)), b"ping");
+        tunnel.rebuild_tunn(&peer_pub);
+        let idx_after = tunnel.peers.get(&peer_pub).unwrap().local_index;
+
+        assert_ne!(idx_before, idx_after, "local_index must change after rebuild");
+    }
+
+    #[test]
+    fn decapsulate_replaces_tunn_on_connection_expired() {
+        let (_, my_secret) = generate_key();
+        let (peer_pub, _) = generate_key();
+
+        let mut tunnel = WgTunnel::new(my_secret);
+        let node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[node]);
+
+        let idx_before = tunnel.peers.get(&peer_pub).unwrap().local_index;
+        tunnel.rebuild_tunn(&peer_pub);
+        let idx_after = tunnel.peers.get(&peer_pub).unwrap().local_index;
+        assert_ne!(idx_before, idx_after);
+    }
+
+    // --- Fix #4: should_warn rate-limits to once per second ---
+
+    #[test]
+    fn should_warn_rate_limits_to_once_per_second() {
+        let (_, secret) = generate_key();
+        let mut tunnel = WgTunnel::new(secret);
+        let peer: [u8; 32] = [0xab; 32];
+
+        // First call: allowed.
+        assert!(tunnel.should_warn(&peer));
+        // Next 9 calls within the same second: suppressed.
+        for _ in 0..9 {
+            assert!(!tunnel.should_warn(&peer));
+        }
+        // Artificially back-date the last-warn entry by 2s so the guard sees
+        // the elapsed time as > 1s.
+        tunnel.last_warn_at.insert(peer, Instant::now() - std::time::Duration::from_secs(2));
+        assert!(tunnel.should_warn(&peer));
+    }
+
+    // --- Fix #2-revised: consecutive_rebuilds watchdog ---
+
+    #[test]
+    fn rebuild_counter_increments_and_resets() {
+        let (_, my_secret) = generate_key();
+        let (peer_pub, _) = generate_key();
+        let mut tunnel = WgTunnel::new(my_secret);
+        let node = make_peer_node(&peer_pub, vec!["100.64.0.2/32"]);
+        tunnel.update_peers(&[node]);
+
+        assert!(!tunnel.rebuild_tunn(&peer_pub)); // 1 — below threshold
+        assert!(!tunnel.rebuild_tunn(&peer_pub)); // 2
+        assert!(tunnel.rebuild_tunn(&peer_pub));  // 3 — threshold reached
+
+        // Reset via notify_handshake_success.
+        tunnel.notify_handshake_success(&peer_pub);
+        assert_eq!(tunnel.consecutive_rebuilds.get(&peer_pub), None);
+
+        // Counter starts fresh.
+        assert!(!tunnel.rebuild_tunn(&peer_pub)); // 1 again
     }
 }

@@ -26,6 +26,12 @@ struct PeerEndpoint {
     last_call_me_maybe: Option<Instant>,
 }
 
+impl Default for EndpointTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EndpointTracker {
     pub fn new() -> Self {
         Self {
