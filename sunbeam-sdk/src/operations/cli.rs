@@ -243,6 +243,15 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
             print!("{}", crate::operations::worktree::shell_init_script(shell));
             Ok(())
         }
+        WorktreeAction::ShellInstall {
+            shell,
+            rc_file,
+            dry_run,
+        } => crate::operations::worktree::shell_install(
+            shell,
+            rc_file.as_deref(),
+            dry_run,
+        ),
         WorktreeAction::CherryPick {
             from,
             refs,
