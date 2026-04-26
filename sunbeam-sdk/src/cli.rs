@@ -220,6 +220,9 @@ pub enum ServiceAction {
         /// ACME email for cert-manager.
         #[arg(long, default_value = "")]
         email: String,
+        /// Print the post-substitution YAML without calling kubectl apply.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Generate/store all credentials in OpenBao.
@@ -1335,8 +1338,13 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "apply"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Apply { namespace, .. },
-            }) => assert!(namespace.is_none()),
+                action: ServiceAction::Apply {
+                    namespace, dry_run, ..
+                },
+            }) => {
+                assert!(namespace.is_none());
+                assert!(!dry_run);
+            }
             _ => panic!("expected Service Apply"),
         }
     }
@@ -1349,6 +1357,49 @@ mod tests {
                 action: ServiceAction::Apply { namespace, .. },
             }) => assert_eq!(namespace.unwrap(), "ory"),
             _ => panic!("expected Service Apply"),
+        }
+    }
+
+    #[test]
+    fn test_service_apply_dry_run() {
+        let cli = parse(&["sunbeam", "service", "apply", "--dry-run"]);
+        match cli.verb {
+            Some(Verb::Service {
+                action: ServiceAction::Apply { dry_run, .. },
+            }) => assert!(dry_run),
+            _ => panic!("expected Service Apply --dry-run"),
+        }
+    }
+
+    #[test]
+    fn test_service_apply_dry_run_with_namespace() {
+        let cli = parse(&["sunbeam", "service", "apply", "ory", "--dry-run"]);
+        match cli.verb {
+            Some(Verb::Service {
+                action: ServiceAction::Apply {
+                    namespace, dry_run, ..
+                },
+            }) => {
+                assert_eq!(namespace.unwrap(), "ory");
+                assert!(dry_run);
+            }
+            _ => panic!("expected Service Apply ory --dry-run"),
+        }
+    }
+
+    #[test]
+    fn test_service_apply_dry_run_with_all() {
+        let cli = parse(&["sunbeam", "service", "apply", "--all", "--dry-run"]);
+        match cli.verb {
+            Some(Verb::Service {
+                action: ServiceAction::Apply {
+                    apply_all, dry_run, ..
+                },
+            }) => {
+                assert!(apply_all);
+                assert!(dry_run);
+            }
+            _ => panic!("expected Service Apply --all --dry-run"),
         }
     }
 
