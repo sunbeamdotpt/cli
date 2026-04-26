@@ -8,6 +8,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::cli::{ProjectAction, ProjectRunArgs};
+use crate::config::get_infra_dir;
 use crate::discovery::{find_project_root, find_workspace_root, WORKSPACE_FILE};
 use crate::error::{Result, SunbeamError};
 use crate::operations::config::WorkspaceConfig;
@@ -32,7 +33,44 @@ pub async fn dispatch(action: ProjectAction) -> Result<()> {
         ProjectAction::Run { verb, args } => run_verb(&verb, args).await,
         ProjectAction::Graph { all } => cmd_graph(all).await,
         ProjectAction::Check { all } => cmd_check(all).await,
+        ProjectAction::PreseedImage { image_ref, timeout } => {
+            cmd_preseed_image(&image_ref, timeout).await
+        }
     }
+}
+
+async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
+    // 1. Apply the puller Job and wait for the node pull to complete.
+    crate::proxy::cmd_preseed_image(image_ref, timeout).await?;
+
+    // 2. Extract the tag from the image ref and bump the kustomization.
+    let tag = image_ref.rsplit(':').next().unwrap_or(image_ref);
+    let kustomization_path = get_infra_dir()
+        .join("sbbb")
+        .join("base")
+        .join("ingress")
+        .join("kustomization.yaml");
+
+    let current = std::fs::read_to_string(&kustomization_path).map_err(|e| {
+        SunbeamError::Io {
+            context: format!("reading {}", kustomization_path.display()),
+            source: e,
+        }
+    })?;
+
+    let updated = crate::proxy::bump_proxy_tag(&current, tag)?;
+    std::fs::write(&kustomization_path, updated.as_bytes()).map_err(|e| {
+        SunbeamError::Io {
+            context: format!("writing {}", kustomization_path.display()),
+            source: e,
+        }
+    })?;
+
+    crate::output::ok(&format!(
+        "Bumped infra/sbbb/base/ingress/kustomization.yaml → newTag: {tag}"
+    ));
+    crate::output::ok("Run `sunbeam service apply ingress` to roll out the new proxy image.");
+    Ok(())
 }
 
 async fn run_verb(verb: &str, args: ProjectRunArgs) -> Result<()> {

@@ -642,6 +642,19 @@ pub enum ProjectAction {
         #[arg(long)]
         all: bool,
     },
+    /// Pre-pull the proxy image on the cluster node to break the
+    /// Pingora IfNotPresent + Recreate deadlock, then bump the
+    /// kustomization newTag.
+    ///
+    /// Run after `sunbeam project package -p proxy`, then follow up with
+    /// `sunbeam service apply ingress` to roll out the new image.
+    PreseedImage {
+        /// Full image reference to pull (e.g. src.sunbeam.pt/studio/proxy:abc1234).
+        image_ref: String,
+        /// Seconds to wait for the puller Job to complete.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
