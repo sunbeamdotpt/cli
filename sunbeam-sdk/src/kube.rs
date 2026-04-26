@@ -121,8 +121,44 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
             Api::all_with(client.clone(), &ar)
         };
 
-        let patch: serde_json::Value =
+        let mut patch: serde_json::Value =
             serde_yaml::from_str(doc).ctx("Failed to parse YAML to JSON value")?;
+
+        // For Jobs, stamp a sunbeam.pt/spec-hash annotation so that
+        // pre_apply_cleanup can tell whether the spec changed since the last
+        // apply.  The hash covers only the `spec` field — metadata/status are
+        // excluded because they change on every apply regardless of user intent.
+        if kind == "Job" {
+            use sha2::Digest;
+            let spec_json = patch
+                .get("spec")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let canonical = serde_json::to_string(&spec_json).unwrap_or_default();
+            let hash = format!("{:x}", sha2::Sha256::digest(canonical.as_bytes()));
+
+            let annotations = patch
+                .pointer_mut("/metadata/annotations")
+                .and_then(|v| v.as_object_mut());
+            if let Some(map) = annotations {
+                map.insert(
+                    "sunbeam.pt/spec-hash".to_string(),
+                    serde_json::Value::String(hash),
+                );
+            } else if let Some(metadata) = patch.get_mut("metadata") {
+                if let Some(obj) = metadata.as_object_mut() {
+                    let mut ann = serde_json::Map::new();
+                    ann.insert(
+                        "sunbeam.pt/spec-hash".to_string(),
+                        serde_json::Value::String(hash),
+                    );
+                    obj.insert(
+                        "annotations".to_string(),
+                        serde_json::Value::Object(ann),
+                    );
+                }
+            }
+        }
 
         api.patch(name, &ssapply, &Patch::Apply(patch))
             .await
@@ -266,6 +302,42 @@ pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
         .iter()
         .find(|p| p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running"))
         .and_then(|p| p.metadata.name.clone())
+}
+
+/// Find the first Running pod matching a label selector, falling back to any
+/// Running pod in the namespace when the label query returns no results.
+///
+/// Returns `(pod_name, unlabeled)` where `unlabeled` is `true` when the result
+/// came from the namespace-wide fallback rather than the label match.
+pub async fn find_pod_by_label_or_any(ns: &str, label: &str) -> Option<(String, bool)> {
+    let client = get_client().await.ok()?;
+    let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
+        kube::Api::namespaced(client.clone(), ns);
+
+    // Fast path: labeled query.
+    let lp = kube::api::ListParams::default().labels(label);
+    if let Ok(pod_list) = pods.list(&lp).await {
+        if let Some(name) = pod_list
+            .items
+            .iter()
+            .find(|p| p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running"))
+            .and_then(|p| p.metadata.name.clone())
+        {
+            return Some((name, false));
+        }
+    }
+
+    // Fallback: any Running pod in the namespace.
+    let all_pods = pods
+        .list(&kube::api::ListParams::default())
+        .await
+        .ok()?;
+    all_pods
+        .items
+        .iter()
+        .find(|p| p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running"))
+        .and_then(|p| p.metadata.name.clone())
+        .map(|name| (name, true))
 }
 
 /// Execute a command in a pod and return (exit_code, stdout).
