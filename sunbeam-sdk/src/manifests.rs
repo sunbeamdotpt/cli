@@ -105,6 +105,43 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
     Ok(())
 }
 
+/// Build the kustomize overlay, substitute domain/email, and print the
+/// resulting YAML to stdout without calling kubectl apply.
+pub async fn cmd_apply_dry_run(domain: &str, email: &str, namespace: &str) -> Result<()> {
+    let email = if email.is_empty() {
+        crate::config::load_config().acme_email
+    } else {
+        email.to_string()
+    };
+
+    let infra_dir = crate::config::get_infra_dir();
+
+    let resolved_domain = if domain.is_empty() {
+        crate::kube::get_domain().await?
+    } else {
+        domain.to_string()
+    };
+    if resolved_domain.is_empty() {
+        bail!("--domain is required for apply on first deploy");
+    }
+    let overlay = infra_dir.join("overlays").join("production");
+
+    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+
+    if !namespace.is_empty() {
+        manifests = filter_by_namespace(&manifests, namespace);
+        if manifests.trim().is_empty() {
+            crate::output::warn(&format!(
+                "No resources found for namespace '{namespace}' -- check the name and try again."
+            ));
+            return Ok(());
+        }
+    }
+
+    print!("{manifests}");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

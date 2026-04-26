@@ -45,6 +45,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             apply_all,
             domain: apply_domain,
             email: apply_email,
+            dry_run,
         } => {
             let d = if apply_domain.is_empty() {
                 domain.to_string()
@@ -58,7 +59,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             };
             let ns = namespace.unwrap_or_default();
 
-            if ns.is_empty() && !apply_all {
+            if !dry_run && ns.is_empty() && !apply_all {
                 crate::output::warn("This will apply ALL namespaces.");
                 eprint!("  Continue? [y/N] ");
                 let mut answer = String::new();
@@ -69,7 +70,11 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
                 }
             }
 
-            crate::manifests::cmd_apply(&d, &e, &ns).await
+            if dry_run {
+                crate::manifests::cmd_apply_dry_run(&d, &e, &ns).await
+            } else {
+                crate::manifests::cmd_apply(&d, &e, &ns).await
+            }
         }
         ServiceAction::Seed => {
             crate::output::step("Seeding secrets (workflow engine)...");
