@@ -347,6 +347,7 @@ async fn run_session(
     //     downstream tools can point HTTPS_PROXY at it.
     let socks_cfg = crate::proxy::socks::SocksConfig {
         bind: config.socks_bind,
+        port: crate::proxy::socks::SOCKS5_PORT,
         allow_ports: config.socks_allow_ports.clone(),
         state_dir: config.state_dir.clone(),
     };
@@ -1401,9 +1402,11 @@ fn parse_dst_ip(packet: &[u8]) -> Option<IpAddr> {
 ///
 /// Collects every non-host-route CIDR (prefix < /32 for v4, < /128 for v6),
 /// then returns the first IP of the CIDR with the **highest** network address.
+///
 /// In standard k3s/k8s deployments two CIDRs are advertised per peer:
-///   - pod network   (e.g. 10.42.0.0/16) — gateway is the CNI/Pingora pod
-///   - service network (e.g. 10.43.0.0/16) — first IP is the k8s API service-IP
+/// - pod network (e.g. 10.42.0.0/16) — gateway is the CNI/Pingora pod
+/// - service network (e.g. 10.43.0.0/16) — first IP is the k8s API service-IP
+///
 /// Sorting by descending network address reliably selects the service network
 /// over the pod network (10.43 > 10.42) without hard-coding any subnets.
 /// If only one CIDR is present a `warn!` is logged so operators know the
