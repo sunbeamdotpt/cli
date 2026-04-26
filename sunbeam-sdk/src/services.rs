@@ -30,6 +30,9 @@ struct PodRow {
     name: String,
     ready: String,
     status: String,
+    /// True when this pod was found via namespace-wide fallback rather than a
+    /// label match. Displayed as "(unlabeled)" in the status table.
+    unlabeled: bool,
 }
 
 fn icon_for_status(status: &str) -> &'static str {
@@ -200,6 +203,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                             name: pod.name_any(),
                             ready: pod_ready_str(&pod),
                             status: pod_phase(&pod),
+                            unlabeled: false,
                         });
                     }
                 }
@@ -233,6 +237,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                                     name: pod.name_any(),
                                     ready: pod_ready_str(&pod),
                                     status: pod_phase(&pod),
+                                    unlabeled: false,
                                 });
                             }
                         }
@@ -247,6 +252,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                                         name: pod.name_any(),
                                         ready: pod_ready_str(&pod),
                                         status: pod_phase(&pod),
+                                        unlabeled: false,
                                     });
                                 }
                             }
@@ -267,21 +273,44 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
                                     name: pod.name_any(),
                                     ready: pod_ready_str(&pod),
                                     status: pod_phase(&pod),
+                                    unlabeled: false,
                                 });
                             }
                         }
                     }
                     (Some(ns), Some(svc)) => {
                         let api: Api<Pod> = Api::namespaced(client.clone(), ns);
+                        // Try label-based query first.
                         let lp = ListParams::default().labels(&format!("app={svc}"));
-                        if let Ok(list) = api.list(&lp).await {
-                            for pod in list.items {
+                        let labeled_list = api.list(&lp).await.ok();
+                        let labeled_hit = labeled_list
+                            .as_ref()
+                            .map(|l| !l.items.is_empty())
+                            .unwrap_or(false);
+
+                        if labeled_hit {
+                            for pod in labeled_list.unwrap().items {
                                 pods.push(PodRow {
                                     ns: ns.to_string(),
                                     name: pod.name_any(),
                                     ready: pod_ready_str(&pod),
                                     status: pod_phase(&pod),
+                                    unlabeled: false,
                                 });
+                            }
+                        } else {
+                            // No labeled pods — fall back to all pods in the namespace.
+                            let lp_all = ListParams::default();
+                            if let Ok(list) = api.list(&lp_all).await {
+                                for pod in list.items {
+                                    pods.push(PodRow {
+                                        ns: ns.to_string(),
+                                        name: pod.name_any(),
+                                        ready: pod_ready_str(&pod),
+                                        status: pod_phase(&pod),
+                                        unlabeled: true,
+                                    });
+                                }
                             }
                         }
                     }
@@ -318,9 +347,14 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
         if unhealthy {
             all_ok = false;
         }
+        let display_name = if row.unlabeled {
+            format!("{} (unlabeled)", row.name)
+        } else {
+            row.name.clone()
+        };
         println!(
             "    {icon} {:<50} {:<6} {}",
-            row.name, row.ready, row.status
+            display_name, row.ready, row.status
         );
     }
 
