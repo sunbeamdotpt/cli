@@ -170,7 +170,10 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
     prune_stale_vault_static_secrets(&ns_list).await;
 
     for ns in &ns_list {
-        // Delete all jobs
+        // Job drift detection and deletion is handled per-document in
+        // kube_apply (spec-hash annotation comparison). Nothing to pre-delete here.
+
+        // Delete test pods
         let client = match crate::kube::get_client().await {
             Ok(c) => c,
             Err(e) => {
@@ -178,18 +181,6 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
                 return;
             }
         };
-        let jobs: kube::api::Api<k8s_openapi::api::batch::v1::Job> =
-            kube::api::Api::namespaced(client.clone(), ns);
-        if let Ok(job_list) = jobs.list(&kube::api::ListParams::default()).await {
-            for job in job_list.items {
-                if let Some(name) = &job.metadata.name {
-                    let dp = kube::api::DeleteParams::default();
-                    let _ = jobs.delete(name, &dp).await;
-                }
-            }
-        }
-
-        // Delete test pods
         let pods: kube::api::Api<k8s_openapi::api::core::v1::Pod> =
             kube::api::Api::namespaced(client.clone(), ns);
         if let Ok(pod_list) = pods.list(&kube::api::ListParams::default()).await {
