@@ -173,6 +173,12 @@ pub enum Verb {
         #[command(flatten)]
         args: ProjectRunArgs,
     },
+
+    /// Version-control hosting operations (gitserv gRPC — M-1: repo/mirror/ref).
+    ///
+    /// Exit codes: 65 NotFound, 77 PermissionDenied, 64 InvalidArgument,
+    /// 69 Unavailable, 70 Internal, 1 other.
+    Vcs(crate::vcs::VcsArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -1278,6 +1284,16 @@ pub async fn dispatch() -> Result<()> {
         Some(Verb::Dev { args }) => crate::project::cli::dispatch(ProjectAction::Dev(args)).await,
         Some(Verb::Clean { args }) => crate::project::cli::dispatch(ProjectAction::Clean(args)).await,
         Some(Verb::Doc { args }) => crate::project::cli::dispatch(ProjectAction::Doc(args)).await,
+
+        Some(Verb::Vcs(args)) => {
+            let domain = crate::config::domain();
+            if domain.is_empty() {
+                return Err(SunbeamError::Config(
+                    "domain not set — run `sunbeam config set --domain <domain>` first".into(),
+                ));
+            }
+            crate::vcs::handle(args, domain).await
+        }
     }
 }
 
