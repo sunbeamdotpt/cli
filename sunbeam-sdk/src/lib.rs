@@ -17,6 +17,7 @@ pub mod manifests;
 pub mod openbao;
 pub mod operations;
 pub mod project;
+pub mod proxy;
 pub mod topo;
 pub mod output;
 pub mod pm;
