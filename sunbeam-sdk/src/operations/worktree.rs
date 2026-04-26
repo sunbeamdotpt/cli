@@ -605,6 +605,165 @@ function sunbeam
 end
 "#;
 
+/// Options for [`cherry_pick`].
+#[derive(Debug, Clone)]
+pub struct CherryPickOpts<'a> {
+    pub from: &'a str,
+    pub refs: &'a [String],
+    pub into: Option<&'a str>,
+    pub edit: bool,
+    pub no_commit: bool,
+    pub annotate: bool,
+    pub mainline: Option<u32>,
+    pub force: bool,
+}
+
+/// Cherry-pick commits from another worktree's branch into the destination.
+///
+/// Always passes `--signoff` to `git cherry-pick`. Worktrees share `.git`,
+/// so refs from any branch are reachable without fetching. Refs starting
+/// with `~` or `^`, and ranges with bare `~N`/`^N` segments, are expanded
+/// against `opts.from`.
+pub fn cherry_pick(opts: CherryPickOpts<'_>) -> Result<()> {
+    let from_san = sanitize_branch(opts.from);
+    if from_san.is_empty() {
+        return Err(SunbeamError::config(format!(
+            "branch name {:?} is empty after sanitization",
+            opts.from
+        )));
+    }
+    let root = main_worktree_root()?;
+    let from_exists = Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{from_san}"),
+        ])
+        .current_dir(&root)
+        .status()
+        .ok()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !from_exists {
+        return Err(SunbeamError::config(format!(
+            "no local branch {from_san} (try `sunbeam wt list`)"
+        )));
+    }
+
+    let dest = resolve_cherry_pick_dest(opts.into, &root)?;
+
+    if !opts.force {
+        let st = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&dest)
+            .output()
+            .with_ctx(|| format!("git status in {}", dest.display()))?;
+        if st.status.success() && !st.stdout.is_empty() {
+            return Err(SunbeamError::config(format!(
+                "destination worktree {} is dirty; pass --force to override",
+                dest.display()
+            )));
+        }
+    }
+
+    if opts.refs.is_empty() {
+        return Err(SunbeamError::config("no commits/ranges supplied"));
+    }
+    let expanded: Vec<String> = opts
+        .refs
+        .iter()
+        .map(|r| expand_ref_against(r, &from_san))
+        .collect();
+
+    let mut args: Vec<String> = vec!["cherry-pick".into(), "--signoff".into()];
+    if opts.edit {
+        args.push("--edit".into());
+    }
+    if opts.no_commit {
+        args.push("--no-commit".into());
+    }
+    if opts.annotate {
+        args.push("-x".into());
+    }
+    if let Some(m) = opts.mainline {
+        args.push("--mainline".into());
+        args.push(m.to_string());
+    }
+    args.extend(expanded);
+
+    let status = Command::new("git")
+        .args(&args)
+        .current_dir(&dest)
+        .status()
+        .with_ctx(|| format!("git cherry-pick in {}", dest.display()))?;
+    if !status.success() {
+        return Err(SunbeamError::tool(
+            "git",
+            format!(
+                "cherry-pick failed (exit {status}). Resolve conflicts in {}, \
+                 then `git cherry-pick --continue` (or `--abort`).",
+                dest.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_cherry_pick_dest(into: Option<&str>, root: &Path) -> Result<PathBuf> {
+    if let Some(b) = into {
+        let san = sanitize_branch(b);
+        if san.is_empty() {
+            return Err(SunbeamError::config(format!(
+                "branch name {b:?} is empty after sanitization"
+            )));
+        }
+        return match find_worktree_path(&san)? {
+            Some(p) => Ok(p),
+            None => Err(SunbeamError::config(format!(
+                "no worktree for branch {san} (try `sunbeam wt new {b}`)"
+            ))),
+        };
+    }
+    let cwd = std::env::current_dir()?;
+    let cwd_canon = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+    let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let worktrees_dir = root_canon.join(".worktrees");
+    if cwd_canon.starts_with(&worktrees_dir) || cwd_canon == root_canon {
+        Ok(cwd)
+    } else {
+        Err(SunbeamError::config(
+            "cherry-pick must run from inside a worktree (or pass --into <branch>)",
+        ))
+    }
+}
+
+/// Expand a ref like `~3` / `~3..` / `~3..~1` into a fully-qualified form
+/// against `from`. Bare SHAs and named refs (anything not starting with
+/// `~` or `^` on the relevant side) pass through.
+fn expand_ref_against(r: &str, from: &str) -> String {
+    if let Some((l, rr)) = r.split_once("..") {
+        let lhs = expand_part(l, from);
+        let rhs = if rr.is_empty() {
+            from.to_string()
+        } else {
+            expand_part(rr, from)
+        };
+        return format!("{lhs}..{rhs}");
+    }
+    expand_part(r, from)
+}
+
+fn expand_part(p: &str, from: &str) -> String {
+    if p.is_empty() {
+        return from.to_string();
+    }
+    if p.starts_with('~') || p.starts_with('^') {
+        return format!("{from}{p}");
+    }
+    p.to_string()
+}
+
 /// Drop into an interactive `$SHELL` with cwd set to the worktree for `branch`.
 /// Blocks until the user exits the shell.
 pub fn use_shell(branch: &str) -> Result<()> {
@@ -831,5 +990,41 @@ locked manual hold
     fn parse_porcelain_empty() {
         assert!(parse_porcelain("").is_empty());
         assert!(parse_porcelain("\n\n").is_empty());
+    }
+
+    #[test]
+    fn expand_ref_passes_through_sha_and_named() {
+        assert_eq!(expand_ref_against("abc1234", "feature-vpn"), "abc1234");
+        assert_eq!(expand_ref_against("v2.0.0", "feature-vpn"), "v2.0.0");
+    }
+
+    #[test]
+    fn expand_ref_prefixes_tilde_and_caret() {
+        assert_eq!(expand_ref_against("~3", "feature-vpn"), "feature-vpn~3");
+        assert_eq!(expand_ref_against("^2", "feature-vpn"), "feature-vpn^2");
+    }
+
+    #[test]
+    fn expand_ref_range_open_right() {
+        assert_eq!(
+            expand_ref_against("~3..", "feature-vpn"),
+            "feature-vpn~3..feature-vpn"
+        );
+    }
+
+    #[test]
+    fn expand_ref_range_both_relative() {
+        assert_eq!(
+            expand_ref_against("~5..~1", "feature-vpn"),
+            "feature-vpn~5..feature-vpn~1"
+        );
+    }
+
+    #[test]
+    fn expand_ref_range_with_explicit_lhs() {
+        assert_eq!(
+            expand_ref_against("abc1234..~1", "feature-vpn"),
+            "abc1234..feature-vpn~1"
+        );
     }
 }
