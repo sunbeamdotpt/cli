@@ -1,14 +1,18 @@
 use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{Namespace, Secret};
-use kube::api::{Api, ApiResource, DynamicObject, ListParams, Patch, PatchParams};
+use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, Patch, PatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::discovery::{self, Scope};
 use kube::{Client, Config};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
+
+const SPEC_HASH_ANNOTATION: &str = "sunbeam.pt/spec-hash";
 
 static CONTEXT: OnceLock<String> = OnceLock::new();
 
@@ -78,7 +82,28 @@ pub async fn get_client() -> Result<Client> {
 // Core Kubernetes operations
 // ---------------------------------------------------------------------------
 
+/// Compute a stable SHA-256 hex hash of the `spec` field of a Job manifest document.
+///
+/// Only the `spec` key is hashed (metadata and status are excluded) so that
+/// label/annotation changes on the Job wrapper don't trigger unnecessary
+/// deletions, while any container/template/volume drift will be detected.
+fn job_spec_hash(doc_json: &serde_json::Value) -> String {
+    let spec = doc_json.get("spec").cloned().unwrap_or(serde_json::Value::Null);
+    let canonical =
+        serde_json::to_string(&spec).unwrap_or_default();
+    let digest = Sha256::digest(canonical.as_bytes());
+    format!("{digest:x}")
+}
+
 /// Server-side apply a multi-document YAML manifest.
+///
+/// For `kind: Job` documents this function performs spec-drift detection:
+/// 1. Hash the rendered manifest's `spec` (SHA-256, hex).
+/// 2. Fetch the live Job and read its `sunbeam.pt/spec-hash` annotation.
+/// 3. If the annotation is missing or differs, delete the live Job before
+///    applying so the new spec takes effect (Jobs are immutable once created).
+/// 4. After a successful apply, patch the annotation onto the Job so future
+///    runs can detect whether a re-apply is actually needed.
 #[allow(dead_code)]
 pub async fn kube_apply(manifest: &str) -> Result<()> {
     let client = get_client().await?;
@@ -107,6 +132,37 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
         if name.is_empty() || kind.is_empty() {
             continue; // skip incomplete documents
+        }
+
+        // ---------------------------------------------------------------
+        // Job immutability: delete the live Job when its spec has changed.
+        // ---------------------------------------------------------------
+        if kind == "Job" {
+            let patch_json: serde_json::Value =
+                serde_yaml::from_str(doc).ctx("Failed to parse Job YAML to JSON")?;
+            let new_hash = job_spec_hash(&patch_json);
+
+            let job_ns = namespace.unwrap_or("default");
+            let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
+
+            if let Ok(Some(live_job)) = jobs.get_opt(name).await {
+                let live_hash = live_job
+                    .metadata
+                    .annotations
+                    .as_ref()
+                    .and_then(|a| a.get(SPEC_HASH_ANNOTATION))
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                if live_hash != new_hash {
+                    crate::output::ok(&format!(
+                        "Job {job_ns}/{name} spec changed — deleting before re-apply..."
+                    ));
+                    let dp = DeleteParams::default();
+                    let _ = jobs.delete(name, &dp).await;
+                }
+                // Hash matches: live Job is identical; SSA below is a no-op but harmless.
+            }
         }
 
         // Use discovery to find the right API resource
@@ -163,6 +219,37 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         api.patch(name, &ssapply, &Patch::Apply(patch))
             .await
             .with_ctx(|| format!("Failed to apply {kind}/{name}"))?;
+
+        // ---------------------------------------------------------------
+        // After a successful Job apply, stamp the spec hash annotation so
+        // subsequent runs can detect spec drift without deleting needlessly.
+        // ---------------------------------------------------------------
+        if kind == "Job" {
+            let patch_json: serde_json::Value =
+                serde_yaml::from_str(doc).ctx("Failed to parse Job YAML to JSON (post-apply)")?;
+            let hash = job_spec_hash(&patch_json);
+            let job_ns = namespace.unwrap_or("default");
+            let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
+            let annotation_patch = serde_json::json!({
+                "metadata": {
+                    "annotations": {
+                        SPEC_HASH_ANNOTATION: hash
+                    }
+                }
+            });
+            if let Err(e) = jobs
+                .patch(
+                    name,
+                    &PatchParams::default(),
+                    &Patch::Merge(&annotation_patch),
+                )
+                .await
+            {
+                crate::output::warn(&format!(
+                    "Failed to stamp spec-hash on Job {job_ns}/{name}: {e}"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -689,6 +776,63 @@ mod tests {
     fn test_domain_replace_none() {
         let result = domain_replace("no match here", "x.sslip.io");
         assert_eq!(result, "no match here");
+    }
+
+    #[test]
+    fn test_job_spec_hash_stable() {
+        let doc = serde_json::json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": { "name": "vault-bootstrap-job", "namespace": "data" },
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": "bootstrap", "image": "alpine:3.18", "command": ["sh", "-c", "echo hello"]}],
+                        "restartPolicy": "Never"
+                    }
+                }
+            }
+        });
+        let h1 = job_spec_hash(&doc);
+        let h2 = job_spec_hash(&doc);
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64); // SHA-256 hex = 64 chars
+    }
+
+    #[test]
+    fn test_job_spec_hash_changes_on_spec_drift() {
+        let doc1 = serde_json::json!({
+            "kind": "Job",
+            "spec": { "template": { "spec": { "containers": [{"image": "alpine:3.18"}] } } }
+        });
+        let doc2 = serde_json::json!({
+            "kind": "Job",
+            "spec": { "template": { "spec": { "containers": [{"image": "alpine:3.19"}] } } }
+        });
+        assert_ne!(job_spec_hash(&doc1), job_spec_hash(&doc2));
+    }
+
+    #[test]
+    fn test_job_spec_hash_ignores_metadata_changes() {
+        let doc1 = serde_json::json!({
+            "kind": "Job",
+            "metadata": { "name": "foo", "labels": { "run": "1" } },
+            "spec": { "template": { "spec": { "containers": [{"image": "alpine:3.18"}] } } }
+        });
+        let doc2 = serde_json::json!({
+            "kind": "Job",
+            "metadata": { "name": "foo", "labels": { "run": "2" } },
+            "spec": { "template": { "spec": { "containers": [{"image": "alpine:3.18"}] } } }
+        });
+        assert_eq!(job_spec_hash(&doc1), job_spec_hash(&doc2));
+    }
+
+    #[test]
+    fn test_job_spec_hash_missing_spec() {
+        // A document with no spec key should not panic
+        let doc = serde_json::json!({ "kind": "Job", "metadata": { "name": "empty" } });
+        let h = job_spec_hash(&doc);
+        assert_eq!(h.len(), 64);
     }
 
     #[test]
