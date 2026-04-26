@@ -23,6 +23,7 @@ pub use daemon::{
 };
 pub use error::{Error, Result};
 pub use proxy::audit::{AuditEntry, AuditOutcome};
+pub use proxy::socks::SOCKS5_PORT;
 
 /// Tailscale `CapabilityVersion` we advertise everywhere — the noise handshake
 /// prologue (`noise::handshake`), the `MapRequest.Version` field
