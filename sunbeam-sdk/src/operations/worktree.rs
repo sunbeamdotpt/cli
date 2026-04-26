@@ -530,6 +530,81 @@ pub fn setup(branch: Option<&str>) -> Result<()> {
     run_setup_hook(&target)
 }
 
+/// Resolve the absolute on-disk path of the worktree for `branch`.
+///
+/// Errors if the branch has no worktree. Used by shell wrappers
+/// (`sunbeam wt shell-init <shell>`) to turn `wt use` into a real `cd`.
+pub fn path_of(branch: &str) -> Result<PathBuf> {
+    let sanitized = sanitize_branch(branch);
+    if sanitized.is_empty() {
+        return Err(SunbeamError::config(format!(
+            "branch name {branch:?} is empty after sanitization"
+        )));
+    }
+    match find_worktree_path(&sanitized)? {
+        Some(p) => Ok(p),
+        None => Err(SunbeamError::config(format!(
+            "no worktree for branch {sanitized} (try `sunbeam wt new {branch}`)"
+        ))),
+    }
+}
+
+/// Shell init scripts. Each defines a `sunbeam` function that intercepts
+/// `wt use <branch>` (and `ops worktree use`/`operations worktree use`) and
+/// performs a real `cd` in the caller's shell, exporting `SUNBEAM_WORKTREE`.
+/// Everything else falls through to the binary.
+pub fn shell_init_script(shell: crate::cli::WtShell) -> &'static str {
+    match shell {
+        crate::cli::WtShell::Bash | crate::cli::WtShell::Zsh => SHELL_INIT_BASH_ZSH,
+        crate::cli::WtShell::Fish => SHELL_INIT_FISH,
+    }
+}
+
+const SHELL_INIT_BASH_ZSH: &str = r#"# sunbeam worktree shell integration — source via:
+#   eval "$(sunbeam wt shell-init zsh)"   # or bash
+sunbeam() {
+  local _is_use=0 _branch=""
+  if [ "$1" = "wt" ] && [ "$2" = "use" ] && [ -n "${3-}" ]; then
+    _is_use=1; _branch="$3"
+  elif { [ "$1" = "ops" ] || [ "$1" = "operations" ]; } \
+       && [ "$2" = "worktree" ] && [ "$3" = "use" ] && [ -n "${4-}" ]; then
+    _is_use=1; _branch="$4"
+  fi
+  if [ $_is_use -eq 1 ]; then
+    local _wt_path
+    _wt_path="$(command sunbeam wt path "$_branch")" || return $?
+    cd "$_wt_path" || return $?
+    export SUNBEAM_WORKTREE="${_wt_path##*/}"
+    return 0
+  fi
+  command sunbeam "$@"
+}
+"#;
+
+const SHELL_INIT_FISH: &str = r#"# sunbeam worktree shell integration — source via:
+#   sunbeam wt shell-init fish | source
+function sunbeam
+    set -l _is_use 0
+    set -l _branch ""
+    if test (count $argv) -ge 3; and test "$argv[1]" = "wt"; and test "$argv[2]" = "use"
+        set _is_use 1
+        set _branch $argv[3]
+    else if test (count $argv) -ge 4; and begin; test "$argv[1]" = "ops"; or test "$argv[1]" = "operations"; end; and test "$argv[2]" = "worktree"; and test "$argv[3]" = "use"
+        set _is_use 1
+        set _branch $argv[4]
+    end
+    if test $_is_use -eq 1
+        set -l _wt_path (command sunbeam wt path $_branch)
+        or return $status
+        cd $_wt_path
+        or return $status
+        set -gx SUNBEAM_WORKTREE (basename $_wt_path)
+        return 0
+    end
+    command sunbeam $argv
+end
+"#;
+
 /// Drop into an interactive `$SHELL` with cwd set to the worktree for `branch`.
 /// Blocks until the user exits the shell.
 pub fn use_shell(branch: &str) -> Result<()> {
