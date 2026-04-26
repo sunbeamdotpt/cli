@@ -33,6 +33,14 @@ const NO_PROXY: &str = "localhost,127.0.0.1,::1";
 /// the daemon socket exists and the active context has a `vpn_url`.
 pub const VPN_K8S_PROXY: &str = "127.0.0.1:16579";
 
+/// Fixed loopback address for the VPN daemon's SOCKS5 + HTTP CONNECT proxy.
+///
+/// Port 24424 is deliberately fixed (not OS-ephemeral) so that
+/// `~/.kube/config`'s `proxy-url` and any other downstream consumer that
+/// reads the port at startup remain valid across daemon restarts — the same
+/// guarantee that `VPN_K8S_PROXY` already provides for the HTTP proxy.
+pub const VPN_SOCKS_PROXY: &str = "127.0.0.1:24424";
+
 /// Check whether the VPN daemon is currently running by looking for the
 /// control socket at `~/.sunbeam/vpn/daemon.sock`. Best-effort: returns
 /// false when `HOME` is unset or the socket is missing.
@@ -261,6 +269,42 @@ mod tests {
         assert_eq!(
             envs.get("NO_PROXY").map(String::as_str),
             Some("localhost,127.0.0.1,::1")
+        );
+    }
+
+    /// `VPN_SOCKS_PROXY` must embed the same port as `sunbeam_net::SOCKS5_PORT`
+    /// so the two crates stay in sync without a shared constant.
+    #[test]
+    fn vpn_socks_proxy_port_matches_sunbeam_net_constant() {
+        let port: u16 = VPN_SOCKS_PROXY
+            .rsplit(':')
+            .next()
+            .expect("VPN_SOCKS_PROXY must contain ':'")
+            .parse()
+            .expect("port part of VPN_SOCKS_PROXY must be a valid u16");
+        assert_eq!(
+            port,
+            sunbeam_net::SOCKS5_PORT,
+            "VPN_SOCKS_PROXY ({VPN_SOCKS_PROXY}) port must match sunbeam_net::SOCKS5_PORT ({})",
+            sunbeam_net::SOCKS5_PORT
+        );
+    }
+
+    /// The proxy-url written to kubeconfig must embed the fixed SOCKS5 port
+    /// so it survives daemon restarts.
+    #[test]
+    fn kubeconfig_writer_uses_fixed_socks_port() {
+        let token = "cafebabe";
+        let port: u16 = VPN_SOCKS_PROXY
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let url = proxy_url_for(port, token);
+        assert!(
+            url.contains(":24424"),
+            "kubeconfig proxy-url must contain the fixed port :24424, got {url}"
         );
     }
 

@@ -64,6 +64,14 @@ use crate::proxy::engine::EngineCommand;
 /// Clients must send this exact string; the actual secret is the password.
 pub const SOCKS_USERNAME: &str = "sunbeam";
 
+/// Fixed loopback port the SOCKS5 + HTTP CONNECT proxy always binds to.
+///
+/// This is deliberately fixed (not OS-ephemeral) so that `~/.kube/config`'s
+/// `proxy-url` and other downstream consumers that capture the port at startup
+/// remain valid across daemon restarts. `sunbeam-sdk::vpn_env::VPN_SOCKS_PROXY`
+/// embeds this same port in its `"127.0.0.1:<port>"` string.
+pub const SOCKS5_PORT: u16 = 24424;
+
 /// Length of the generated auth token in bytes (pre-hex).
 const AUTH_TOKEN_BYTES: usize = 32;
 
@@ -108,8 +116,11 @@ enum AddrType {
 /// Configuration for the SOCKS5 + HTTP CONNECT listener.
 #[derive(Debug, Clone)]
 pub struct SocksConfig {
-    /// Loopback address to bind on. The port is always assigned ephemerally.
+    /// Loopback address to bind on.
     pub bind: IpAddr,
+    /// TCP port to bind on. Production callers must use [`SOCKS5_PORT`];
+    /// tests may use `0` to let the OS assign an ephemeral port.
+    pub port: u16,
     /// Destination ports the proxy will forward to. Any other port is
     /// rejected with [`Reply::ConnectionNotAllowed`].
     pub allow_ports: Vec<u16>,
@@ -178,7 +189,7 @@ impl SocksServer {
             )));
         }
 
-        let bind_addr = SocketAddr::new(config.bind, 0);
+        let bind_addr = SocketAddr::new(config.bind, config.port);
         let listener = TcpListener::bind(bind_addr)
             .await
             .map_err(|e| crate::Error::Io {
@@ -1067,6 +1078,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(8);
         let cfg = SocksConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: 0,
             allow_ports,
             state_dir: dir.path().to_path_buf(),
         };
@@ -1115,6 +1127,7 @@ mod tests {
 
         let cfg = SocksConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: 0,
             allow_ports,
             state_dir: dir.path().to_path_buf(),
         };
@@ -1228,6 +1241,7 @@ mod tests {
         let routes = Arc::new(RwLock::new(RouteTable::new()));
         let cfg = SocksConfig {
             bind: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            port: 0,
             allow_ports: vec![443],
             state_dir: dir.path().to_path_buf(),
         };
@@ -1245,6 +1259,7 @@ mod tests {
         let routes = Arc::new(RwLock::new(RouteTable::new()));
         let cfg = SocksConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: 0,
             allow_ports: vec![443],
             state_dir: dir.path().to_path_buf(),
         };
@@ -2008,5 +2023,54 @@ mod tests {
         SocksServer::remove_discovery_files(dir.path());
         assert!(!dir.path().join("socks5.port").exists());
         assert!(!dir.path().join("socks5.auth").exists());
+    }
+
+    // ─── Fixed-port tests ─────────────────────────────────────────────────────
+
+    /// Assert that `SocksServer::bind` always uses `SOCKS5_PORT` (24424).
+    ///
+    /// This test binds to the fixed port so it cannot run concurrently with
+    /// another test (or a running daemon) that already holds 24424. Mark it
+    /// `#[ignore]` so it is skipped in the default `cargo nextest run` pass
+    /// (which may execute on a machine where the daemon is live) and can be
+    /// opted into explicitly with `--ignored` when verifying the constant.
+    #[tokio::test]
+    #[ignore = "binds port 24424; run with --ignored on a machine without a live VPN daemon"]
+    async fn socks5_binds_to_fixed_port_24424() {
+        let dir = tempdir().unwrap();
+        let (tx, _rx) = mpsc::channel(8);
+        let routes = Arc::new(RwLock::new(RouteTable::new()));
+        let cfg = SocksConfig {
+            bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: SOCKS5_PORT,
+            allow_ports: vec![443],
+            state_dir: dir.path().to_path_buf(),
+        };
+        let audit = Arc::new(AuditLog::new());
+        let (_server, endpoint) =
+            SocksServer::bind(cfg, routes, tx, None, audit, empty_discovery())
+                .await
+                .unwrap();
+        assert_eq!(
+            endpoint.port, SOCKS5_PORT,
+            "SOCKS5 listener must bind to SOCKS5_PORT ({SOCKS5_PORT}), got {}",
+            endpoint.port
+        );
+    }
+
+    /// Assert that `write_discovery_files` records the fixed port in `socks5.port`.
+    ///
+    /// Calls `write_discovery_files` directly so the test does not need to
+    /// hold the real port and can run unconditionally.
+    #[test]
+    fn socks5_port_file_contains_24424() {
+        let dir = tempdir().unwrap();
+        write_discovery_files(dir.path(), SOCKS5_PORT, "deadbeef").unwrap();
+        let contents = std::fs::read_to_string(dir.path().join("socks5.port")).unwrap();
+        assert_eq!(
+            contents.trim(),
+            "24424",
+            "socks5.port file must contain the fixed port 24424"
+        );
     }
 }
