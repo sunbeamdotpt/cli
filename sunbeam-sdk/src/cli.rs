@@ -676,6 +676,42 @@ pub enum WorktreeAction {
         #[arg(value_enum)]
         shell: WtShell,
     },
+    /// Cherry-pick commits from another worktree's branch into the destination.
+    ///
+    /// Default destination is the current cwd's worktree; override with
+    /// `--into <branch>`. Worktrees share `.git`, so any branch is reachable
+    /// by name — no fetch needed. Refs starting with `~` or `^` and ranges
+    /// without an explicit branch prefix are expanded against `--from`
+    /// (`~3..` → `<from>~3..<from>`, `~3..~1` → `<from>~3..<from>~1`).
+    ///
+    /// Always passes `--signoff` to `git cherry-pick`.
+    #[command(name = "cherry-pick", alias = "pick")]
+    CherryPick {
+        /// Source branch to pick commits from.
+        #[arg(long)]
+        from: String,
+        /// Commit refs or ranges (e.g. `abc123`, `~3..`, `<from>~5..<from>~2`).
+        #[arg(required = true)]
+        refs: Vec<String>,
+        /// Destination worktree branch (default: current cwd's worktree).
+        #[arg(long)]
+        into: Option<String>,
+        /// Edit each commit message before committing (`-e`).
+        #[arg(short = 'e', long)]
+        edit: bool,
+        /// Stage changes but don't commit (`-n`).
+        #[arg(short = 'n', long)]
+        no_commit: bool,
+        /// Append `(cherry picked from commit ...)` to the message (`-x`).
+        #[arg(short = 'x')]
+        annotate: bool,
+        /// Mainline parent number when picking a merge commit.
+        #[arg(short = 'm', long)]
+        mainline: Option<u32>,
+        /// Allow picking into a dirty destination worktree.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
