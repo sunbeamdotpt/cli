@@ -293,6 +293,12 @@ pub enum ServiceAction {
         #[command(subcommand)]
         action: TransitAction,
     },
+
+    /// Delete a Job by namespace/name (workaround for k8s Job immutability).
+    DeleteJob {
+        /// Job reference in the form <namespace>/<name>.
+        target: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
