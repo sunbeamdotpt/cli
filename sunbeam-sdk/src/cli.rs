@@ -676,6 +676,22 @@ pub enum WorktreeAction {
         #[arg(value_enum)]
         shell: WtShell,
     },
+    /// Install the shell integration into your rc file (idempotent).
+    ///
+    /// Auto-detects shell from `$SHELL`, picks the matching rc file
+    /// (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`), and appends
+    /// the eval line if not already present. Re-run safely.
+    ShellInstall {
+        /// Shell flavor (default: detect from `$SHELL`).
+        #[arg(long, value_enum)]
+        shell: Option<WtShell>,
+        /// Override the rc file path.
+        #[arg(long)]
+        rc_file: Option<std::path::PathBuf>,
+        /// Print what would be added without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Cherry-pick commits from another worktree's branch into the destination.
     ///
     /// Default destination is the current cwd's worktree; override with
