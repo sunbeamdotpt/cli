@@ -68,10 +68,14 @@ pub async fn cmd_doctor() -> Result<()> {
     }
 
     // 6. OpenBao
-    if let Some(pod) =
-        crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
-            .await
+    if let Some((pod, unlabeled)) =
+        crate::kube::find_pod_by_label_or_any(
+            "data",
+            "app.kubernetes.io/name=openbao,component=server",
+        )
+        .await
     {
+        let label_note = if unlabeled { " (unlabeled)" } else { "" };
         match crate::kube::kube_exec("data", &pod, &["bao", "status", "-format=json"], None).await {
             Ok((0, out)) => {
                 let sealed = serde_json::from_str::<serde_json::Value>(&out)
@@ -79,14 +83,14 @@ pub async fn cmd_doctor() -> Result<()> {
                     .and_then(|v| v.get("sealed")?.as_bool())
                     .unwrap_or(true);
                 if sealed {
-                    warn("OpenBao: sealed");
+                    warn(&format!("OpenBao{label_note}: sealed"));
                     failures += 1;
                 } else {
-                    ok("OpenBao: unsealed");
+                    ok(&format!("OpenBao{label_note}: unsealed"));
                 }
             }
             _ => {
-                warn("OpenBao: status check failed");
+                warn(&format!("OpenBao{label_note}: status check failed"));
                 failures += 1;
             }
         }
