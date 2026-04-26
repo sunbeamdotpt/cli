@@ -764,6 +764,89 @@ fn expand_part(p: &str, from: &str) -> String {
     p.to_string()
 }
 
+/// Detect the user's shell from `$SHELL`.
+fn detect_shell() -> Result<crate::cli::WtShell> {
+    let raw = std::env::var("SHELL").unwrap_or_default();
+    let basename = raw.rsplit('/').next().unwrap_or("");
+    match basename {
+        "bash" => Ok(crate::cli::WtShell::Bash),
+        "zsh" => Ok(crate::cli::WtShell::Zsh),
+        "fish" => Ok(crate::cli::WtShell::Fish),
+        _ => Err(SunbeamError::config(format!(
+            "could not detect shell from $SHELL={raw:?}; pass --shell <bash|zsh|fish>"
+        ))),
+    }
+}
+
+fn default_rc_path(shell: crate::cli::WtShell) -> Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .map_err(|_| SunbeamError::config("$HOME not set; pass --rc-file <path>"))?;
+    let h = PathBuf::from(home);
+    Ok(match shell {
+        crate::cli::WtShell::Bash => h.join(".bashrc"),
+        crate::cli::WtShell::Zsh => h.join(".zshrc"),
+        crate::cli::WtShell::Fish => h.join(".config/fish/config.fish"),
+    })
+}
+
+fn install_line(shell: crate::cli::WtShell) -> &'static str {
+    match shell {
+        crate::cli::WtShell::Bash => r#"eval "$(sunbeam wt shell-init bash)""#,
+        crate::cli::WtShell::Zsh => r#"eval "$(sunbeam wt shell-init zsh)""#,
+        crate::cli::WtShell::Fish => "sunbeam wt shell-init fish | source",
+    }
+}
+
+/// Idempotently install the shell integration into the user's rc file.
+pub fn shell_install(
+    shell: Option<crate::cli::WtShell>,
+    rc_file: Option<&Path>,
+    dry_run: bool,
+) -> Result<()> {
+    use std::io::Write;
+
+    let shell = match shell {
+        Some(s) => s,
+        None => detect_shell()?,
+    };
+    let rc_path = match rc_file {
+        Some(p) => p.to_path_buf(),
+        None => default_rc_path(shell)?,
+    };
+
+    let line = install_line(shell);
+    let marker = "# sunbeam worktree shell integration (managed by `sunbeam wt shell-install`)";
+    let block = format!("\n{marker}\n{line}\n");
+
+    let existing = std::fs::read_to_string(&rc_path).unwrap_or_default();
+    if existing.contains("sunbeam wt shell-init") {
+        eprintln!("☀ already installed in {}", rc_path.display());
+        return Ok(());
+    }
+    if dry_run {
+        println!("would append to {}:\n{block}", rc_path.display());
+        return Ok(());
+    }
+
+    if let Some(parent) = rc_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_ctx(|| format!("creating parent of {}", rc_path.display()))?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&rc_path)
+        .with_ctx(|| format!("opening {}", rc_path.display()))?;
+    f.write_all(block.as_bytes())
+        .with_ctx(|| format!("writing to {}", rc_path.display()))?;
+    eprintln!("☀ installed shell integration in {}", rc_path.display());
+    eprintln!(
+        "  open a new shell, or `source {}`, to activate `sunbeam wt use`",
+        rc_path.display()
+    );
+    Ok(())
+}
+
 /// Drop into an interactive `$SHELL` with cwd set to the worktree for `branch`.
 /// Blocks until the user exits the shell.
 pub fn use_shell(branch: &str) -> Result<()> {
