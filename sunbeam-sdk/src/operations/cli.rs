@@ -243,6 +243,27 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
             print!("{}", crate::operations::worktree::shell_init_script(shell));
             Ok(())
         }
+        WorktreeAction::CherryPick {
+            from,
+            refs,
+            into,
+            edit,
+            no_commit,
+            annotate,
+            mainline,
+            force,
+        } => crate::operations::worktree::cherry_pick(
+            crate::operations::worktree::CherryPickOpts {
+                from: &from,
+                refs: &refs,
+                into: into.as_deref(),
+                edit,
+                no_commit,
+                annotate,
+                mainline,
+                force,
+            },
+        ),
     }
 }
 
