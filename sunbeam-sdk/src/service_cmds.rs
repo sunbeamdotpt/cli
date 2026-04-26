@@ -100,6 +100,37 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
         ServiceAction::Top { service } => cmd_top(&service).await,
         ServiceAction::Edit { service } => cmd_edit(&service).await,
         ServiceAction::Transit { action } => cmd_transit(action).await,
+        ServiceAction::DeleteJob { target } => cmd_delete_job(&target).await,
+    }
+}
+
+/// Delete a Kubernetes Job by `<namespace>/<name>` via the daemon's k8s proxy.
+///
+/// Workaround for k8s Job immutability: once a Job is created, its spec can't
+/// be updated, so re-applying a changed Job manifest is a no-op until the old
+/// Job is deleted. This wraps that delete so operators don't have to drop to
+/// raw kubectl + manual SOCKS proxy plumbing.
+async fn cmd_delete_job(target: &str) -> Result<()> {
+    use k8s_openapi::api::batch::v1::Job;
+    use kube::api::{Api, DeleteParams};
+
+    let (ns, name) = match target.split_once('/') {
+        Some((n, j)) if !n.is_empty() && !j.is_empty() => (n, j),
+        _ => bail!("expected <namespace>/<name>, got {target:?}"),
+    };
+    let client = crate::kube::get_client().await?;
+    let jobs: Api<Job> = Api::namespaced(client, ns);
+    match jobs.delete(name, &DeleteParams::default()).await {
+        Ok(_) => {
+            crate::output::ok(&format!("deleted job {ns}/{name}"));
+            Ok(())
+        }
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            bail!("job {ns}/{name} not found")
+        }
+        Err(e) => Err(crate::error::SunbeamError::kube(format!(
+            "delete job {ns}/{name} failed: {e}"
+        ))),
     }
 }
 
