@@ -234,6 +234,15 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
         WorktreeAction::Use { branch } => {
             crate::operations::worktree::use_shell(&branch)
         }
+        WorktreeAction::Path { branch } => {
+            let p = crate::operations::worktree::path_of(&branch)?;
+            println!("{}", p.display());
+            Ok(())
+        }
+        WorktreeAction::ShellInit { shell } => {
+            print!("{}", crate::operations::worktree::shell_init_script(shell));
+            Ok(())
+        }
     }
 }
 
