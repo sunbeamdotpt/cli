@@ -654,11 +654,35 @@ pub enum WorktreeAction {
     ///
     /// Spawns `$SHELL` with its cwd set to the worktree path. Exiting that
     /// shell returns you to your original cwd. Aliases: `enter`, `cd`, `shell`.
-    #[command(alias = "enter", alias = "cd", alias = "shell")]
+    ///
+    /// To `cd` in the *current* shell instead of spawning a subshell, source
+    /// the wrapper from `sunbeam wt shell-init <shell>` — that turns this
+    /// subcommand into a function that does a real `cd`.
+    #[command(alias = "enter", alias = "shell")]
     Use {
         /// Branch whose worktree to enter.
         branch: String,
     },
+    /// Print the absolute path of a worktree (for shell wrappers / scripts).
+    Path {
+        /// Branch whose worktree path to print.
+        branch: String,
+    },
+    /// Emit a shell init script that makes `sunbeam wt use` `cd` in the
+    /// current shell instead of spawning a subshell. Source from your rc:
+    /// `eval "$(sunbeam wt shell-init zsh)"`.
+    ShellInit {
+        /// Shell flavor.
+        #[arg(value_enum)]
+        shell: WtShell,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub enum WtShell {
+    Bash,
+    Zsh,
+    Fish,
 }
 
 #[derive(Subcommand, Debug)]
