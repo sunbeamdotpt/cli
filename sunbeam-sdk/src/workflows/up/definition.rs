@@ -100,8 +100,8 @@ pub fn build() -> WorkflowDefinition {
         .then::<WriteVaultRole>()
         .name("write-vso-role")
         .config(json!({"mount": "kubernetes", "role": "vso", "config": {
-            "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe",
+            "bound_service_account_names": "default,gitserv",
+            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe,gitserv,oci",
             "policies": "vso-reader",
             "ttl": "1h"
         }}))

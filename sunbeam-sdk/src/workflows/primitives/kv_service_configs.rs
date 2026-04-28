@@ -55,6 +55,13 @@ pub fn all_service_configs() -> Vec<Value> {
         json!({"service":"headscale","fields":[
             {"key":"api-key","generator":"static:"}
         ]}),
+        // Zot OCI registry — OIDC client secret for Hydra.
+        // Hydra Maester also writes CLIENT_ID/CLIENT_SECRET to the zot-oidc K8s Secret
+        // via the OAuth2Client CR; this slot is a belt-and-suspenders path so the
+        // secret/zot path exists in OpenBao before VSO tries to read it.
+        json!({"service":"zot","fields":[
+            {"key":"oidc_client_secret","generator":"rand_token"}
+        ]}),
     ]
 }
 
@@ -84,6 +91,7 @@ pub fn all_service_names() -> Vec<&'static str> {
         "grafana",
         "scaleway-s3",
         "headscale",
+        "zot",
     ]
 }
 
@@ -104,9 +112,9 @@ mod tests {
 
     #[test]
     fn service_count() {
-        // 10 independent + 1 kratos-admin (dependent)
-        assert_eq!(all_service_configs().len(), 10);
-        assert_eq!(all_service_names().len(), 11);
+        // 11 independent + 1 kratos-admin (dependent)
+        assert_eq!(all_service_configs().len(), 11);
+        assert_eq!(all_service_names().len(), 12);
     }
 
     #[test]

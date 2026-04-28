@@ -25,6 +25,8 @@ pub(crate) const PG_USERS: &[&str] = &[
     "kratos",
     "hydra",
     "gitea",
+    "gitserv",
+    "keto",
     "penpot",
     "stalwart",
     "headscale",
@@ -480,7 +482,7 @@ mod tests {
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
         assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 8);
+        assert_eq!(PG_USERS.len(), 10);
         assert!(PG_USERS.contains(&"kratos"));
         assert!(PG_USERS.contains(&"hydra"));
         assert!(PG_USERS.contains(&"wfe"));
@@ -521,6 +523,8 @@ mod tests {
             "kratos",
             "hydra",
             "gitea",
+            "gitserv",
+            "keto",
             "penpot",
             "stalwart",
             "headscale",
