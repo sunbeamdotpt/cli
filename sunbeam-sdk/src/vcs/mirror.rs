@@ -70,7 +70,7 @@ struct MirrorStatusRow {
 
 pub async fn run(args: MirrorArgs, endpoint: &str, format: OutputFormat) -> Result<()> {
     let domain = crate::config::domain().to_string();
-    let token = resolve_token(&domain)?;
+    let token = resolve_token(&domain).await?;
     let mut client = connect_repo_client(endpoint, &token).await?;
 
     match args.command {

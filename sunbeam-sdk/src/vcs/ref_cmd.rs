@@ -42,7 +42,7 @@ struct RefRow {
 
 pub async fn run(args: RefArgs, endpoint: &str, format: OutputFormat) -> Result<()> {
     let domain = crate::config::domain().to_string();
-    let token = resolve_token(&domain)?;
+    let token = resolve_token(&domain).await?;
     let mut client = connect_ref_client(endpoint, &token).await?;
 
     match args.command {

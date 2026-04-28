@@ -6,6 +6,7 @@
 //! [`crate::wfectl::output`] helpers (table default, `--format json`
 //! opt-in).
 
+pub mod admin;
 pub mod client;
 pub mod mirror;
 pub mod ref_cmd;
@@ -32,6 +33,8 @@ pub enum VcsCommand {
     Mirror(mirror::MirrorArgs),
     /// Ref inspection (list/get refs for a repo).
     Ref(ref_cmd::RefArgs),
+    /// Admin surface: org creation, membership, and relation management.
+    Admin(admin::AdminArgs),
 }
 
 /// Dispatch a `sunbeam vcs …` invocation.
@@ -41,7 +44,7 @@ pub async fn handle(args: VcsArgs, domain: &str) -> Result<()> {
             "domain not set — run `sunbeam config set --domain <domain>` first".into(),
         ));
     }
-    let endpoint = format!("https://gitserv.{domain}:443");
+    let endpoint = format!("https://source.{domain}:443");
 
     match args.command {
         VcsCommand::Repo(repo_args) => {
@@ -55,6 +58,10 @@ pub async fn handle(args: VcsArgs, domain: &str) -> Result<()> {
         VcsCommand::Ref(ref_args) => {
             tracing::debug!(?ref_args, "vcs ref");
             ref_cmd::run(ref_args, &endpoint, args.format).await
+        }
+        VcsCommand::Admin(admin_args) => {
+            tracing::debug!(?admin_args, "vcs admin");
+            admin::run(admin_args, &endpoint, args.format).await
         }
     }
 }

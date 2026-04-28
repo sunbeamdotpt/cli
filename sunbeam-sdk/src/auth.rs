@@ -298,13 +298,19 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
 // Client ID resolution
 // ---------------------------------------------------------------------------
 
-/// Try to read the client_id from K8s secret `oidc-sunbeam-cli` in `ory` namespace.
-/// Falls back to the default client ID.
+/// Read the actual client_id Hydra-maester wrote into the K8s Secret named in
+/// the OAuth2Client CR (`secretName: oidc-sunbeam-cli`). Hydra-maester does
+/// NOT honor a fixed `clientId` in the CR — it always generates a UUID and
+/// stamps it into the Secret as `CLIENT_ID`, so the CLI must read that.
+///
+/// Falls back to the literal `DEFAULT_CLIENT_ID` only when the Secret is
+/// unreachable (no kubeconfig, no cluster). That fallback path is mostly for
+/// offline `--help` invocations; an actual login attempt will fail at Hydra.
 async fn resolve_client_id() -> String {
-    // The OAuth2Client is pre-created with a known client_id matching
-    // DEFAULT_CLIENT_ID ("sunbeam-cli") via a pre-seeded K8s secret.
-    // No cluster access needed.
-    DEFAULT_CLIENT_ID.to_string()
+    match crate::kube::kube_get_secret_field("ory", "oidc-sunbeam-cli", "CLIENT_ID").await {
+        Ok(id) if !id.is_empty() => id,
+        _ => DEFAULT_CLIENT_ID.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -543,9 +549,12 @@ pub async fn cmd_auth_sso_login_with_redirect(
     let (listener, port) = bind_callback_listener().await?;
     let redirect_uri = format!("http://localhost:{port}/callback");
 
-    // Build authorization URL
+    // Build authorization URL.
+    // `audience=gitserv` is a Hydra extension parameter: it causes Hydra to
+    // stamp the `aud` claim in the issued access token so gitserv's
+    // JwtVerifier accepts the token (it validates aud == "gitserv").
     let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&audience=gitserv&code_challenge={}&code_challenge_method=S256&state={}",
         discovery.authorization_endpoint,
         urlencoding(&client_id),
         urlencoding(&redirect_uri),
