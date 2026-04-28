@@ -58,14 +58,22 @@ fn project_name<'a>(ws: &'a WorkspaceConfig, opts: &'a ComposeOptions) -> &'a st
         .unwrap_or(&ws.workspace.name)
 }
 
-/// Build the base `docker compose -f <path> -p <project>` argument prefix.
-fn base_args(compose_path: &Path, project: &str) -> Vec<String> {
+/// Build the base `docker compose -f <path> -p <project> --project-directory <root>` prefix.
+///
+/// `--project-directory` makes relative paths in the compose file (volumes,
+/// build contexts) resolve against the workspace root rather than the
+/// materialized compose file's parent (`.sunbeam/compose/`). Without it,
+/// any `./foo` bind mount would resolve to `<root>/.sunbeam/compose/foo`,
+/// which is never what the manifest author meant.
+fn base_args(compose_path: &Path, project: &str, workspace_root: &Path) -> Vec<String> {
     vec![
         "compose".into(),
         "-f".into(),
         compose_path.to_string_lossy().into_owned(),
         "-p".into(),
         project.into(),
+        "--project-directory".into(),
+        workspace_root.to_string_lossy().into_owned(),
     ]
 }
 
@@ -138,7 +146,7 @@ pub async fn up(
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
-    let mut args = base_args(&compose_path, &project);
+    let mut args = base_args(&compose_path, &project, workspace_root);
     args.push("up".into());
 
     if opts.wait {
@@ -175,7 +183,7 @@ pub async fn down(
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
-    let mut args = base_args(&compose_path, &project);
+    let mut args = base_args(&compose_path, &project, workspace_root);
     args.push("down".into());
 
     if opts.volumes {
@@ -206,7 +214,7 @@ pub async fn ps(
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
-    let mut args = base_args(&compose_path, &project);
+    let mut args = base_args(&compose_path, &project, workspace_root);
     args.extend(["ps".into(), "--format".into(), "json".into()]);
 
     let output = Command::new("docker")
@@ -233,7 +241,7 @@ pub async fn logs(
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
-    let mut args = base_args(&compose_path, &project);
+    let mut args = base_args(&compose_path, &project, workspace_root);
     args.push("logs".into());
     if follow {
         args.push("-f".into());
