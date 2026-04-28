@@ -21,10 +21,16 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// The nine standard build verbs. Every project defines some subset of these
 /// in its `targets` map; unlisted verbs default to [`Target::Skip`].
 ///
-/// These match `sunbeam project <verb>` subcommands.
+/// These match `sunbeam project <verb>` subcommands. Custom verbs (e.g. `seed`,
+/// `coverage`) are also allowed in `targets:` and run via `sunbeam project run <verb>`.
 pub const STANDARD_VERBS: &[&str] = &[
     "build", "test", "lint", "fmt", "package", "deploy", "dev", "clean", "doc",
 ];
+
+/// True if `verb` matches one of the nine [`STANDARD_VERBS`].
+pub fn is_standard_verb(verb: &str) -> bool {
+    STANDARD_VERBS.contains(&verb)
+}
 
 /// Top-level `sunbeam.yaml` document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -200,9 +206,14 @@ impl ProjectConfig {
             ));
         }
         for verb in self.targets.keys() {
-            if !STANDARD_VERBS.contains(&verb.as_str()) {
+            if verb.is_empty() {
+                return Err(SunbeamError::Config(
+                    "target verb name must not be empty".into(),
+                ));
+            }
+            if !verb.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
                 return Err(SunbeamError::Config(format!(
-                    "unknown target verb {verb:?}; expected one of {STANDARD_VERBS:?}"
+                    "invalid target verb {verb:?}; allowed: ASCII letters, digits, '-', '_'"
                 )));
             }
         }
@@ -344,17 +355,36 @@ project:
     }
 
     #[test]
-    fn unknown_verb_rejected() {
+    fn custom_verb_accepted() {
         let yaml = r"
 schema: 1
 project:
   name: x
 targets:
-  ship:
+  seed:
+    exec: ./bootstrap.sh
+  coverage:
+    exec: [cargo, llvm-cov]
+";
+        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        assert!(cfg.has_target("seed"));
+        assert!(cfg.has_target("coverage"));
+        assert!(!is_standard_verb("seed"));
+        assert!(is_standard_verb("build"));
+    }
+
+    #[test]
+    fn invalid_verb_name_rejected() {
+        let yaml = r"
+schema: 1
+project:
+  name: x
+targets:
+  bad verb:
     exec: do-it
 ";
         let err = ProjectConfig::from_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("ship"));
+        assert!(err.to_string().contains("invalid target verb"));
     }
 
     #[test]
