@@ -125,6 +125,52 @@ pub enum Verb {
         #[command(subcommand)]
         action: WorktreeAction,
     },
+
+    /// Build the current project (shortcut for `sunbeam project build`).
+    Build {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Run the current project's tests (shortcut for `sunbeam project test`).
+    Test {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Lint the current project (shortcut for `sunbeam project lint`).
+    Lint {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Format the current project (shortcut for `sunbeam project fmt`).
+    Fmt {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Package the current project (shortcut for `sunbeam project package`).
+    Package {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Deploy the current project (shortcut for `sunbeam project deploy`).
+    Deploy {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Run the current project's dev server (shortcut for `sunbeam project dev`).
+    Dev {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Clean the current project's build artifacts (shortcut for `sunbeam project clean`).
+    Clean {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Generate the current project's docs (shortcut for `sunbeam project doc`).
+    Doc {
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -563,6 +609,25 @@ pub enum ProjectAction {
         #[arg(default_value = "build")]
         verb: String,
     },
+    /// Run a custom verb defined in this project's `targets`.
+    Run {
+        /// Verb name (must exist in `targets:` of the autodiscovered sunbeam.yaml).
+        verb: String,
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Print the dependency DAG as a tree.
+    Graph {
+        /// Render every owned project's tree (otherwise just the current project).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Validate sunbeam.yaml — checks workspace refs, dep cycles, and reports issues.
+    Check {
+        /// Validate every owned project (otherwise just the current project).
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -574,6 +639,12 @@ pub struct ProjectRunArgs {
     /// Run only for the named project(s). Implies workspace mode.
     #[arg(long = "project", short = 'p')]
     pub projects: Vec<String>,
+    /// When `--project foo` is used, also run foo's transitive deps first.
+    #[arg(long)]
+    pub with_deps: bool,
+    /// Cap parallelism within each topo group (default: unbounded).
+    #[arg(long)]
+    pub jobs: Option<usize>,
     /// Print commands before running.
     #[arg(long)]
     pub verbose: bool,
@@ -1152,6 +1223,16 @@ pub async fn dispatch() -> Result<()> {
         Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
 
         Some(Verb::Wt { action }) => crate::operations::cli::dispatch_worktree(action).await,
+
+        Some(Verb::Build { args }) => crate::project::cli::dispatch(ProjectAction::Build(args)).await,
+        Some(Verb::Test { args }) => crate::project::cli::dispatch(ProjectAction::Test(args)).await,
+        Some(Verb::Lint { args }) => crate::project::cli::dispatch(ProjectAction::Lint(args)).await,
+        Some(Verb::Fmt { args }) => crate::project::cli::dispatch(ProjectAction::Fmt(args)).await,
+        Some(Verb::Package { args }) => crate::project::cli::dispatch(ProjectAction::Package(args)).await,
+        Some(Verb::Deploy { args }) => crate::project::cli::dispatch(ProjectAction::Deploy(args)).await,
+        Some(Verb::Dev { args }) => crate::project::cli::dispatch(ProjectAction::Dev(args)).await,
+        Some(Verb::Clean { args }) => crate::project::cli::dispatch(ProjectAction::Clean(args)).await,
+        Some(Verb::Doc { args }) => crate::project::cli::dispatch(ProjectAction::Doc(args)).await,
     }
 }
 
@@ -1867,6 +1948,111 @@ mod tests {
                 assert_eq!(description.as_deref(), Some("initial release"));
             }
             _ => panic!("expected Operations Stack Pin"),
+        }
+    }
+
+    #[test]
+    fn test_top_level_build_alias() {
+        let cli = parse(&["sunbeam", "build"]);
+        match cli.verb {
+            Some(Verb::Build { args }) => {
+                assert!(!args.all);
+                assert!(args.projects.is_empty());
+                assert!(!args.with_deps);
+                assert!(args.jobs.is_none());
+            }
+            _ => panic!("expected top-level Build alias"),
+        }
+    }
+
+    #[test]
+    fn test_top_level_test_alias_with_flags() {
+        let cli = parse(&["sunbeam", "test", "--all", "--dry-run", "--jobs", "4"]);
+        match cli.verb {
+            Some(Verb::Test { args }) => {
+                assert!(args.all);
+                assert!(args.dry_run);
+                assert_eq!(args.jobs, Some(4));
+            }
+            _ => panic!("expected top-level Test alias"),
+        }
+    }
+
+    #[test]
+    fn test_top_level_aliases_all_present() {
+        for verb in [
+            "build", "test", "lint", "fmt", "package", "deploy", "dev", "clean", "doc",
+        ] {
+            let cli = parse(&["sunbeam", verb]);
+            assert!(
+                matches!(
+                    cli.verb,
+                    Some(Verb::Build { .. })
+                        | Some(Verb::Test { .. })
+                        | Some(Verb::Lint { .. })
+                        | Some(Verb::Fmt { .. })
+                        | Some(Verb::Package { .. })
+                        | Some(Verb::Deploy { .. })
+                        | Some(Verb::Dev { .. })
+                        | Some(Verb::Clean { .. })
+                        | Some(Verb::Doc { .. })
+                ),
+                "verb {verb} did not parse to a top-level alias"
+            );
+        }
+    }
+
+    #[test]
+    fn test_project_run_custom_verb() {
+        let cli = parse(&["sunbeam", "project", "run", "seed"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Run { verb, args },
+            }) => {
+                assert_eq!(verb, "seed");
+                assert!(!args.all);
+            }
+            _ => panic!("expected Project Run"),
+        }
+    }
+
+    #[test]
+    fn test_project_graph_all() {
+        let cli = parse(&["sunbeam", "project", "graph", "--all"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Graph { all },
+            }) => {
+                assert!(all);
+            }
+            _ => panic!("expected Project Graph"),
+        }
+    }
+
+    #[test]
+    fn test_project_check() {
+        let cli = parse(&["sunbeam", "project", "check"]);
+        match cli.verb {
+            Some(Verb::Project {
+                action: ProjectAction::Check { all },
+            }) => {
+                assert!(!all);
+            }
+            _ => panic!("expected Project Check"),
+        }
+    }
+
+    #[test]
+    fn test_with_deps_flag() {
+        let cli = parse(&[
+            "sunbeam", "build", "-p", "sol", "--with-deps",
+        ]);
+        match cli.verb {
+            Some(Verb::Build { args }) => {
+                assert_eq!(args.projects, vec!["sol"]);
+                assert!(args.with_deps);
+            }
+            _ => panic!("expected Build with --with-deps"),
         }
     }
 }
