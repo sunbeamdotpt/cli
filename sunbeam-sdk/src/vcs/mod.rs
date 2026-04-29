@@ -8,9 +8,11 @@
 
 pub mod admin;
 pub mod client;
+pub mod maintenance;
 pub mod mirror;
 pub mod ref_cmd;
 pub mod repo;
+pub mod signing_key;
 
 use crate::error::{Result, SunbeamError};
 use crate::output::OutputFormat;
@@ -35,6 +37,11 @@ pub enum VcsCommand {
     Ref(ref_cmd::RefArgs),
     /// Admin surface: org creation, membership, and relation management.
     Admin(admin::AdminArgs),
+    /// OpenPGP signing-key management (upload/list/revoke/bundle/rotate).
+    #[command(name = "signing-key")]
+    SigningKey(signing_key::SigningKeyArgs),
+    /// Per-repo git maintenance (repack, bitmap regen, retention sweep).
+    Maintenance(maintenance::MaintenanceArgs),
 }
 
 /// Dispatch a `sunbeam vcs …` invocation.
@@ -62,6 +69,14 @@ pub async fn handle(args: VcsArgs, domain: &str) -> Result<()> {
         VcsCommand::Admin(admin_args) => {
             tracing::debug!(?admin_args, "vcs admin");
             admin::run(admin_args, &endpoint, args.format).await
+        }
+        VcsCommand::SigningKey(sk_args) => {
+            tracing::debug!(?sk_args, "vcs signing-key");
+            signing_key::run(sk_args, &endpoint, args.format).await
+        }
+        VcsCommand::Maintenance(maint_args) => {
+            tracing::debug!(?maint_args, "vcs maintenance");
+            maintenance::run(maint_args, &endpoint, args.format).await
         }
     }
 }

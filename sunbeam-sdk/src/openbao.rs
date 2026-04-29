@@ -4,6 +4,7 @@
 //! without changing callers.
 
 use crate::error::{Result, ResultExt};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::collections::HashMap;
 use vaultrs::client::{Client, VaultClient, VaultClientSettingsBuilder};
 
@@ -27,6 +28,14 @@ pub struct SealStatusResponse {
 #[derive(Debug, Default)]
 pub struct UnsealResponse {
     pub sealed: bool,
+}
+
+/// Transit key information.
+#[derive(Debug, Clone)]
+pub struct TransitKeyInfo {
+    pub key_type: String,
+    pub latest_version: u32,
+    pub public_key_raw: Vec<u8>,  // 32-byte Ed25519 pub
 }
 
 impl BaoClient {
@@ -354,6 +363,136 @@ impl BaoClient {
         self.write(&format!("database/static-roles/{name}"), &data)
             .await?;
         Ok(())
+    }
+
+    // ── Transit secrets engine ──────────────────────────────────────────
+
+    /// Create a transit key. Idempotent — returns Ok on duplicate.
+    pub async fn transit_create_key(
+        &self,
+        mount: &str,
+        name: &str,
+        key_type: &str,  // e.g. "ed25519"
+    ) -> Result<()> {
+        let path = format!("transit/{}/keys/{}", mount, name);
+        match self.write(&path, &serde_json::json!({ "type": key_type })).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                // Vault returns 400 when the key already exists.
+                if msg.contains("key already exists") || msg.contains("400") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Read a transit key's public material.
+    pub async fn transit_get_public_key(
+        &self,
+        mount: &str,
+        name: &str,
+    ) -> Result<TransitKeyInfo> {
+        let path = format!("transit/{}/keys/{}", mount, name);
+        let resp = self
+            .read(&path)
+            .await?
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("transit key not found: {path}")
+            ))?;
+
+        // Walk: data.keys.<latest_version>.public_key
+        let keys = resp
+            .get("data")
+            .and_then(|d| d.get("keys"))
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("missing data.keys in transit key response: {path}")
+            ))?;
+
+        // The keys object has numeric string keys ("1", "2", …). Take the last
+        // one (highest version).
+        let latest = keys
+            .as_object()
+            .and_then(|m| {
+                m.keys()
+                    .filter_map(|k| k.parse::<u64>().ok().map(|n| (n, k.as_str())))
+                    .max_by_key(|(n, _)| *n)
+                    .and_then(|(_, k)| m.get(k))
+            })
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("missing latest version in transit key: {path}")
+            ))?;
+
+        let pub_key_b64 = latest
+            .get("public_key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("missing public_key field in transit key: {path}")
+            ))?;
+
+        let public_key_raw = BASE64
+            .decode(pub_key_b64)
+            .map_err(|e| crate::error::SunbeamError::Other(
+                format!("failed to decode public_key base64: {e}")
+            ))?;
+
+        Ok(TransitKeyInfo {
+            key_type: latest
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ed25519")
+                .to_string(),
+            latest_version: keys
+                .as_object()
+                .and_then(|m| {
+                    m.keys()
+                        .filter_map(|k| k.parse::<u32>().ok())
+                        .max()
+                })
+                .unwrap_or(1),
+            public_key_raw,
+        })
+    }
+
+    /// Sign data with a transit key.
+    /// `prehashed = false` → standard Ed25519 (data hashed by Ed25519's internal SHA-512).
+    /// `prehashed = true` → Ed25519ph (input is already a digest).
+    pub async fn transit_sign(
+        &self,
+        mount: &str,
+        name: &str,
+        data: &[u8],
+        prehashed: bool,
+    ) -> Result<Vec<u8>> {
+        let path = format!("transit/{}/sign/{}", mount, name);
+        let body = serde_json::json!({
+            "input": BASE64.encode(data),
+            "prehashed": prehashed,
+        });
+        let resp = self.write(&path, &body).await?;
+
+        // Parse the "signature" field; format is "vault:v1:<base64>".
+        let sig_str = resp
+            .get("data")
+            .and_then(|d| d.get("signature"))
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("missing signature field in transit sign response")
+            ))?;
+
+        let raw_b64 = sig_str
+            .strip_prefix("vault:v1:")
+            .ok_or_else(|| crate::error::SunbeamError::Other(
+                format!("signature missing vault:v1: prefix: {sig_str}")
+            ))?;
+
+        BASE64
+            .decode(raw_b64)
+            .map_err(|e| crate::error::SunbeamError::Other(
+                format!("failed to decode signature base64: {e}")
+            ))
     }
 }
 

@@ -510,6 +510,23 @@ pub async fn get_token() -> Result<String> {
     ))
 }
 
+/// Return the authenticated user's subject (`sub`) claim from the cached
+/// access token. Used by commands that default to the current user when no
+/// explicit `--user` flag is supplied.
+pub fn whoami() -> Result<String> {
+    let cached = read_cache().map_err(|_| {
+        SunbeamError::identity(
+            "Not logged in. Run `sunbeam auth login` to authenticate.",
+        )
+    })?;
+    let payload = decode_jwt_payload(&cached.access_token)?;
+    payload
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| SunbeamError::identity("No 'sub' claim in access token"))
+}
+
 /// Print the current access token as a JSON headers object.
 /// Designed for use as a Claude Code MCP `headersHelper`.
 /// Output: {"Authorization": "Bearer <token>"}

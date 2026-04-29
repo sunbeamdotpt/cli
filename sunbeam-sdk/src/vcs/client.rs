@@ -13,6 +13,7 @@ use gitserv_proto::pb::{
     admin_service_client::AdminServiceClient,
     ref_service_client::RefServiceClient,
     repo_service_client::RepoServiceClient,
+    signing_key_service_client::SigningKeyServiceClient,
 };
 
 /// Authenticated RepoService client (includes mirror RPCs per proto).
@@ -23,6 +24,9 @@ pub type RefClient = RefServiceClient<InterceptedService<Channel, BearerAuth>>;
 
 /// Authenticated AdminService client.
 pub type AdminClient = AdminServiceClient<InterceptedService<Channel, BearerAuth>>;
+
+/// Authenticated SigningKeyService client.
+pub type SigningKeyClient = SigningKeyServiceClient<InterceptedService<Channel, BearerAuth>>;
 
 pub async fn connect_repo_client(endpoint: &str, token: &str) -> Result<RepoClient> {
     let (channel, auth) = connect_with_bearer(endpoint, token)
@@ -43,6 +47,13 @@ pub async fn connect_admin_client(endpoint: &str, token: &str) -> Result<AdminCl
         .await
         .map_err(|e| SunbeamError::network(format!("gitserv connect: {e}")))?;
     Ok(AdminServiceClient::with_interceptor(channel, auth))
+}
+
+pub async fn connect_signing_key_client(endpoint: &str, token: &str) -> Result<SigningKeyClient> {
+    let (channel, auth) = connect_with_bearer(endpoint, token)
+        .await
+        .map_err(|e| SunbeamError::network(format!("gitserv connect: {e}")))?;
+    Ok(SigningKeyServiceClient::with_interceptor(channel, auth))
 }
 
 /// Resolve a valid SSO access token, refreshing it automatically if expired.
