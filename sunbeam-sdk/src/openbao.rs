@@ -36,6 +36,9 @@ pub struct TransitKeyInfo {
     pub key_type: String,
     pub latest_version: u32,
     pub public_key_raw: Vec<u8>,  // 32-byte Ed25519 pub
+    /// Creation timestamp of the latest key version, as reported by Vault.
+    /// Used to produce a stable OpenPGP V4 fingerprint across restarts.
+    pub creation_time: chrono::DateTime<chrono::Utc>,
 }
 
 impl BaoClient {
@@ -438,6 +441,17 @@ impl BaoClient {
                 format!("failed to decode public_key base64: {e}")
             ))?;
 
+        // Parse the creation_time field from the latest version entry.
+        // Vault returns RFC 3339, e.g. "2024-01-15T12:00:00Z".
+        // Fall back to epoch if missing or unparseable so that the server
+        // can still boot; the fallback is stable (same value every restart).
+        let creation_time = latest
+            .get("creation_time")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap_or(chrono::Utc::now()));
+
         Ok(TransitKeyInfo {
             key_type: latest
                 .get("type")
@@ -453,6 +467,7 @@ impl BaoClient {
                 })
                 .unwrap_or(1),
             public_key_raw,
+            creation_time,
         })
     }
 
