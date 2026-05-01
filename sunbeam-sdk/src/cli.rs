@@ -364,6 +364,17 @@ pub enum ServiceAction {
         /// Job reference in the form <namespace>/<name>.
         target: String,
     },
+
+    /// Read a Kubernetes Secret value through the proxy-aware kube client.
+    /// Distinct from `secrets` (which reads OpenBao KV); this targets actual
+    /// `core/v1.Secret` resources.
+    KubeSecret {
+        /// Secret reference in the form <namespace>/<name>.
+        target: String,
+        /// Field name within the secret's `data` map. Value is base64-decoded.
+        #[arg(short, long)]
+        key: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

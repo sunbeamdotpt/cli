@@ -101,6 +101,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
         ServiceAction::Edit { service } => cmd_edit(&service).await,
         ServiceAction::Transit { action } => cmd_transit(action).await,
         ServiceAction::DeleteJob { target } => cmd_delete_job(&target).await,
+        ServiceAction::KubeSecret { target, key } => cmd_kube_secret_get(&target, &key).await,
     }
 }
 
@@ -132,6 +133,52 @@ async fn cmd_delete_job(target: &str) -> Result<()> {
             "delete job {ns}/{name} failed: {e}"
         ))),
     }
+}
+
+/// Read a single field from a Kubernetes Secret through the proxy-aware kube
+/// client. Prints the base64-decoded value to stdout with no trailing newline
+/// so it composes cleanly inside `$(...)` substitutions for operator
+/// bootstrap scripts (e.g. piping a vault root token into a `bao` exec).
+///
+/// Distinct from `cmd_secrets_get` which reads OpenBao KV; this targets
+/// `core/v1.Secret` resources. The pod-resolution path doesn't apply because
+/// secrets aren't pods.
+async fn cmd_kube_secret_get(target: &str, key: &str) -> Result<()> {
+    use k8s_openapi::api::core::v1::Secret;
+    use kube::api::Api;
+    use std::io::Write;
+
+    let (ns, name) = match target.split_once('/') {
+        Some((n, s)) if !n.is_empty() && !s.is_empty() => (n, s),
+        _ => bail!("expected <namespace>/<name>, got {target:?}"),
+    };
+
+    let client = crate::kube::get_client().await?;
+    let secrets: Api<Secret> = Api::namespaced(client, ns);
+    let secret = secrets.get(name).await.map_err(|e| {
+        crate::error::SunbeamError::kube(format!("get secret {ns}/{name} failed: {e}"))
+    })?;
+
+    let data = secret
+        .data
+        .as_ref()
+        .ok_or_else(|| SunbeamError::Other(format!("secret {ns}/{name} has no data field")))?;
+    let raw = data.get(key).ok_or_else(|| {
+        let keys: Vec<&str> = data.keys().map(String::as_str).collect();
+        SunbeamError::Other(format!(
+            "key {key:?} not found in secret {ns}/{name} (have: {})",
+            keys.join(", ")
+        ))
+    })?;
+
+    // `ByteString.0` is the already-decoded payload (the kube crate handles
+    // the wire-format base64 transparently). Write it raw so it composes
+    // cleanly inside `$(...)` substitutions.
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(&raw.0)
+        .map_err(|e| SunbeamError::Other(format!("stdout write failed: {e}")))?;
+    Ok(())
 }
 
 /// Manage OpenBao Transit: enable mounts, create keys, read public key metadata.

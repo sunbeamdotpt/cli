@@ -91,12 +91,22 @@ pub async fn pod_exec_interactive(
     container: Option<&str>,
     cmd: &[String],
 ) -> Result<i32> {
-    // stdin/stdout/tty=true, stderr=false (stderr is incompatible with tty).
+    // Allocate a remote TTY only for genuinely interactive sessions: no
+    // explicit command and a real local TTY on stdin. With a command provided
+    // the remote process exits when its argv finishes; allocating a TTY in
+    // that case keeps the kube exec session open waiting for stdin EOF that
+    // never arrives. Piped stdin (script, heredoc) also wants no TTY so EOF
+    // propagates cleanly. Stderr can only be requested when there's no TTY.
+    let stdin_is_tty = unsafe {
+        use std::os::unix::io::AsRawFd;
+        libc::isatty(std::io::stdin().as_raw_fd()) == 1
+    };
+    let interactive = cmd.is_empty() && stdin_is_tty;
     let ap = AttachParams {
         stdin: true,
         stdout: true,
-        stderr: false,
-        tty: true,
+        stderr: !interactive,
+        tty: interactive,
         container: container.map(String::from),
         ..AttachParams::default()
     };
