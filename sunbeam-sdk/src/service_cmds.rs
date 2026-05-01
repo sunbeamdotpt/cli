@@ -397,15 +397,17 @@ async fn cmd_describe(service: &str) -> Result<()> {
     Ok(())
 }
 
-/// Exec into a service pod with an optional command.
+/// Exec into a pod with an optional command.
+///
+/// Accepts three target forms:
+///   - registry service name (pod found by `app=<deploy>` label)
+///   - explicit `<namespace>/<pod>` (works for any pod regardless of owner kind)
+///   - bare pod name (resolved against pods in any namespace known to the registry)
 async fn cmd_exec(service: &str, container: Option<&str>, command: &[String]) -> Result<()> {
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::Api;
 
-    let (ns, deploy) = resolve_service(service).await?;
-    let pod = crate::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
-        .await
-        .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
+    let (ns, pod) = resolve_pod_target(service).await?;
 
     let argv: Vec<String> = if command.is_empty() {
         vec!["/bin/sh".to_string()]
@@ -420,6 +422,53 @@ async fn cmd_exec(service: &str, container: Option<&str>, command: &[String]) ->
         warn(&format!("exec exited with code {code}"));
     }
     Ok(())
+}
+
+/// Resolve the target argument for `service exec` / `service shell` /
+/// `service port-forward` to a concrete (namespace, pod) pair.
+///
+/// See [`cmd_exec`] for accepted forms.
+async fn resolve_pod_target(target: &str) -> Result<(String, String)> {
+    use k8s_openapi::api::core::v1::Pod;
+    use kube::api::Api;
+
+    if let Some((ns, pod)) = target.split_once('/') {
+        if !ns.is_empty() && !pod.is_empty() {
+            return Ok((ns.to_string(), pod.to_string()));
+        }
+    }
+
+    if let Ok((ns, deploy)) = resolve_service(target).await {
+        if let Some(pod) =
+            crate::kube::find_pod_by_label(&ns, &format!("app={deploy}")).await
+        {
+            return Ok((ns, pod));
+        }
+        return Err(SunbeamError::Other(format!(
+            "No pod found for service {target} (looked up app={deploy} in {ns})"
+        )));
+    }
+
+    let reg = get_registry().await?;
+    let client = crate::kube::get_client().await?;
+    let mut tried = Vec::new();
+    for ns in reg
+        .all()
+        .iter()
+        .map(|s| s.namespace.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        if pods.get_metadata(target).await.is_ok() {
+            return Ok((ns, target.to_string()));
+        }
+        tried.push(ns);
+    }
+
+    Err(SunbeamError::Other(format!(
+        "Unknown service: '{target}' (also searched as a pod name in: {})",
+        tried.join(", ")
+    )))
 }
 
 /// Port-forward to a service pod. Parses `"local:remote"` or `"port"` mappings
