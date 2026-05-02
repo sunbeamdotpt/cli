@@ -133,12 +133,16 @@ pub async fn pod_exec_interactive(
     let proc_stdout = attached
         .stdout()
         .ok_or_else(|| SunbeamError::Other("no stdout stream from exec".into()))?;
+    // stderr is only available in non-TTY mode (`stderr` was set to !interactive
+    // above); when None, the kube exec multiplexes stderr onto stdout.
+    let proc_stderr = attached.stderr();
 
     // Raw mode — restores on drop even on panic/early return.
     let _raw = RawModeGuard::new();
 
     let stdin_task = tokio::spawn(pipe_stdin(proc_stdin));
     let stdout_task = tokio::spawn(pipe_stdout(proc_stdout));
+    let stderr_task = proc_stderr.map(|s| tokio::spawn(pipe_stderr(s)));
 
     // Wait for remote status.
     let exit_code = if let Some(fut) = attached.take_status() {
@@ -160,6 +164,9 @@ pub async fn pod_exec_interactive(
 
     stdin_task.abort();
     stdout_task.abort();
+    if let Some(t) = stderr_task {
+        t.abort();
+    }
     let _ = attached.join().await;
     // Dropping _raw restores cooked mode here.
 
@@ -176,4 +183,10 @@ async fn pipe_stdout<R: AsyncRead + Unpin>(mut r: R) {
     let mut stdout = tokio::io::stdout();
     let _ = tokio::io::copy(&mut r, &mut stdout).await;
     let _ = stdout.flush().await;
+}
+
+async fn pipe_stderr<R: AsyncRead + Unpin>(mut r: R) {
+    let mut stderr = tokio::io::stderr();
+    let _ = tokio::io::copy(&mut r, &mut stderr).await;
+    let _ = stderr.flush().await;
 }
