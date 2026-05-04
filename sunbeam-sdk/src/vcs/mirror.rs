@@ -1,5 +1,6 @@
 //! `sunbeam vcs mirror …` — pull/push mirror config + manual sync.
 
+use buffa::MessageField;
 use crate::error::Result;
 use crate::output::{OutputFormat, render};
 use crate::vcs::client::{connect_repo_client, map_status, resolve_token};
@@ -82,15 +83,16 @@ pub async fn run(args: MirrorArgs, endpoint: &str, format: OutputFormat) -> Resu
         } => {
             let cfg = client
                 .create_pull_mirror(CreatePullMirrorRequest {
-                    repo: Some(RepoId { ulid: repo_id }),
+                    repo: MessageField::some(RepoId { ulid: repo_id, ..Default::default() }),
                     upstream_url,
                     credential_ref: credential_ref.unwrap_or_default(),
                     sync_interval_s: interval_seconds,
                     ref_allowlist: vec![],
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(&mirror_row(&cfg), format)
         }
         MirrorCmd::AddPush {
@@ -100,19 +102,21 @@ pub async fn run(args: MirrorArgs, endpoint: &str, format: OutputFormat) -> Resu
         } => {
             let cfg = client
                 .add_push_mirror(AddPushMirrorRequest {
-                    repo: Some(RepoId { ulid: repo_id }),
+                    repo: MessageField::some(RepoId { ulid: repo_id, ..Default::default() }),
                     downstream_url: target_url,
                     credential_ref: credential_ref.unwrap_or_default(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(&mirror_row(&cfg), format)
         }
         MirrorCmd::Sync { mirror_id } => {
             client
                 .trigger_mirror_sync(TriggerMirrorSyncRequest {
                     mirror_ulid: mirror_id,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?;
@@ -122,10 +126,11 @@ pub async fn run(args: MirrorArgs, endpoint: &str, format: OutputFormat) -> Resu
             let resp = client
                 .get_mirror_status(GetMirrorStatusRequest {
                     mirror_ulid: mirror_id,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(
                 &MirrorStatusRow {
                     mirror_ulid: resp.mirror_ulid,
@@ -140,7 +145,7 @@ pub async fn run(args: MirrorArgs, endpoint: &str, format: OutputFormat) -> Resu
 }
 
 fn mirror_row(cfg: &gitserv_proto::pb::MirrorConfig) -> MirrorRow {
-    let repo_id = cfg.repo.as_ref().map(|r| r.ulid.clone()).unwrap_or_default();
+    let repo_id = cfg.repo.as_option().map(|r| r.ulid.clone()).unwrap_or_default();
     MirrorRow {
         ulid: cfg.ulid.clone(),
         repo_id,

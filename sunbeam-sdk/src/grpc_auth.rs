@@ -1,95 +1,75 @@
-//! Shared Tonic gRPC plumbing: bearer-token interceptor + channel builder.
+//! Shared connectrpc client plumbing: bearer-token config + connection builder.
 //!
 //! Used by every sunbeam subcommand that speaks gRPC to a sunbeam-owned
-//! service (wfectl, vcs, inbox, …). Services layer their own generated
-//! client on top via `InterceptedService<Channel, BearerAuth>`.
+//! service (wfectl, vcs, inbox, …). Services build their generated client
+//! on top via `XServiceClient::new(conn, config)`.
 
-use anyhow::{Context, Result, anyhow};
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use std::sync::Arc;
 
-/// Tonic interceptor that injects an `Authorization: Bearer <token>` header
-/// on every gRPC request. An empty token produces a no-op interceptor.
-#[derive(Clone)]
-pub struct BearerAuth {
-    header: Option<MetadataValue<tonic::metadata::Ascii>>,
-}
+use anyhow::{Context, Result};
+use connectrpc::Protocol;
+use connectrpc::client::{ClientConfig, Http2Connection, SharedHttp2Connection};
 
-impl BearerAuth {
-    pub fn new(token: &str) -> Result<Self> {
-        if token.is_empty() {
-            return Ok(Self { header: None });
-        }
-        let value = format!("Bearer {token}");
-        let header = MetadataValue::try_from(value)
-            .map_err(|e| anyhow!("invalid auth token (cannot encode as header): {e}"))?;
-        Ok(Self {
-            header: Some(header),
-        })
-    }
-}
-
-impl Interceptor for BearerAuth {
-    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-        if let Some(header) = &self.header {
-            req.metadata_mut().insert("authorization", header.clone());
-        }
-        Ok(req)
-    }
-}
-
-/// Build a tonic channel for the given server URL, enabling TLS with native
-/// roots when the scheme is `https`.
-pub async fn connect(server: &str) -> Result<Channel> {
-    let mut endpoint = Endpoint::from_shared(server.to_string())
+/// Build a plaintext or TLS HTTP/2 connection for the given server URL.
+///
+/// TLS is used automatically when the scheme is `https`. The returned
+/// `SharedHttp2Connection` is cheap to clone and can be shared across
+/// multiple client instances.
+pub async fn connect(server: &str) -> Result<SharedHttp2Connection> {
+    let uri: http::Uri = server
+        .parse()
         .with_context(|| format!("invalid server URL: {server}"))?;
 
-    if server.starts_with("https://") {
-        endpoint = endpoint
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .context("failed to configure TLS")?;
-    }
+    let conn = if server.starts_with("https://") {
+        let tls_config = Arc::new(
+            connectrpc::rustls::ClientConfig::builder()
+                .with_root_certificates(webpki_roots_store())
+                .with_no_client_auth(),
+        );
+        Http2Connection::connect_tls(uri, tls_config)
+            .await
+            .map_err(|e| anyhow::anyhow!("TLS connect failed: {e}"))?
+    } else {
+        Http2Connection::connect_plaintext(uri)
+            .await
+            .map_err(|e| anyhow::anyhow!("connect failed: {e}"))?
+    };
 
-    endpoint
-        .connect()
-        .await
-        .with_context(|| format!("failed to connect to {server}"))
+    Ok(conn.shared(256))
 }
 
-/// Build a channel + interceptor pair ready to wrap a generated tonic client.
-pub async fn connect_with_bearer(server: &str, token: &str) -> Result<(Channel, BearerAuth)> {
-    let channel = connect(server).await?;
-    let auth = BearerAuth::new(token)?;
-    Ok((channel, auth))
+/// Build a webpki root certificate store from the bundled `webpki-roots` crate.
+fn webpki_roots_store() -> connectrpc::rustls::RootCertStore {
+    let mut store = connectrpc::rustls::RootCertStore::empty();
+    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    store
+}
+
+/// Build a connection + pre-configured [`ClientConfig`] with the bearer token
+/// injected as the default `Authorization` header.
+pub async fn connect_with_bearer(
+    server: &str,
+    token: &str,
+) -> Result<(SharedHttp2Connection, ClientConfig)> {
+    let uri: http::Uri = server
+        .parse()
+        .with_context(|| format!("invalid server URL: {server}"))?;
+
+    let conn = connect(server).await?;
+    let mut config = ClientConfig::new(uri).protocol(Protocol::Grpc);
+    if !token.is_empty() {
+        config = config.default_header(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::try_from(format!("Bearer {token}"))
+                .with_context(|| "invalid auth token (cannot encode as header)")?,
+        );
+    }
+    Ok((conn, config))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bearer_auth_with_empty_token_injects_nothing() {
-        let mut auth = BearerAuth::new("").unwrap();
-        let req = tonic::Request::new(());
-        let out = auth.call(req).unwrap();
-        assert!(out.metadata().get("authorization").is_none());
-    }
-
-    #[test]
-    fn bearer_auth_injects_header() {
-        let mut auth = BearerAuth::new("ory_at_xyz").unwrap();
-        let req = tonic::Request::new(());
-        let out = auth.call(req).unwrap();
-        let header = out.metadata().get("authorization").unwrap();
-        assert_eq!(header.to_str().unwrap(), "Bearer ory_at_xyz");
-    }
-
-    #[test]
-    fn bearer_auth_rejects_invalid_chars() {
-        let result = BearerAuth::new("bad\ntoken");
-        assert!(result.is_err());
-    }
 
     #[tokio::test]
     async fn connect_invalid_url_returns_error() {
@@ -99,6 +79,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_to_unreachable_address_fails() {
+        // An unreachable address on a valid-scheme URL should error at connect time.
         let result = connect("http://127.0.0.1:1").await;
         assert!(result.is_err());
     }

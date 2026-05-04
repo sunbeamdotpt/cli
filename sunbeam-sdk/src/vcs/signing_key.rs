@@ -138,10 +138,11 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
             let resp = client
                 .list_signing_keys(ListSigningKeysRequest {
                     user_id: user_id.clone(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             let rows: Vec<SigningKeyRow> =
                 resp.keys.into_iter().map(SigningKeyRow::from_pb).collect();
             render_list(
@@ -167,10 +168,11 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
                 .upload_user_key(UploadUserKeyRequest {
                     user_id,
                     armored_cert,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(&UploadRow { fingerprint: resp.fingerprint }, format)
         }
 
@@ -180,6 +182,7 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
                 .revoke_key(RevokeKeyRequest {
                     user_id,
                     fingerprint,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?;
@@ -189,10 +192,10 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
         SigningKeyCmd::Bundle { user, out } => {
             let user_id = resolve_user_id(user)?;
             let resp = client
-                .get_key_directory(GetKeyDirectoryRequest { user_id })
+                .get_key_directory(GetKeyDirectoryRequest { user_id, ..Default::default() })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             match out {
                 Some(path) => {
                     std::fs::write(&path, resp.armored_bundle.as_bytes()).map_err(|e| {
@@ -213,6 +216,7 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
                     user_id,
                     subject_fingerprint: subject,
                     certification_packet: packet,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?;
@@ -226,10 +230,11 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
             let list_resp = client
                 .list_signing_keys(ListSigningKeysRequest {
                     user_id: user_id.clone(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
 
             // 2. Revoke each active key.
             let active_keys: Vec<_> = list_resp.keys.into_iter().filter(|k| k.active).collect();
@@ -238,6 +243,7 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
                     .revoke_key(RevokeKeyRequest {
                         user_id: user_id.clone(),
                         fingerprint: key.fingerprint.clone(),
+                        ..Default::default()
                     })
                     .await
                     .map_err(map_status)?;
@@ -251,10 +257,11 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
                     .upload_user_key(UploadUserKeyRequest {
                         user_id: user_id.clone(),
                         armored_cert,
+                        ..Default::default()
                     })
                     .await
                     .map_err(map_status)?
-                    .into_inner();
+                    .into_owned();
                 println!("uploaded: {}", up_resp.fingerprint);
             }
 
@@ -262,10 +269,11 @@ pub async fn run(args: SigningKeyArgs, endpoint: &str, format: OutputFormat) -> 
             let final_resp = client
                 .list_signing_keys(ListSigningKeysRequest {
                     user_id: user_id.clone(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             let rows: Vec<SigningKeyRow> = final_resp
                 .keys
                 .into_iter()

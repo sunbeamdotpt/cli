@@ -3,6 +3,7 @@
 //! Maps to `AdminService.RunMaintenance` gRPC:
 //!   run --repo <ulid> --kind <geometric_repack|bitmap_regen|retention_sweep>
 
+use buffa::MessageField;
 use crate::error::Result;
 use crate::output::{OutputFormat, render};
 use crate::vcs::client::{connect_admin_client, map_status, resolve_token};
@@ -30,9 +31,9 @@ pub enum MaintenanceCmd {
 
 fn parse_maintenance_kind(s: &str) -> std::result::Result<MaintenanceKind, String> {
     match s {
-        "geometric_repack" => Ok(MaintenanceKind::GeometricRepack),
-        "bitmap_regen" => Ok(MaintenanceKind::BitmapRegen),
-        "retention_sweep" => Ok(MaintenanceKind::RetentionSweep),
+        "geometric_repack" => Ok(MaintenanceKind::MAINTENANCE_KIND_GEOMETRIC_REPACK),
+        "bitmap_regen" => Ok(MaintenanceKind::MAINTENANCE_KIND_BITMAP_REGEN),
+        "retention_sweep" => Ok(MaintenanceKind::MAINTENANCE_KIND_RETENTION_SWEEP),
         other => Err(format!(
             "unknown maintenance kind '{other}'; valid: geometric_repack, bitmap_regen, retention_sweep"
         )),
@@ -59,12 +60,13 @@ pub async fn run(args: MaintenanceArgs, endpoint: &str, format: OutputFormat) ->
         MaintenanceCmd::Run { repo, kind } => {
             let resp = client
                 .run_maintenance(RunMaintenanceRequest {
-                    repo: Some(RepoId { ulid: repo }),
-                    kind: kind as i32,
+                    repo: MessageField::some(RepoId { ulid: repo, ..Default::default() }),
+                    kind: kind.into(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
 
             let result = MaintenanceResult {
                 status: resp.status,
@@ -112,7 +114,7 @@ mod tests {
         ]) {
             MaintenanceCmd::Run { repo, kind } => {
                 assert_eq!(repo, "01K000000000000000000000A");
-                assert_eq!(kind, MaintenanceKind::GeometricRepack);
+                assert_eq!(kind, MaintenanceKind::MAINTENANCE_KIND_GEOMETRIC_REPACK);
             }
         }
     }
@@ -128,7 +130,7 @@ mod tests {
             "bitmap_regen",
         ]) {
             MaintenanceCmd::Run { kind, .. } => {
-                assert_eq!(kind, MaintenanceKind::BitmapRegen);
+                assert_eq!(kind, MaintenanceKind::MAINTENANCE_KIND_BITMAP_REGEN);
             }
         }
     }
@@ -144,7 +146,7 @@ mod tests {
             "retention_sweep",
         ]) {
             MaintenanceCmd::Run { kind, .. } => {
-                assert_eq!(kind, MaintenanceKind::RetentionSweep);
+                assert_eq!(kind, MaintenanceKind::MAINTENANCE_KIND_RETENTION_SWEEP);
             }
         }
     }

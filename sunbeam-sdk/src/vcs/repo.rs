@@ -1,5 +1,6 @@
 //! `sunbeam vcs repo …` — repository CRUD + fork.
 
+use buffa::MessageField;
 use crate::error::Result;
 use crate::output::{OutputFormat, render, render_list};
 use crate::vcs::client::{connect_repo_client, map_status, resolve_token};
@@ -79,11 +80,12 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
                 .create_repo(CreateRepoRequest {
                     org_slug: org.clone(),
                     repo_slug: slug.clone(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
-            let id = resp.id.map(|r| r.ulid).unwrap_or_default();
+                .into_owned();
+            let id = resp.id.into_option().map(|r| r.ulid).unwrap_or_default();
             render(
                 &RepoRow {
                     id,
@@ -95,11 +97,12 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
         RepoCmd::Get { id } => {
             let resp = client
                 .get_repo(GetRepoRequest {
-                    id: Some(RepoId { ulid: id }),
+                    id: MessageField::some(RepoId { ulid: id, ..Default::default() }),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(&render_repo(&resp), format)
         }
         RepoCmd::List {
@@ -112,10 +115,11 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
                     org_slug: org,
                     limit: page_size.unwrap_or(0),
                     page_token: page_token.unwrap_or_default(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             let rows: Vec<RepoRow> = resp.repos.iter().map(render_repo).collect();
             render_list(
                 &rows,
@@ -127,7 +131,8 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
         RepoCmd::Delete { id } => {
             client
                 .delete_repo(DeleteRepoRequest {
-                    id: Some(RepoId { ulid: id }),
+                    id: MessageField::some(RepoId { ulid: id, ..Default::default() }),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?;
@@ -140,14 +145,15 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
         } => {
             let resp = client
                 .fork(ForkRequest {
-                    source: Some(RepoId { ulid: source_id }),
+                    source: MessageField::some(RepoId { ulid: source_id, ..Default::default() }),
                     target_org_slug: target_org.clone(),
                     target_repo_slug: target_slug.clone(),
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
-            let id = resp.id.map(|r| r.ulid).unwrap_or_default();
+                .into_owned();
+            let id = resp.id.into_option().map(|r| r.ulid).unwrap_or_default();
             render(
                 &RepoRow {
                     id,
@@ -160,7 +166,7 @@ pub async fn run(args: RepoArgs, endpoint: &str, format: OutputFormat) -> Result
 }
 
 fn render_repo(r: &gitserv_proto::pb::GetRepoResponse) -> RepoRow {
-    let id = r.id.as_ref().map(|i| i.ulid.clone()).unwrap_or_default();
+    let id = r.id.as_option().map(|i| i.ulid.clone()).unwrap_or_default();
     RepoRow {
         id,
         full_name: format!("{}/{}", r.org_slug, r.repo_slug),
@@ -174,11 +180,13 @@ mod tests {
     #[test]
     fn render_repo_builds_full_name_from_proto() {
         let proto = gitserv_proto::pb::GetRepoResponse {
-            id: Some(gitserv_proto::pb::RepoId {
+            id: buffa::MessageField::some(gitserv_proto::pb::RepoId {
                 ulid: "01K000000000000000000000A".into(),
+                ..Default::default()
             }),
             org_slug: "acme".into(),
             repo_slug: "widgets".into(),
+            ..Default::default()
         };
         let row = render_repo(&proto);
         assert_eq!(row.full_name, "acme/widgets");

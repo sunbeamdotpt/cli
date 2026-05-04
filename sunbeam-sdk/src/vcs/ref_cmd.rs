@@ -2,10 +2,10 @@
 //!
 //! Named `ref_cmd` to avoid collision with the `ref` keyword.
 
+use buffa::MessageField;
 use crate::error::Result;
 use crate::output::{OutputFormat, render, render_list};
 use crate::vcs::client::{connect_ref_client, map_status, resolve_token};
-use futures::StreamExt;
 use gitserv_proto::pb::{GetRefRequest, ListRefsRequest, RepoId};
 use serde::Serialize;
 
@@ -47,23 +47,21 @@ pub async fn run(args: RefArgs, endpoint: &str, format: OutputFormat) -> Result<
 
     match args.command {
         RefCmd::List { repo_id, prefix } => {
-            let stream = client
+            let mut stream = client
                 .list_refs(ListRefsRequest {
-                    repo: Some(RepoId { ulid: repo_id }),
+                    repo: MessageField::some(RepoId { ulid: repo_id, ..Default::default() }),
                     prefix: prefix.unwrap_or_default(),
+                    ..Default::default()
                 })
                 .await
-                .map_err(map_status)?
-                .into_inner();
-            let rows: Vec<RefRow> = stream
-                .filter_map(|r| async move {
-                    r.ok().map(|e| RefRow {
-                        name: e.name,
-                        oid: e.oid,
-                    })
-                })
-                .collect()
-                .await;
+                .map_err(map_status)?;
+            let mut rows: Vec<RefRow> = Vec::new();
+            while let Some(entry) = stream.message().await.map_err(map_status)? {
+                rows.push(RefRow {
+                    name: entry.name.to_owned(),
+                    oid: entry.oid.to_owned(),
+                });
+            }
             render_list(
                 &rows,
                 &["NAME", "OID"],
@@ -74,12 +72,13 @@ pub async fn run(args: RefArgs, endpoint: &str, format: OutputFormat) -> Result<
         RefCmd::Get { repo_id, name } => {
             let resp = client
                 .get_ref(GetRefRequest {
-                    repo: Some(RepoId { ulid: repo_id }),
+                    repo: MessageField::some(RepoId { ulid: repo_id, ..Default::default() }),
                     name,
+                    ..Default::default()
                 })
                 .await
                 .map_err(map_status)?
-                .into_inner();
+                .into_owned();
             render(
                 &RefRow {
                     name: resp.name,

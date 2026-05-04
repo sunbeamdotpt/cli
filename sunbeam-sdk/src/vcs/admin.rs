@@ -4,6 +4,7 @@
 //! Admin RPCs require the caller to hold a system-admin or org-admin tuple
 //! in Keto; the server enforces this — the CLI is a thin marshalling layer.
 
+use buffa::MessageField;
 use crate::error::Result;
 use crate::output::{OutputFormat, render, render_list};
 use crate::vcs::client::{connect_admin_client, map_status, resolve_token};
@@ -126,10 +127,10 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
         AdminCmd::Org(OrgArgs { command }) => match command {
             OrgCmd::Create { slug } => {
                 let resp = client
-                    .create_org(CreateOrgRequest { slug: slug.clone() })
+                    .create_org(CreateOrgRequest { slug: slug.clone(), ..Default::default() })
                     .await
                     .map_err(map_status)?
-                    .into_inner();
+                    .into_owned();
                 render(
                     &OrgRow { id: resp.ulid, slug },
                     format,
@@ -139,9 +140,10 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
             OrgCmd::AddMember { org_id, user, role } => {
                 client
                     .add_member(AddMemberRequest {
-                        org: Some(OrgId { ulid: org_id }),
+                        org: MessageField::some(OrgId { ulid: org_id, ..Default::default() }),
                         user,
                         role,
+                        ..Default::default()
                     })
                     .await
                     .map_err(map_status)?;
@@ -151,8 +153,9 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
             OrgCmd::RemoveMember { org_id, user } => {
                 client
                     .remove_member(RemoveMemberRequest {
-                        org: Some(OrgId { ulid: org_id }),
+                        org: MessageField::some(OrgId { ulid: org_id, ..Default::default() }),
                         user,
+                        ..Default::default()
                     })
                     .await
                     .map_err(map_status)?;
@@ -165,6 +168,7 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
                         object,
                         relation,
                         subject,
+                        ..Default::default()
                     })
                     .await
                     .map_err(map_status)?;
@@ -173,10 +177,10 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
 
             OrgCmd::ListRelations { object } => {
                 let resp = client
-                    .list_relations(ListRelationsRequest { object })
+                    .list_relations(ListRelationsRequest { object, ..Default::default() })
                     .await
                     .map_err(map_status)?
-                    .into_inner();
+                    .into_owned();
                 let rows: Vec<RelationRow> = resp
                     .relations
                     .into_iter()
@@ -212,25 +216,25 @@ pub async fn run(args: AdminArgs, endpoint: &str, format: OutputFormat) -> Resul
                         .to_owned()
                 };
                 let resp = client
-                    .add_ssh_ca(AddSshCaRequest { public_key, comment })
+                    .add_ssh_ca(AddSshCaRequest { public_key, comment, ..Default::default() })
                     .await
                     .map_err(map_status)?
-                    .into_inner();
+                    .into_owned();
                 render(&SshCaRow::from_pb(resp), format)
             }
             SshCaCmd::Revoke { id } => {
                 client
-                    .revoke_ssh_ca(RevokeSshCaRequest { id })
+                    .revoke_ssh_ca(RevokeSshCaRequest { id, ..Default::default() })
                     .await
                     .map_err(map_status)?;
                 Ok(())
             }
             SshCaCmd::List { all } => {
                 let resp = client
-                    .list_ssh_cas(ListSshCasRequest { include_revoked: all })
+                    .list_ssh_cas(ListSshCasRequest { include_revoked: all, ..Default::default() })
                     .await
                     .map_err(map_status)?
-                    .into_inner();
+                    .into_owned();
                 let rows: Vec<SshCaRow> =
                     resp.cas.into_iter().map(SshCaRow::from_pb).collect();
                 render_list(

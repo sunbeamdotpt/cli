@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod exec;
 pub mod gitea;
 pub mod grpc_auth;
+pub mod grpc_auth_tonic;
 pub mod kube;
 pub mod discovery;
 pub mod manifests;

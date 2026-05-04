@@ -76,10 +76,17 @@ wfe-core.workspace = true
 wfe-sqlite.workspace = true
 wfe-yaml.workspace = true
 wfe-server-protos.workspace = true
-tonic = { workspace = true, features = ["tls-native-roots"] }
-tonic-prost.workspace = true
-prost-types.workspace = true
-prost.workspace = true
+connectrpc = { version = "0.3.3", features = ["client", "client-tls"] }
+buffa = { version = "0.3" }
+webpki-roots = { workspace = true }
+
+# tonic: used by wfectl (wfe-server-protos is tonic-based)
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+# http: used by grpc_auth (connectrpc client config)
+http = { workspace = true }
 
 # gitserv gRPC client (dual-address: local path + Gitea registry for publish)
 gitserv-proto = { path = "../../../libs/gitserv/crates/gitserv-proto", version = "2.0", registry = "sunbeam" }
