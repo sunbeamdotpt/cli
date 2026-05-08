@@ -1,3 +1,5 @@
+//! Daemon operational state and handle types.
+
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};

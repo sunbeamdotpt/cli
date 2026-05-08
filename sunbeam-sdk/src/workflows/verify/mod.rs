@@ -1,6 +1,7 @@
 //! Verify workflow — VSO ↔ OpenBao end-to-end verification.
 
 pub mod definition;
+/// Steps.
 pub mod steps;
 
 use crate::output;

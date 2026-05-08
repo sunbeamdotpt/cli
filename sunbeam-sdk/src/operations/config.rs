@@ -21,8 +21,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Top-level `sunbeam.workspace.yaml` document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceConfig {
+    /// Schema.
     pub schema: u32,
 
+    /// Workspace.
     pub workspace: WorkspaceMeta,
 
     /// Repos bucketed by kind. Every bucket is optional; missing buckets
@@ -47,6 +49,7 @@ pub struct WorkspaceConfig {
 /// Workspace identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceMeta {
+    /// Name.
     pub name: String,
 
     /// Root path, relative to the directory containing the manifest.
@@ -67,6 +70,7 @@ fn default_root() -> String {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Repos {
     #[serde(default)]
+    /// Owned.
     pub owned: BTreeMap<String, Repo>,
 
     /// 3P libraries we've forked (`3p:` in YAML).
@@ -74,12 +78,15 @@ pub struct Repos {
     pub third_party: BTreeMap<String, Repo>,
 
     #[serde(default)]
+    /// Forks.
     pub forks: BTreeMap<String, Repo>,
 
     #[serde(default)]
+    /// Research.
     pub research: BTreeMap<String, Repo>,
 
     #[serde(default)]
+    /// Retired.
     pub retired: BTreeMap<String, Repo>,
 }
 
@@ -129,18 +136,26 @@ pub struct Stack {
 /// A single repo entry merged with its bucket name, for flat iteration.
 #[derive(Debug, Clone)]
 pub struct RepoEntry<'a> {
+    /// Bucket.
     pub bucket: RepoBucket,
+    /// Name.
     pub name: &'a str,
+    /// Repo.
     pub repo: &'a Repo,
 }
 
 /// Which top-level bucket a repo lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoBucket {
+    /// Owned.
     Owned,
+    /// Thirdparty.
     ThirdParty,
+    /// Forks.
     Forks,
+    /// Research.
     Research,
+    /// Retired.
     Retired,
 }
 

@@ -1,3 +1,5 @@
+//! DERP frame codec and protocol constants.
+
 use bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -7,26 +9,43 @@ pub const HEADER_SIZE: usize = 5;
 pub const MAX_FRAME_SIZE: usize = 65535;
 
 // Frame type constants.
+/// Server public key sent at the start of a DERP session.
 pub const FRAME_SERVER_KEY: u8 = 0x01;
+/// Client info (including mesh key) sent after receiving the server key.
 pub const FRAME_CLIENT_INFO: u8 = 0x02;
+/// Server info frame acknowledging the client.
 pub const FRAME_SERVER_INFO: u8 = 0x03;
+/// Client sends an encapsulated packet to a peer via the relay.
 pub const FRAME_SEND_PACKET: u8 = 0x04;
+/// Client receives an encapsulated packet from a peer via the relay.
 pub const FRAME_RECV_PACKET: u8 = 0x05;
+/// Empty frame to keep the TCP connection alive.
 pub const FRAME_KEEP_ALIVE: u8 = 0x06;
+/// Client tells the server which DERP region it prefers.
 pub const FRAME_NOTE_PREFERRED: u8 = 0x07;
+/// Server informs the client that a peer has disconnected.
 pub const FRAME_PEER_GONE: u8 = 0x08;
+/// Server informs the client that a peer is connected to this relay.
 pub const FRAME_PEER_PRESENT: u8 = 0x09;
+/// Subscribe to peer present/gone notifications.
 pub const FRAME_WATCH_CONNS: u8 = 0x0a;
+/// Request to close a peer's connection (administrative).
 pub const FRAME_CLOSE_PEER: u8 = 0x0b;
+/// Latency probe sent to the server.
 pub const FRAME_PING: u8 = 0x0c;
+/// Reply to a latency probe.
 pub const FRAME_PONG: u8 = 0x0d;
+/// Server health status message.
 pub const FRAME_HEALTH: u8 = 0x0e;
+/// Server is restarting; clients should reconnect.
 pub const FRAME_RESTARTING: u8 = 0x0f;
 
 /// A DERP protocol frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerpFrame {
+    /// Frame type.
     pub frame_type: u8,
+    /// Payload.
     pub payload: BytesMut,
 }
 

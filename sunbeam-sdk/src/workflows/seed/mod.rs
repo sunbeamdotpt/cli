@@ -2,6 +2,7 @@
 //! K8s secret mirroring, and Kratos admin identity creation.
 
 pub mod definition;
+/// Steps.
 pub mod steps;
 
 use crate::output;

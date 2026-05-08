@@ -7,9 +7,13 @@
 //! - [`stack`]    (added later) — `ops stack pin/apply` for pinned snapshots.
 
 pub mod cli;
+/// Compose.
 pub mod compose;
+/// Config.
 pub mod config;
+/// Stack.
 pub mod stack;
+/// Worktree.
 pub mod worktree;
 
 pub use config::{

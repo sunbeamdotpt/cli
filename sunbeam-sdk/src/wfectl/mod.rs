@@ -5,25 +5,41 @@
 //! Auth is handled by sunbeam's SSO flow (`sunbeam auth sso`).
 
 pub mod cancel;
+/// Client.
 pub mod client;
+/// Definitions.
 pub mod definitions;
+/// Get.
 pub mod get;
+/// List.
 pub mod list;
+/// Logs.
 pub mod logs;
+/// Output.
 pub mod output;
+/// Publish.
 pub mod publish;
+/// Register.
 pub mod register;
+/// Resume.
 pub mod resume;
+/// Run.
 pub mod run;
+/// Search logs.
 pub mod search_logs;
+/// Struct util.
 pub mod struct_util;
+/// Suspend.
 pub mod suspend;
+/// Validate.
 pub mod validate;
+/// Watch.
 pub mod watch;
 
 use output::OutputFormat;
 
 #[derive(Debug, clap::Subcommand)]
+/// Workflowscommand.
 pub enum WorkflowsCommand {
     /// Register a workflow definition from a YAML file.
     Register(register::RegisterArgs),

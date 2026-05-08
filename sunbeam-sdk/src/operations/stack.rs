@@ -15,17 +15,26 @@ use crate::operations::{Stack, WorkspaceConfig};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+/// Stacksummary.
 pub struct StackSummary {
+    /// Name.
     pub name: String,
+    /// Description.
     pub description: Option<String>,
+    /// Project count.
     pub project_count: usize,
+    /// Pinned at.
     pub pinned_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Stackdiffentry.
 pub struct StackDiffEntry {
+    /// Project.
     pub project: String,
+    /// Left.
     pub left: Option<String>,
+    /// Right.
     pub right: Option<String>,
 }
 
@@ -33,6 +42,7 @@ pub struct StackDiffEntry {
 // list
 // ---------------------------------------------------------------------------
 
+/// List.
 pub fn list(ws: &WorkspaceConfig) -> Vec<StackSummary> {
     ws.stacks
         .iter()
@@ -49,6 +59,7 @@ pub fn list(ws: &WorkspaceConfig) -> Vec<StackSummary> {
 // pin
 // ---------------------------------------------------------------------------
 
+/// Pin.
 pub fn pin(
     ws: &mut WorkspaceConfig,
     workspace_root: &Path,
@@ -103,6 +114,7 @@ pub fn pin(
 // save
 // ---------------------------------------------------------------------------
 
+/// Save.
 pub fn save(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<()> {
     let yaml = serde_yaml::to_string(ws)?;
     let dest = workspace_root.join("sunbeam.workspace.yaml");
@@ -117,6 +129,7 @@ pub fn save(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<()> {
 // apply
 // ---------------------------------------------------------------------------
 
+/// Apply.
 pub async fn apply(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
@@ -167,6 +180,7 @@ pub async fn apply(
 // diff
 // ---------------------------------------------------------------------------
 
+/// Diff.
 pub fn diff<'a>(
     ws: &'a WorkspaceConfig,
     workspace_root: &Path,

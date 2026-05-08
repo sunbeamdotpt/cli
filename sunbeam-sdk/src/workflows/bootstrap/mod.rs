@@ -1,6 +1,7 @@
 //! Bootstrap workflow — Gitea admin setup, org creation, OIDC configuration.
 
 pub mod definition;
+/// Steps.
 pub mod steps;
 
 use crate::output;

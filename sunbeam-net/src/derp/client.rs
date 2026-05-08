@@ -1,3 +1,5 @@
+//! DERP relay TCP client and session management.
+
 use bytes::{BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
 #[cfg(test)]

@@ -1,3 +1,5 @@
+//! DERP region selection and connection pool manager.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
