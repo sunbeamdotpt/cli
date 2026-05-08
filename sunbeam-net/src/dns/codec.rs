@@ -36,28 +36,40 @@ const MAX_POINTER_HOPS: usize = 16;
 #[derive(Debug, thiserror::Error)]
 pub enum DnsError {
     #[error("DNS message shorter than header ({0} < {HEADER_LEN})")]
+    /// Truncatedheader.
     TruncatedHeader(usize),
     #[error("DNS message truncated at offset {0}")]
+    /// Truncated.
     Truncated(usize),
     #[error("DNS name too long ({0} > {MAX_NAME_LEN})")]
+    /// Nametoolong.
     NameTooLong(usize),
     #[error("DNS label too long ({0} > {MAX_LABEL_LEN})")]
+    /// Labeltoolong.
     LabelTooLong(usize),
     #[error("DNS label contains invalid character {0:?}")]
+    /// Invalidlabelchar.
     InvalidLabelChar(char),
     #[error("DNS pointer loop exceeded {MAX_POINTER_HOPS} hops")]
+    /// Pointerloop.
     PointerLoop,
     #[error("DNS response has no {0} answer")]
+    /// Noanswer.
     NoAnswer(&'static str),
     #[error("DNS response id mismatch: expected {expected:#06x}, got {got:#06x}")]
+    /// Idmismatch.
     IdMismatch { expected: u16, got: u16 },
     #[error("DNS response rcode {0}")]
+    /// Rcode.
     Rcode(u8),
     #[error("DNS response flags indicate question, not response")]
+    /// Notresponse.
     NotResponse,
     #[error("DNS answer has malformed rdata length")]
+    /// Badrdlength.
     BadRdLength,
     #[error("DNS query type {0} not supported by encoder")]
+    /// Unsupportedquerytype.
     UnsupportedQueryType(u16),
 }
 
@@ -91,7 +103,9 @@ pub fn encode_query(id: u16, name: &str, qtype: u16) -> Result<Vec<u8>, DnsError
 /// An A or AAAA record extracted from a response, with its TTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IpRecord {
+    /// Addr.
     pub addr: IpAddr,
+    /// Ttl.
     pub ttl: u32,
 }
 

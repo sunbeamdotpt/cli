@@ -1,3 +1,5 @@
+//! VPN daemon lifecycle — bring-up, shutdown, and main loop.
+
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;

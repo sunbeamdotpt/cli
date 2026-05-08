@@ -1,3 +1,5 @@
+//! Node registration helpers (POST /machine/register).
+
 use crate::keys::NodeKeys;
 use crate::proto::types::{AuthInfo, HostInfo, NetInfo, RegisterRequest, RegisterResponse};
 

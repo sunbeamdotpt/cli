@@ -1,3 +1,5 @@
+//! CLI output formatting (table, JSON, YAML, step banners).
+
 use crate::error::{Result, SunbeamError};
 use serde::Serialize;
 
@@ -6,10 +8,14 @@ use serde::Serialize;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+/// Outputformat.
 pub enum OutputFormat {
     #[default]
+    /// Table.
     Table,
+    /// Json.
     Json,
+    /// Yaml.
     Yaml,
 }
 

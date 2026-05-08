@@ -1,3 +1,5 @@
+//! Kustomize build, apply, and namespace filtering.
+
 use crate::error::Result;
 
 /// Return only the YAML documents that belong to the given namespace.

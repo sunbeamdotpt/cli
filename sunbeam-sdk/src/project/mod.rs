@@ -8,7 +8,9 @@
 //! - [`runner`] (added later) — execute verbs (exec + workflow dispatch).
 
 pub mod cli;
+/// Config.
 pub mod config;
+/// Runner.
 pub mod runner;
 
 pub use config::{

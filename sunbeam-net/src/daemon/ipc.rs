@@ -1,3 +1,5 @@
+//! IPC server/client for daemon control.
+
 // IPC server/client for daemon control.
 //
 // The IPC interface uses a Unix domain socket at the configured

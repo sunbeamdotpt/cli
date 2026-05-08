@@ -1,3 +1,5 @@
+//! Virtual TCP/IP socket backed by smoltcp over WireGuard.
+
 use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::tcp;

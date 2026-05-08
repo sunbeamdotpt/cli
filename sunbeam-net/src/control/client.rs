@@ -1,3 +1,5 @@
+//! HTTP/2 control plane client for the coordination server.
+
 use bytes::Bytes;
 use h2::client::SendRequest;
 
