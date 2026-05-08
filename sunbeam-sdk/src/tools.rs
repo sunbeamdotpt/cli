@@ -1,3 +1,5 @@
+//! Embedded binary extraction (kustomize, helm).
+
 use crate::error::{Result, ResultExt};
 use std::path::PathBuf;
 

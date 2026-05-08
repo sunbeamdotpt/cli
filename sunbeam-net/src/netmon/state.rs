@@ -1,27 +1,38 @@
+//! Network interface state snapshot and change deltas.
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 
 /// Snapshot of all network interfaces and their state.
 #[derive(Debug, Clone, Default)]
 pub struct InterfaceState {
+    /// Interfaces.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Default route interface.
     pub default_route_interface: Option<String>,
+    /// Have v4.
     pub have_v4: bool,
+    /// Have v6.
     pub have_v6: bool,
 }
 
 /// Information about a single network interface.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
+    /// Name.
     pub name: String,
+    /// Up.
     pub up: bool,
+    /// Addrs.
     pub addrs: Vec<IpAddr>,
 }
 
 /// Describes what changed between two interface snapshots.
 #[derive(Debug, Clone)]
 pub struct ChangeDelta {
+    /// Default interface changed.
     pub default_interface_changed: bool,
+    /// Interface ips changed.
     pub interface_ips_changed: bool,
     /// Aggregate: true if any change suggests sockets should be rebound.
     pub rebind_likely_required: bool,

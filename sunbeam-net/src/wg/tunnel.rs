@@ -1,3 +1,5 @@
+//! WireGuard tunnel manager and peer routing.
+
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;

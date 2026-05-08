@@ -15,31 +15,47 @@ use serde::{Deserialize, Serialize};
 /// Unified ticket representation across both systems.
 #[derive(Debug, Clone)]
 pub struct Ticket {
+    /// Id.
     pub id: String,
+    /// Source.
     pub source: Source,
+    /// Title.
     pub title: String,
+    /// Description.
     pub description: String,
+    /// Status.
     pub status: Status,
+    /// Assignees.
     pub assignees: Vec<String>,
+    /// Labels.
     pub labels: Vec<String>,
+    /// Created at.
     pub created_at: String,
+    /// Updated at.
     pub updated_at: String,
+    /// Url.
     pub url: String,
 }
 
 /// Which backend a ticket originates from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
+    /// Planka.
     Planka,
+    /// Gitea.
     Gitea,
 }
 
 /// Normalised ticket status across both systems.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
+    /// Open.
     Open,
+    /// Inprogress.
     InProgress,
+    /// Done.
     Done,
+    /// Closed.
     Closed,
 }
 
@@ -138,10 +154,13 @@ async fn get_token() -> Result<String> {
 #[serde(rename_all = "camelCase")]
 pub struct CardUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Name.
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Description.
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// List id.
     pub list_id: Option<serde_json::Value>,
 }
 
@@ -157,89 +176,124 @@ mod planka_json {
 
     #[derive(Debug, Clone, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Card.
     pub struct Card {
+        /// Id.
         pub id: serde_json::Value,
         #[serde(default)]
+        /// Name.
         pub name: String,
         #[serde(default)]
+        /// Description.
         pub description: Option<String>,
         #[serde(default)]
+        /// List id.
         pub list_id: Option<serde_json::Value>,
         #[serde(default)]
+        /// Created at.
         pub created_at: Option<String>,
         #[serde(default)]
+        /// Updated at.
         pub updated_at: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Boardresponse.
     pub struct BoardResponse {
         #[serde(default)]
+        /// Included.
         pub included: Option<BoardIncluded>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Boardincluded.
     pub struct BoardIncluded {
         #[serde(default)]
+        /// Cards.
         pub cards: Vec<Card>,
         #[serde(default)]
+        /// Card memberships.
         pub card_memberships: Vec<CardMembership>,
         #[serde(default)]
+        /// Card labels.
         pub card_labels: Vec<CardLabel>,
         #[serde(default)]
+        /// Labels.
         pub labels: Vec<Label>,
         #[serde(default)]
+        /// Lists.
         pub lists: Vec<List>,
         #[serde(default)]
+        /// Users.
         pub users: Vec<User>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Cardmembership.
     pub struct CardMembership {
+        /// Card id.
         pub card_id: serde_json::Value,
+        /// User id.
         pub user_id: serde_json::Value,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Cardlabel.
     pub struct CardLabel {
+        /// Card id.
         pub card_id: serde_json::Value,
+        /// Label id.
         pub label_id: serde_json::Value,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Label.
     pub struct Label {
+        /// Id.
         pub id: serde_json::Value,
         #[serde(default)]
+        /// Name.
         pub name: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// List.
     pub struct List {
+        /// Id.
         pub id: serde_json::Value,
         #[serde(default)]
+        /// Name.
         pub name: String,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// User.
     pub struct User {
+        /// Id.
         pub id: serde_json::Value,
         #[serde(default)]
+        /// Name.
         pub name: Option<String>,
         #[serde(default)]
+        /// Username.
         pub username: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
+/// Carddetailresponse.
     pub struct CardDetailResponse {
+        /// Item.
         pub item: Card,
         #[serde(default)]
+        /// Included.
         pub included: Option<BoardIncluded>,
     }
 
@@ -658,10 +712,13 @@ impl PlankaClient {
 #[derive(Debug, Default, Serialize)]
 pub struct IssueUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Title.
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Body.
     pub body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// State.
     pub state: Option<String>,
 }
 
@@ -676,45 +733,62 @@ mod gitea_json {
     use super::*;
 
     #[derive(Debug, Deserialize)]
+/// Issue.
     pub struct Issue {
+        /// Number.
         pub number: u64,
         #[serde(default)]
+        /// Title.
         pub title: String,
         #[serde(default)]
+        /// Body.
         pub body: Option<String>,
         #[serde(default)]
+        /// State.
         pub state: String,
         #[serde(default)]
+        /// Assignees.
         pub assignees: Option<Vec<GiteaUser>>,
         #[serde(default)]
+        /// Labels.
         pub labels: Option<Vec<GiteaLabel>>,
         #[serde(default)]
+        /// Created at.
         pub created_at: Option<String>,
         #[serde(default)]
+        /// Updated at.
         pub updated_at: Option<String>,
         #[serde(default)]
+        /// Html url.
         pub html_url: Option<String>,
         #[serde(default)]
         #[allow(dead_code)]
+        /// Repository.
         pub repository: Option<Repository>,
     }
 
     #[derive(Debug, Deserialize)]
+/// Giteauser.
     pub struct GiteaUser {
         #[serde(default)]
+        /// Login.
         pub login: String,
     }
 
     #[derive(Debug, Deserialize)]
+/// Gitealabel.
     pub struct GiteaLabel {
         #[serde(default)]
+        /// Name.
         pub name: String,
     }
 
     #[derive(Debug, Deserialize)]
+/// Repository.
     pub struct Repository {
         #[serde(default)]
         #[allow(dead_code)]
+        /// Full name.
         pub full_name: Option<String>,
     }
 

@@ -1,3 +1,5 @@
+//! Service registry file format and filesystem watcher.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,10 +13,14 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scheme {
+    /// Http.
     Http,
     #[default]
+    /// Https.
     Https,
+    /// Grpc.
     Grpc,
+    /// Tcp.
     Tcp,
 }
 
@@ -23,8 +29,11 @@ pub enum Scheme {
 #[serde(rename_all = "kebab-case")]
 pub enum Tier {
     #[default]
+    /// Internal.
     Internal,
+    /// Public.
     Public,
+    /// Vpnonly.
     VpnOnly,
 }
 
@@ -47,25 +56,34 @@ pub struct ServiceEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port_name: Option<String>,
     #[serde(default)]
+    /// Scheme.
     pub scheme: Scheme,
     #[serde(default)]
+    /// Tier.
     pub tier: Tier,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Category.
     pub category: Option<String>,
     /// Public hostnames published by the dns-controller.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hostnames: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Description.
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Icon.
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Owner team.
     pub owner_team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Docs url.
     pub docs_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Health path.
     pub health_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Health interval secs.
     pub health_interval_secs: Option<u32>,
 }
 
@@ -74,6 +92,7 @@ pub struct ServiceEntry {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RegistryFile {
     #[serde(default)]
+    /// Services.
     pub services: Vec<ServiceEntry>,
 }
 

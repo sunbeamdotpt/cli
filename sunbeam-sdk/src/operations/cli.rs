@@ -7,6 +7,7 @@ use crate::operations::compose::ComposeOptions;
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
 use crate::output::ok;
 
+/// Dispatch.
 pub async fn dispatch(action: OperationsAction) -> Result<()> {
     match action {
         OperationsAction::Compose { action } => {
@@ -185,6 +186,7 @@ fn print_diff(entries: Vec<crate::operations::stack::StackDiffEntry>) {
     }
 }
 
+/// Dispatch worktree.
 pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
     match action {
         WorktreeAction::New {

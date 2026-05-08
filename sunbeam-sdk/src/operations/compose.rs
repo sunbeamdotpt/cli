@@ -35,9 +35,13 @@ impl Default for ComposeOptions {
 /// Status of a single compose service as reported by `docker compose ps`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceStatus {
+    /// Name.
     pub name: String,
+    /// State.
     pub state: String,
+    /// Health.
     pub health: Option<String>,
+    /// Ports.
     pub ports: Option<String>,
 }
 
