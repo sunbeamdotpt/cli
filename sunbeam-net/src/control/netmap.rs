@@ -1,3 +1,5 @@
+//! Streaming netmap response parser and diff applier.
+
 use bytes::{Buf, Bytes};
 use h2::RecvStream;
 
@@ -51,8 +53,11 @@ pub enum MapUpdate {
 /// Full network map payload (boxed inside `MapUpdate::Full` to keep variants small).
 #[derive(Debug)]
 pub struct FullMap {
+    /// Self node.
     pub self_node: Node,
+    /// Peers.
     pub peers: Vec<Node>,
+    /// Derp map.
     pub derp_map: Option<DerpMap>,
 }
 

@@ -1,3 +1,5 @@
+//! VPN configuration types and defaults.
+
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 

@@ -1,3 +1,5 @@
+//! Encrypted stream over a Noise handshake.
+
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};

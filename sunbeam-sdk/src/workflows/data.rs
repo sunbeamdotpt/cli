@@ -1,3 +1,5 @@
+//! Workflow data types (seed, up, verify, bootstrap).
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -11,11 +13,17 @@ pub struct SeedData {
     pub ctx: Option<StepContext>,
 
     // -- Phase 1: OpenBao init --
+    /// Ob pod.
     pub ob_pod: Option<String>,
+    /// Ob port.
     pub ob_port: Option<u16>,
+    /// Root token.
     pub root_token: Option<String>,
+    /// Initialized.
     pub initialized: Option<bool>,
+    /// Sealed.
     pub sealed: Option<bool>,
+    /// Skip seed.
     pub skip_seed: bool,
 
     // -- Phase 2: KV seeding --
@@ -27,12 +35,17 @@ pub struct SeedData {
     pub dirty_paths: Vec<String>,
 
     // -- Phase 4: PostgreSQL --
+    /// Pg pod.
     pub pg_pod: Option<String>,
 
     // -- Phase 6: Kratos admin --
+    /// Recovery link.
     pub recovery_link: Option<String>,
+    /// Recovery code.
     pub recovery_code: Option<String>,
+    /// Dkim public key.
     pub dkim_public_key: Option<String>,
+    /// Admin identity id.
     pub admin_identity_id: Option<String>,
 }
 
@@ -40,21 +53,30 @@ pub struct SeedData {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpData {
     #[serde(default, rename = "__ctx")]
+    /// Ctx.
     pub ctx: Option<StepContext>,
+    /// Domain.
     pub domain: String,
 
     // -- Vault phase (reused from seed) --
+    /// Ob pod.
     pub ob_pod: Option<String>,
+    /// Ob port.
     pub ob_port: Option<u16>,
+    /// Root token.
     pub root_token: Option<String>,
     #[serde(default)]
+    /// Skip seed.
     pub skip_seed: bool,
     #[serde(default)]
+    /// Creds.
     pub creds: HashMap<String, String>,
     #[serde(default)]
+    /// Dirty paths.
     pub dirty_paths: Vec<String>,
 
     // -- Postgres phase --
+    /// Pg pod.
     pub pg_pod: Option<String>,
 }
 
@@ -62,11 +84,17 @@ pub struct UpData {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VerifyData {
     #[serde(default, rename = "__ctx")]
+    /// Ctx.
     pub ctx: Option<StepContext>,
+    /// Ob pod.
     pub ob_pod: Option<String>,
+    /// Ob port.
     pub ob_port: Option<u16>,
+    /// Root token.
     pub root_token: Option<String>,
+    /// Test value.
     pub test_value: Option<String>,
+    /// Synced.
     pub synced: bool,
 }
 
@@ -74,9 +102,13 @@ pub struct VerifyData {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BootstrapData {
     #[serde(default, rename = "__ctx")]
+    /// Ctx.
     pub ctx: Option<StepContext>,
+    /// Gitea pod.
     pub gitea_pod: Option<String>,
+    /// Gitea admin pass.
     pub gitea_admin_pass: Option<String>,
+    /// Domain.
     pub domain: Option<String>,
 }
 

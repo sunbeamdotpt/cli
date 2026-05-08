@@ -1,11 +1,17 @@
 //! Up workflow steps — each module contains one or more WFE step structs.
 
 pub mod certificates;
+/// Database.
 pub mod database;
+/// Finalize.
 pub mod finalize;
+/// Infrastructure.
 pub mod infrastructure;
+/// Platform.
 pub mod platform;
+/// Vault.
 pub mod vault;
+/// Vpn.
 pub mod vpn;
 
 // Steps unique to the up workflow

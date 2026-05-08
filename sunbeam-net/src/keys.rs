@@ -1,3 +1,5 @@
+//! Node key generation, persistence, and rotation.
+
 use std::path::Path;
 
 use rand::rngs::OsRng;
@@ -11,11 +13,17 @@ const KEYS_FILE: &str = "keys.json";
 /// The three x25519 key pairs used by a node.
 #[derive(Clone)]
 pub struct NodeKeys {
+    /// Node private.
     pub node_private: StaticSecret,
+    /// Node public.
     pub node_public: PublicKey,
+    /// Disco private.
     pub disco_private: StaticSecret,
+    /// Disco public.
     pub disco_public: PublicKey,
+    /// Wg private.
     pub wg_private: StaticSecret,
+    /// Wg public.
     pub wg_public: PublicKey,
 }
 
@@ -39,10 +47,12 @@ struct PersistedKeys {
 
 // Hex helpers — we avoid pulling in a hex crate by implementing locally.
 mod hex {
+/// Encode.
     pub fn encode(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+/// Decode.
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {
         if !s.len().is_multiple_of(2) {
             return Err("odd length hex string".into());

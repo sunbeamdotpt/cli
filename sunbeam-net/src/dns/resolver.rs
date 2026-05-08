@@ -65,22 +65,31 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 pub enum ResolveError {
     #[allow(dead_code)]
     #[error("resolver not configured (no dns_server)")]
+    /// Disabled.
     Disabled,
     #[error("name is empty")]
+    /// Emptyname.
     EmptyName,
     #[error("engine command channel closed")]
+    /// Engineclosed.
     EngineClosed,
     #[error("local TCP pair setup: {0}")]
+    /// Localpair.
     LocalPair(std::io::Error),
     #[error("DNS I/O: {0}")]
+    /// Io.
     Io(std::io::Error),
     #[error("DNS query timed out")]
+    /// Timeout.
     Timeout,
     #[error("DNS response too large ({0} > {MAX_RESPONSE_BYTES})")]
+    /// Responsetoolarge.
     ResponseTooLarge(usize),
     #[error("DNS codec: {0}")]
+    /// Codec.
     Codec(#[from] DnsError),
     #[error("negative cache hit")]
+    /// Negativecached.
     NegativeCached,
 }
 

@@ -1,3 +1,5 @@
+//! macOS network interface monitor backed by AF_ROUTE.
+
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 

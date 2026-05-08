@@ -13,13 +13,21 @@ use crate::error::{Result, ResultExt, SunbeamError};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Worktreeentry.
 pub struct WorktreeEntry {
+    /// Branch.
     pub branch: String,
+    /// Path.
     pub path: PathBuf,
+    /// Head.
     pub head: String,
+    /// Is bare.
     pub is_bare: bool,
+    /// Is detached.
     pub is_detached: bool,
+    /// Is locked.
     pub is_locked: bool,
+    /// Dirty.
     pub dirty: u32,
 }
 
@@ -665,13 +673,21 @@ end
 /// Options for [`cherry_pick`].
 #[derive(Debug, Clone)]
 pub struct CherryPickOpts<'a> {
+    /// From.
     pub from: &'a str,
+    /// Refs.
     pub refs: &'a [String],
+    /// Into.
     pub into: Option<&'a str>,
+    /// Edit.
     pub edit: bool,
+    /// No commit.
     pub no_commit: bool,
+    /// Annotate.
     pub annotate: bool,
+    /// Mainline.
     pub mainline: Option<u32>,
+    /// Force.
     pub force: bool,
 }
 
