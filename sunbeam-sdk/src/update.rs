@@ -1,3 +1,5 @@
+//! Self-update from Gitea CI artifacts.
+
 use crate::error::{Result, ResultExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

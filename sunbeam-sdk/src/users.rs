@@ -290,6 +290,7 @@ fn identity_id(identity: &Value) -> Result<String> {
 // Public commands
 // ---------------------------------------------------------------------------
 
+/// Cmd user list.
 pub async fn cmd_user_list(search: &str) -> Result<()> {
     step("Listing identities...");
 
@@ -333,6 +334,7 @@ pub async fn cmd_user_list(search: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user get.
 pub async fn cmd_user_get(target: &str) -> Result<()> {
     step(&format!("Getting identity: {target}"));
 
@@ -346,6 +348,7 @@ pub async fn cmd_user_get(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user create.
 pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result<()> {
     step(&format!("Creating identity: {email}"));
 
@@ -382,6 +385,7 @@ pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result
     Ok(())
 }
 
+/// Cmd user delete.
 pub async fn cmd_user_delete(target: &str) -> Result<()> {
     step(&format!("Deleting identity: {target}"));
 
@@ -413,6 +417,7 @@ pub async fn cmd_user_delete(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user recover.
 pub async fn cmd_user_recover(target: &str) -> Result<()> {
     step(&format!("Generating recovery link for: {target}"));
 
@@ -431,6 +436,7 @@ pub async fn cmd_user_recover(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user disable.
 pub async fn cmd_user_disable(target: &str) -> Result<()> {
     step(&format!("Disabling identity: {target}"));
 
@@ -467,6 +473,7 @@ pub async fn cmd_user_disable(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user enable.
 pub async fn cmd_user_enable(target: &str) -> Result<()> {
     step(&format!("Enabling identity: {target}"));
 
@@ -491,6 +498,7 @@ pub async fn cmd_user_enable(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cmd user set password.
 pub async fn cmd_user_set_password(target: &str, password: &str) -> Result<()> {
     step(&format!("Setting password for: {target}"));
 
@@ -624,6 +632,7 @@ Messages (Matrix):
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Cmd user onboard.
 pub async fn cmd_user_onboard(
     email: &str,
     name: &str,
@@ -748,6 +757,7 @@ pub async fn cmd_user_onboard(
 // Offboard
 // ---------------------------------------------------------------------------
 
+/// Cmd user offboard.
 pub async fn cmd_user_offboard(target: &str) -> Result<()> {
     step(&format!("Offboarding: {target}"));
 

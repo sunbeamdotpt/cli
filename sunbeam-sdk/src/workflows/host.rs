@@ -1,3 +1,5 @@
+//! Workflow host construction and lifecycle.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -1,3 +1,5 @@
+//! Local workflow CLI actions (list, status, retry, cancel).
+
 use clap::Subcommand;
 
 use crate::error::{Result, SunbeamError};
@@ -6,6 +8,7 @@ use crate::output;
 use super::host;
 
 #[derive(Subcommand, Debug)]
+/// Workflowaction.
 pub enum WorkflowAction {
     /// List workflow instances.
     List {

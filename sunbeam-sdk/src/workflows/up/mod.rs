@@ -1,6 +1,7 @@
 //! Up workflow — orchestrates full cluster bring-up as composable steps.
 
 pub mod definition;
+/// Steps.
 pub mod steps;
 
 use crate::output;

@@ -6,6 +6,7 @@
 use crate::error::Result;
 use crate::output::{ok, step, warn};
 
+/// Cmd doctor.
 pub async fn cmd_doctor() -> Result<()> {
     step("Running diagnostics...");
     println!();

@@ -21,10 +21,15 @@ type HmacSha256 = Hmac<Sha256>;
 /// Result of a single health check.
 #[derive(Debug, Clone)]
 pub struct CheckResult {
+    /// Name.
     pub name: String,
+    /// Ns.
     pub ns: String,
+    /// Svc.
     pub svc: String,
+    /// Passed.
     pub passed: bool,
+    /// Detail.
     pub detail: String,
 }
 

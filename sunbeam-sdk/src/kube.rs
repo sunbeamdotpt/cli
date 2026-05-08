@@ -1,3 +1,5 @@
+//! Kubernetes client initialization and manifest operations.
+
 use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;

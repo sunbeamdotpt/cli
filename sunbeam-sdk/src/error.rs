@@ -6,15 +6,25 @@
 /// Exit codes for the sunbeam CLI.
 #[allow(dead_code)]
 pub mod exit {
+/// Success.
     pub const SUCCESS: i32 = 0;
+/// General.
     pub const GENERAL: i32 = 1;
+/// Usage.
     pub const USAGE: i32 = 2;
+/// Kube.
     pub const KUBE: i32 = 3;
+/// Config.
     pub const CONFIG: i32 = 4;
+/// Network.
     pub const NETWORK: i32 = 5;
+/// Secrets.
     pub const SECRETS: i32 = 6;
+/// Build.
     pub const BUILD: i32 = 7;
+/// Identity.
     pub const IDENTITY: i32 = 8;
+/// External tool.
     pub const EXTERNAL_TOOL: i32 = 9;
 }
 
