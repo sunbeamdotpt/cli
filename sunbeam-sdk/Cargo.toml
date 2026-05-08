@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://src.sunbeam.pt/studio/cli"
 description = "Sunbeam Studios SDK, CLI, and ecosystem integrations"
-publish = ["sunbeam"]
+
 
 [dependencies]
 # Internal
