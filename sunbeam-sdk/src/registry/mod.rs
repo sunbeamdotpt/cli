@@ -31,17 +31,29 @@ const ANN_PORTS: &str = "sunbeam.pt/ports";
 /// A service definition constructed from K8s resource metadata.
 #[derive(Debug, Clone)]
 pub struct ServiceDefinition {
+    /// Name.
     pub name: String,
+    /// Display name.
     pub display_name: String,
+    /// Category.
     pub category: Category,
+    /// Namespace.
     pub namespace: String,
+    /// Deployments.
     pub deployments: Vec<String>,
+    /// Kv path.
     pub kv_path: Option<String>,
+    /// Database.
     pub database: Option<DbConfig>,
+    /// Build target.
     pub build_target: Option<String>,
+    /// Depends on.
     pub depends_on: Vec<String>,
+    /// Health.
     pub health: HealthCheck,
+    /// Virtual service.
     pub virtual_service: bool,
+    /// Resource kind.
     pub resource_kind: String,
     /// Label selector used to find the pod backing this service.
     /// When absent, callers fall back to `app=<first deployment>`.
@@ -59,22 +71,34 @@ pub struct ServiceDefinition {
 /// Database credentials for a service's CNPG-managed database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbConfig {
+    /// Username.
     pub username: String,
+    /// Database.
     pub database: String,
 }
 
 /// Logical grouping of services.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Category {
+    /// Auth.
     Auth,
+    /// Data.
     Data,
+    /// Devtools.
     DevTools,
+    /// Platform.
     Platform,
+    /// Messaging.
     Messaging,
+    /// Media.
     Media,
+    /// Storage.
     Storage,
+    /// Monitoring.
     Monitoring,
+    /// Infra.
     Infra,
+    /// Unknown.
     Unknown,
 }
 
@@ -148,9 +172,13 @@ impl Category {
 /// How to determine if a service is healthy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HealthCheck {
+    /// Podready.
     PodReady,
+    /// Http.
     Http { path: String },
+    /// Custom.
     Custom(String),
+    /// None.
     None,
 }
 
@@ -159,6 +187,7 @@ pub enum HealthCheck {
 /// In-memory registry of discovered services.
 #[derive(Debug, Clone, Default)]
 pub struct ServiceRegistry {
+    /// Services.
     pub services: HashMap<String, ServiceDefinition>,
 }
 

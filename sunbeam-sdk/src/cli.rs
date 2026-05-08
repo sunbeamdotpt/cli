@@ -21,9 +21,11 @@ pub struct Cli {
     pub email: Option<String>,
 
     #[command(subcommand)]
+    /// Verb.
     pub verb: Option<Verb>,
 }
 
+/// Top-level CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Verb {
     /// Full cluster bring-up.
@@ -175,6 +177,7 @@ pub enum Verb {
     },
 }
 
+/// VPN management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum VpnAction {
     /// Show VPN tunnel status.
@@ -207,6 +210,7 @@ pub enum VpnAction {
     },
 }
 
+/// Service operations subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ServiceAction {
     /// Pod health (optionally scoped).
@@ -360,6 +364,7 @@ pub enum ServiceAction {
     },
 }
 
+/// Secret field retrieval subcommands.
 #[derive(Subcommand, Debug)]
 pub enum SecretsAction {
     /// Get a specific secret field value.
@@ -369,6 +374,7 @@ pub enum SecretsAction {
     },
 }
 
+/// OpenBao Transit secrets engine subcommands.
 #[derive(Subcommand, Debug)]
 pub enum TransitAction {
     /// Enable a transit secrets engine at a mount path (idempotent).
@@ -395,6 +401,7 @@ pub enum TransitAction {
     },
 }
 
+/// Authentication subcommands (login, logout, token).
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in to both SSO and Gitea.
@@ -423,6 +430,7 @@ pub enum AuthAction {
     Token,
 }
 
+/// Project-management ticket subcommands.
 #[derive(Subcommand, Debug)]
 pub enum PmAction {
     /// List tickets across Planka and Gitea.
@@ -474,6 +482,7 @@ pub enum PmAction {
     },
 }
 
+/// Configuration management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Set configuration values for the current context.
@@ -506,6 +515,7 @@ pub enum ConfigAction {
     },
 }
 
+/// User/identity management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum UserAction {
     /// List identities.
@@ -596,6 +606,7 @@ pub enum UserAction {
     },
 }
 
+/// Per-project build and lifecycle subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {
     /// Build the project.
@@ -658,6 +669,7 @@ pub enum ProjectAction {
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
+/// Projectrunargs.
 pub struct ProjectRunArgs {
     /// Run for all projects in the workspace (topo-ordered). If omitted, runs
     /// for the current project only.
@@ -680,6 +692,7 @@ pub struct ProjectRunArgs {
     pub dry_run: bool,
 }
 
+/// Workspace operations subcommands.
 #[derive(Subcommand, Debug)]
 pub enum OperationsAction {
     /// Docker compose operations.
@@ -703,6 +716,7 @@ pub enum OperationsAction {
     Repos,
 }
 
+/// Git worktree lifecycle subcommands.
 #[derive(Subcommand, Debug)]
 pub enum WorktreeAction {
     /// Create a new worktree rooted at `.worktrees/<sanitized-branch>`.
@@ -840,13 +854,18 @@ pub enum WorktreeAction {
     },
 }
 
+/// Supported shell flavors for worktree integration.
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum WtShell {
+    /// Bash.
     Bash,
+    /// Zsh.
     Zsh,
+    /// Fish.
     Fish,
 }
 
+/// Docker Compose subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ComposeAction {
     /// Generate and materialize docker-compose.yaml under .sunbeam/compose/.
@@ -875,6 +894,7 @@ pub enum ComposeAction {
     },
 }
 
+/// Stack snapshot subcommands.
 #[derive(Subcommand, Debug)]
 pub enum StackAction {
     /// List pinned stacks.

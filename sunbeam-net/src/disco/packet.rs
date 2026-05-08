@@ -4,9 +4,13 @@
 /// The kind of packet received on the multiplexed UDP socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketKind {
+    /// Stun.
     Stun,
+    /// Disco.
     Disco,
+    /// Wireguard.
     WireGuard,
+    /// Unknown.
     Unknown,
 }
 

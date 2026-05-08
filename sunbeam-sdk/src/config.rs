@@ -1,3 +1,5 @@
+//! Context-based configuration file I/O and path helpers.
+
 use crate::error::{Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,8 +26,10 @@ pub struct SunbeamConfig {
 
     // --- Legacy fields (migrated on load) ---
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// Infra directory.
     pub infra_directory: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// Acme email.
     pub acme_email: String,
 }
 
@@ -62,6 +66,7 @@ pub struct Context {
         rename = "vpn-auth-key",
         skip_serializing_if = "String::is_empty"
     )]
+    /// Vpn auth key.
     pub vpn_auth_key: String,
 
     /// Hostname of the cluster API server peer to look up in the netmap.
@@ -73,6 +78,7 @@ pub struct Context {
         rename = "vpn-cluster-host",
         skip_serializing_if = "String::is_empty"
     )]
+    /// Vpn cluster host.
     pub vpn_cluster_host: String,
 
     /// Headscale API key for `sunbeam vpn create-key` and other admin
@@ -83,6 +89,7 @@ pub struct Context {
         rename = "vpn-api-key",
         skip_serializing_if = "String::is_empty"
     )]
+    /// Vpn api key.
     pub vpn_api_key: String,
 
     /// Skip TLS certificate verification when talking to the VPN
@@ -101,6 +108,7 @@ pub struct Context {
         rename = "vpn-dns-server",
         skip_serializing_if = "String::is_empty"
     )]
+    /// Vpn dns server.
     pub vpn_dns_server: String,
 
     /// Comma-separated DNS search domains appended to bare names
@@ -111,6 +119,7 @@ pub struct Context {
         rename = "vpn-dns-search",
         skip_serializing_if = "String::is_empty"
     )]
+    /// Vpn dns search.
     pub vpn_dns_search: String,
 }
 

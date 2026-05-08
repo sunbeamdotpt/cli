@@ -7,9 +7,12 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
 #[derive(Default)]
+/// Outputformat.
 pub enum OutputFormat {
     #[default]
+    /// Table.
     Table,
+    /// Json.
     Json,
 }
 
