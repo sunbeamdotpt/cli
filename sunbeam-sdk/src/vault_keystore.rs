@@ -22,13 +22,21 @@ const MACHINE_SALT_LEN: usize = 32;
 /// Vault keys stored in the encrypted keystore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultKeystore {
+    /// Version.
     pub version: u32,
+    /// Domain.
     pub domain: String,
+    /// Created at.
     pub created_at: DateTime<Utc>,
+    /// Updated at.
     pub updated_at: DateTime<Utc>,
+    /// Root token.
     pub root_token: String,
+    /// Unseal keys b64.
     pub unseal_keys_b64: Vec<String>,
+    /// Key shares.
     pub key_shares: u32,
+    /// Key threshold.
     pub key_threshold: u32,
 }
 

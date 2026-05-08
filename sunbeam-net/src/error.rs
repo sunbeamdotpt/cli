@@ -1,31 +1,42 @@
+//! Error types and result aliases for sunbeam-net.
+
 /// Errors produced by sunbeam-net.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("noise handshake failed: {0}")]
+    /// Noise.
     Noise(String),
 
     #[error("control protocol error: {0}")]
+    /// Control.
     Control(String),
 
     #[error("wireguard error: {0}")]
+    /// Wireguard.
     WireGuard(String),
 
     #[error("DERP relay error: {0}")]
+    /// Derp.
     Derp(String),
 
     #[error("TLS error: {0}")]
+    /// Tls.
     Tls(String),
 
     #[error("authentication failed: {0}")]
+    /// Auth.
     Auth(String),
 
     #[error("daemon error: {0}")]
+    /// Daemon.
     Daemon(String),
 
     #[error("IPC error: {0}")]
+    /// Ipc.
     Ipc(String),
 
     #[error("{context}: {source}")]
+    /// Io.
     Io {
         context: String,
         #[source]
@@ -33,15 +44,19 @@ pub enum Error {
     },
 
     #[error("{0}")]
+    /// Json.
     Json(#[from] serde_json::Error),
 
     #[error("connection closed")]
+    /// Connectionclosed.
     ConnectionClosed,
 
     #[error("{0}")]
+    /// Other.
     Other(String),
 }
 
+/// Convenient alias for `std::result::Result<T, Error>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<h2::Error> for Error {

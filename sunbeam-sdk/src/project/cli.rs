@@ -17,6 +17,7 @@ use crate::project::config::{is_standard_verb, ProjectConfig, STANDARD_VERBS};
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{sort, Graph};
 
+/// Dispatch.
 pub async fn dispatch(action: ProjectAction) -> Result<()> {
     match action {
         ProjectAction::Build(args) => run_verb("build", args).await,

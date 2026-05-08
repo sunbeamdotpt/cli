@@ -163,7 +163,9 @@ pub struct SocksServer {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SocksEndpoint {
+    /// Port.
     pub port: u16,
+    /// Auth token.
     pub auth_token: String,
 }
 

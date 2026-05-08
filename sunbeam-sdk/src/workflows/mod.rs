@@ -1,11 +1,20 @@
+//! Workflow engine integration and step context.
+
 pub mod cmd;
+/// Data.
 pub mod data;
+/// Host.
 pub mod host;
+/// Primitives.
 pub mod primitives;
 
+/// Bootstrap.
 pub mod bootstrap;
+/// Seed.
 pub mod seed;
+/// Up.
 pub mod up;
+/// Verify.
 pub mod verify;
 
 use serde::{Deserialize, Serialize};
@@ -20,9 +29,13 @@ use crate::error::Result;
 /// to recreate them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepContext {
+    /// Domain.
     pub domain: String,
+    /// Infra dir.
     pub infra_dir: String,
+    /// Kube context.
     pub kube_context: String,
+    /// Acme email.
     pub acme_email: String,
     /// The config context name, used for per-context DB paths.
     pub context_name: String,

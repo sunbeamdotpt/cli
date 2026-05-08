@@ -9,6 +9,7 @@ mod create_k8s_secret;
 mod create_pg_database;
 mod create_pg_role;
 mod ensure_namespace;
+/// Kv service configs.
 pub mod kv_service_configs;
 mod opensearch_ml;
 mod seed_kv_path;

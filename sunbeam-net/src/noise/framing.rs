@@ -1,3 +1,5 @@
+//! Noise record framing (data / control frames).
+
 use bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -13,7 +15,9 @@ pub const HEADER_SIZE: usize = 3;
 /// A single Noise frame (type + payload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoiseFrame {
+    /// Frame type.
     pub frame_type: u8,
+    /// Payload.
     pub payload: BytesMut,
 }
 

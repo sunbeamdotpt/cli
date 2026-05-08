@@ -1,3 +1,5 @@
+//! Protocol types for the Tailscale control plane.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,47 +21,66 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RegisterRequest {
+    /// Version.
     pub version: u16,
+    /// Node key.
     pub node_key: String,
+    /// Old node key.
     pub old_node_key: String,
     /// Curve25519 disco public key. Headscale persists this on the node
     /// record and uses it for peer-to-peer discovery — if it's zero, peers
     /// won't include us in their netmaps.
     pub disco_key: String,
+    /// Auth.
     pub auth: Option<AuthInfo>,
+    /// Hostinfo.
     pub hostinfo: HostInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Followup.
     pub followup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Timestamp.
     pub timestamp: Option<String>,
 }
 
+/// Authentication metadata sent during node registration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct AuthInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Auth key.
     pub auth_key: Option<String>,
 }
 
+/// Platform and network metadata advertised by a node.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct HostInfo {
     #[serde(rename = "GoArch")]
+    /// Go arch.
     pub go_arch: String,
     #[serde(rename = "GoOS")]
+    /// Go os.
     pub go_os: String,
     #[serde(rename = "GoVersion")]
+    /// Go version.
     pub go_version: String,
+    /// Hostname.
     pub hostname: String,
     #[serde(rename = "OS")]
+    /// Os.
     pub os: String,
     #[serde(rename = "OSVersion")]
+    /// Os version.
     pub os_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Device model.
     pub device_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Frontend log id.
     pub frontend_log_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Backend log id.
     pub backend_log_id: Option<String>,
     /// NetInfo carries DERP preferences and NAT-traversal hints. Headscale
     /// derives our Node.DERP field from `NetInfo.PreferredDERP`, and peers
@@ -88,38 +109,52 @@ pub struct NetInfo {
 #[serde(rename_all = "PascalCase")]
 pub struct RegisterResponse {
     #[serde(default)]
+    /// User.
     pub user: User,
     #[serde(default)]
+    /// Login.
     pub login: Login,
     #[serde(default)]
+    /// Node key expired.
     pub node_key_expired: bool,
     #[serde(default)]
+    /// Machine authorized.
     pub machine_authorized: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Auth url.
     pub auth_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Error.
     pub error: Option<String>,
 }
 
+/// Tailscale user record returned by the coordination server.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct User {
     #[serde(rename = "ID", default)]
+    /// Id.
     pub id: u64,
     #[serde(default)]
+    /// Login name.
     pub login_name: String,
     #[serde(default)]
+    /// Display name.
     pub display_name: String,
 }
 
+/// Tailscale login identity tied to a node registration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Login {
     #[serde(rename = "ID", default)]
+    /// Id.
     pub id: u64,
     #[serde(default)]
+    /// Login name.
     pub login_name: String,
     #[serde(default)]
+    /// Display name.
     pub display_name: String,
 }
 
@@ -127,9 +162,13 @@ pub struct Login {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MapRequest {
+    /// Version.
     pub version: u16,
+    /// Node key.
     pub node_key: String,
+    /// Disco key.
     pub disco_key: String,
+    /// Stream.
     pub stream: bool,
     /// "Lite update" flag — set together with `Stream: false` and
     /// `ReadOnly: false` to make Headscale persist DiscoKey + endpoints
@@ -138,9 +177,12 @@ pub struct MapRequest {
     #[serde(default)]
     pub omit_peers: bool,
     #[serde(default)]
+    /// Read only.
     pub read_only: bool,
+    /// Hostinfo.
     pub hostinfo: HostInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Endpoints.
     pub endpoints: Option<Vec<String>>,
 }
 
@@ -150,120 +192,171 @@ pub struct MapRequest {
 #[serde(rename_all = "PascalCase")]
 pub struct MapResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Node.
     pub node: Option<Node>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Peers.
     pub peers: Option<Vec<Node>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Peers changed.
     pub peers_changed: Option<Vec<Node>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Peers removed.
     pub peers_removed: Option<Vec<String>>,
     #[serde(rename = "DERPMap")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Derp map.
     pub derp_map: Option<DerpMap>,
     #[serde(rename = "DNSConfig")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Dns config.
     pub dns_config: Option<DnsConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Packet filter.
     pub packet_filter: Option<Vec<FilterRule>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Domain.
     pub domain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Collection name.
     pub collection_name: Option<String>,
 }
 
+/// A peer node in the tailnet with addresses, endpoints, and keys.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct Node {
     #[serde(rename = "ID")]
+    /// Id.
     pub id: u64,
+    /// Key.
     pub key: String,
+    /// Disco key.
     pub disco_key: String,
     #[serde(deserialize_with = "null_as_empty_vec")]
+    /// Addresses.
     pub addresses: Vec<String>,
     #[serde(rename = "AllowedIPs", deserialize_with = "null_as_empty_vec")]
+    /// Allowed ips.
     pub allowed_ips: Vec<String>,
     #[serde(deserialize_with = "null_as_empty_vec")]
+    /// Endpoints.
     pub endpoints: Vec<String>,
     #[serde(rename = "DERP")]
+    /// Derp.
     pub derp: String,
+    /// Hostinfo.
     pub hostinfo: HostInfo,
+    /// Name.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Online.
     pub online: Option<bool>,
+    /// Machine authorized.
     pub machine_authorized: bool,
 }
 
+/// Map of DERP relay regions available to the tailnet.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DerpMap {
+    /// Regions.
     pub regions: HashMap<String, DerpRegion>,
 }
 
+/// A geographic DERP region containing one or more relay nodes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DerpRegion {
     #[serde(rename = "RegionID")]
+    /// Region id.
     pub region_id: u16,
+    /// Region code.
     pub region_code: String,
+    /// Region name.
     pub region_name: String,
+    /// Nodes.
     pub nodes: Vec<DerpNode>,
 }
 
+/// A single DERP relay node with IP, port, and region info.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DerpNode {
+    /// Name.
     pub name: String,
     #[serde(rename = "RegionID")]
+    /// Region id.
     pub region_id: u16,
+    /// Host name.
     pub host_name: String,
     #[serde(rename = "IPv4")]
+    /// Ipv4.
     pub ipv4: String,
     #[serde(rename = "IPv6")]
+    /// Ipv6.
     pub ipv6: String,
     #[serde(rename = "DERPPort", alias = "DerpPort")]
+    /// Derp port.
     pub derp_port: u16,
     #[serde(rename = "STUNPort", alias = "StunPort")]
+    /// Stun port.
     pub stun_port: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Stun only.
     pub stun_only: Option<bool>,
 }
 
+/// Tailnet DNS configuration (resolvers and search domains).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DnsConfig {
     #[serde(deserialize_with = "null_as_empty_vec")]
+    /// Resolvers.
     pub resolvers: Vec<DnsResolver>,
     #[serde(deserialize_with = "null_as_empty_vec")]
+    /// Domains.
     pub domains: Vec<String>,
 }
 
+/// A DNS resolver address advertised by the coordination server.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DnsResolver {
+    /// Addr.
     pub addr: String,
 }
 
+/// A packet filter rule restricting source IPs and destination ports.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct FilterRule {
     #[serde(rename = "SrcIPs", deserialize_with = "null_as_empty_vec")]
+    /// Src ips.
     pub src_ips: Vec<String>,
     #[serde(rename = "DstPorts", deserialize_with = "null_as_empty_vec")]
+    /// Dst ports.
     pub dst_ports: Vec<FilterPort>,
 }
 
+/// Destination IP and port range allowed by a filter rule.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct FilterPort {
     #[serde(rename = "IP")]
+    /// Ip.
     pub ip: String,
+    /// Ports.
     pub ports: PortRange,
 }
 
+/// Inclusive port range (first .. last).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct PortRange {
+    /// First.
     pub first: u16,
+    /// Last.
     pub last: u16,
 }
 

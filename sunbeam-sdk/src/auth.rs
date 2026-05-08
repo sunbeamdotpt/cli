@@ -14,11 +14,16 @@ use std::path::PathBuf;
 /// Cached OAuth2 tokens persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthTokens {
+    /// Access token.
     pub access_token: String,
+    /// Refresh token.
     pub refresh_token: String,
+    /// Expires at.
     pub expires_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Id token.
     pub id_token: Option<String>,
+    /// Domain.
     pub domain: String,
     /// Gitea personal access token (created during auth login).
     #[serde(default, skip_serializing_if = "Option::is_none")]

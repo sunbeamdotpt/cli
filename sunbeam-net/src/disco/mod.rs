@@ -18,14 +18,18 @@ pub const HEADER_LEN: usize = 6 + 32 + 24; // 62
 /// Disco message types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
+    /// Ping.
     Ping(Ping),
+    /// Pong.
     Pong(Pong),
+    /// Callmemaybe.
     CallMeMaybe(CallMeMaybe),
 }
 
 /// Disco ping — used to probe connectivity and measure RTT.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ping {
+    /// Tx id.
     pub tx_id: [u8; 12],
     /// If present, the sender's node key (for identification).
     pub node_key: Option<[u8; 32]>,
@@ -36,6 +40,7 @@ pub struct Ping {
 /// Disco pong — reply to a ping, echoing back the observed source address.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pong {
+    /// Tx id.
     pub tx_id: [u8; 12],
     /// The source address the pinger was observed at.
     pub src: SocketAddr,
@@ -44,6 +49,7 @@ pub struct Pong {
 /// CallMeMaybe — advertise candidate endpoints for direct connectivity.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallMeMaybe {
+    /// Endpoints.
     pub endpoints: Vec<SocketAddr>,
 }
 
