@@ -7,7 +7,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::output::ok;
-use crate::workflows::seed::steps::postgres::create_db_sql;
+use crate::workflows::steps::postgres::create_db_sql;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
