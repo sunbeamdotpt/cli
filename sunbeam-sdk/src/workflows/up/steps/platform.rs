@@ -1,31 +1,14 @@
-//! Platform steps: Gitea bootstrap.
-
-use wfe_core::models::ExecutionResult;
-use wfe_core::traits::{StepBody, StepExecutionContext};
-
-use crate::output::step;
-
-/// Run Gitea bootstrap (repos, webhooks, etc.).
-#[derive(Default)]
-pub struct BootstrapGitea;
-
-#[async_trait::async_trait]
-impl StepBody for BootstrapGitea {
-    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        step("Gitea bootstrap...");
-        crate::gitea::cmd_bootstrap()
-            .await
-            .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
-        Ok(ExecutionResult::next())
-    }
-}
+//! Platform steps — currently empty after Gitea removal.
+//!
+//! Gitea was removed from the core stack in v3. The old BootstrapGitea step
+//! (which created orgs, set admin password, and configured OIDC) is gone.
+//! If Gitea is re-added in the future, a generic ConfigureOIDC step should
+//! live here.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn bootstrap_gitea_is_default() {
-        let _ = BootstrapGitea;
+    fn platform_steps_placeholder() {
+        // Placeholder so the module compiles even when empty.
     }
 }
