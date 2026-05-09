@@ -8,10 +8,8 @@ pub mod host;
 /// Primitives.
 pub mod primitives;
 
-/// Bootstrap.
-pub mod bootstrap;
-/// Seed.
-pub mod seed;
+/// Shared steps.
+pub mod steps;
 /// Up.
 pub mod up;
 /// Verify.

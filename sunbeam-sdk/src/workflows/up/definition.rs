@@ -1,4 +1,15 @@
-//! Up workflow definition — phased deployment with parallel branches.
+//! Up workflow definition — single unified cluster bring-up from k3s+Cilium
+//! to first user login. Merges the old `seed` and `bootstrap` workflows.
+//!
+//! Version 3 changes:
+//! - Monitoring moved from Phase 1 to Phase 11 (after identity is ready).
+//! - Added WaitForRollout after ApplyManifest(ory) to block on DB migrations.
+//! - Removed Gitea bootstrap (org creation, admin setup) — Gitea is no longer
+//!   part of the core stack.
+//! - Added SeedKratosAdminIdentity (was missing from v2 — no admin user
+//!   existed after `sunbeam up`).
+//! - Added Phase 10 rollout waits for apps that ApplyManifest doesn't block on.
+//! - Bumped version 2 → 3.
 
 use serde_json::json;
 use wfe_core::builder::WorkflowBuilder;
@@ -11,9 +22,9 @@ use crate::workflows::primitives::{
     EnableVaultAuth, EnsureNamespace, EnsureOpenSearchML, InjectOpenSearchModelId, SeedKVPath,
     WaitForRollout, WriteKVPath, WriteVaultAuthConfig, WriteVaultPolicy, WriteVaultRole,
 };
-use crate::workflows::seed::steps::postgres::pg_db_map;
+use crate::workflows::steps::postgres::pg_db_map;
 
-/// Build the up workflow definition.
+/// Build the up workflow definition (version 3).
 pub fn build() -> WorkflowDefinition {
     WorkflowBuilder::<serde_json::Value>::new()
         // ── Phase 1: Infrastructure ────────────────────────────────────
@@ -26,8 +37,12 @@ pub fn build() -> WorkflowDefinition {
                     Some(json!({"namespace": "longhorn-system"})));
             })
             .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-monitoring",
-                    Some(json!({"namespace": "monitoring"})));
+                let id0 = b.add_step_typed::<steps::EnsureTLSCert>("ensure-tls-cert", None);
+                let id1 = b.add_step_typed::<steps::EnsureTLSSecret>("ensure-tls-secret", None);
+                let id2 = b.add_step_typed::<ApplyManifest>("apply-cert-manager",
+                    Some(json!({"namespace": "cert-manager"})));
+                b.wire_outcome(id0, id1, None);
+                b.wire_outcome(id1, id2, None);
             })
         )
 
@@ -40,12 +55,8 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<steps::EnsureBuildKit>("ensure-buildkit", None);
             })
             .branch(|b| {
-                let id0 = b.add_step_typed::<steps::EnsureTLSCert>("ensure-tls-cert", None);
-                let id1 = b.add_step_typed::<steps::EnsureTLSSecret>("ensure-tls-secret", None);
-                let id2 = b.add_step_typed::<ApplyManifest>("apply-cert-manager",
-                    Some(json!({"namespace": "cert-manager"})));
-                b.wire_outcome(id0, id1, None);
-                b.wire_outcome(id1, id2, None);
+                b.add_step_typed::<ApplyManifest>("apply-build",
+                    Some(json!({"namespace": "build"})));
             })
         )
 
@@ -169,6 +180,24 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<ApplyManifest>("apply-vpn",
                     Some(json!({"namespace": "vpn"})));
             })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-oci",
+                    Some(json!({"namespace": "oci"})));
+            })
+        )
+
+        // CRITICAL: Ory Helm charts run DB migrations as hooks. ApplyManifest
+        // does NOT wait for hooks. Block here until Hydra and Kratos are
+        // actually ready before anything that depends on them continues.
+        .parallel(|p| p
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-ory-hydra",
+                    Some(json!({"namespace": "ory", "deployment": "hydra", "timeout_secs": 300})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-ory-kratos",
+                    Some(json!({"namespace": "ory", "deployment": "kratos", "timeout_secs": 300})));
+            })
         )
 
         // ── Phase 6: K8s secrets (parallel by namespace) ──────────────
@@ -186,22 +215,6 @@ pub fn build() -> WorkflowDefinition {
                     Some(json!({"namespace":"ory","name":"kratos-app-secrets","data":{
                         "secretsDefault":"kratos-secrets-default",
                         "secretsCookie":"kratos-secrets-cookie"
-                    }})));
-                b.wire_outcome(ns, s1, None);
-                b.wire_outcome(s1, s2, None);
-            })
-            .branch(|b| {
-                let ns = b.add_step_typed::<EnsureNamespace>("ensure-ns-devtools",
-                    Some(json!({"namespace": "devtools"})));
-                let s1 = b.add_step_typed::<CreateK8sSecret>("secret-gitea-s3",
-                    Some(json!({"namespace":"devtools","name":"gitea-s3-credentials","data":{
-                        "access-key":"s3-access-key",
-                        "secret-key":"s3-secret-key"
-                    }})));
-                let s2 = b.add_step_typed::<CreateK8sSecret>("secret-gitea-admin",
-                    Some(json!({"namespace":"devtools","name":"gitea-admin-credentials","data":{
-                        "username":"literal:gitea_admin",
-                        "password":"gitea-admin-password"
                     }})));
                 b.wire_outcome(ns, s1, None);
                 b.wire_outcome(s1, s2, None);
@@ -229,16 +242,7 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<EnsureNamespace>("ensure-ns-media",
                     Some(json!({"namespace": "media"})));
             })
-            .branch(|b| {
-                b.add_step_typed::<EnsureNamespace>("ensure-ns-monitoring",
-                    Some(json!({"namespace": "monitoring"})));
-            })
         )
-
-        .then::<steps::SyncGiteaAdminPassword>()
-        .name("sync-gitea-admin-password")
-        .then::<steps::BootstrapGitea>()
-        .name("bootstrap-gitea")
 
         // ── Phase 7: Application manifests ────────────────────────────
         .parallel(|p| p
@@ -247,10 +251,12 @@ pub fn build() -> WorkflowDefinition {
                     Some(json!({"namespace": "matrix"})));
             })
             .branch(|b| {
-                // wfe-server pulls its image from src.DOMAIN_SUFFIX (built
-                // locally), so it has to come *after* gitea bootstrap.
                 b.add_step_typed::<ApplyManifest>("apply-wfe",
                     Some(json!({"namespace": "wfe"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-press",
+                    Some(json!({"namespace": "press"})));
             })
         )
 
@@ -278,17 +284,49 @@ pub fn build() -> WorkflowDefinition {
         .then::<InjectOpenSearchModelId>()
         .name("inject-opensearch-model-id")
 
-        // ── Phase 9: VPN pre-auth keys (mint or skip) ─────────────────
-        // Runs after headscale has been applied (phase 5) and the ACL
-        // ConfigMap has been loaded. Idempotent: no-op if both the
-        // router Secret and the user config already have a key.
+        // ── Phase 9: Kratos admin identity  (NEW in v3) ───────────────
+        // This was missing from v2. Without it, no admin user exists and
+        // nobody can log in.
+        .then::<steps::SeedKratosAdminIdentity>()
+        .name("seed-kratos-admin-identity")
+
+        // ── Phase 10: Application rollouts ────────────────────────────
+        // ApplyManifest does not wait for pods to be ready. These waits
+        // ensure downstream steps (monitoring, VPN) don't race.
+        .parallel(|p| p
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-tuwunel",
+                    Some(json!({"namespace": "matrix", "deployment": "tuwunel", "timeout_secs": 300})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-wfe-server",
+                    Some(json!({"namespace": "wfe", "deployment": "wfe-server", "timeout_secs": 300})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-zot",
+                    Some(json!({"namespace": "oci", "deployment": "zot", "timeout_secs": 120})));
+            })
+        )
+
+        // ── Phase 11: Observability  (MOVED from Phase 1) ─────────────
+        // Monitoring MUST come after identity (Hydra) and VSO secrets are
+        // ready. Grafana uses Hydra for OIDC and needs OpenBao secrets.
+        .then::<ApplyManifest>()
+        .name("apply-monitoring")
+        .config(json!({"namespace": "monitoring"}))
+
+        .then::<WaitForRollout>()
+        .name("wait-grafana")
+        .config(json!({"namespace": "monitoring", "deployment": "kube-prometheus-stack-grafana", "timeout_secs": 300}))
+
+        // ── Phase 12: Finalize ────────────────────────────────────────
         .then::<steps::MintVpnPreAuthKeys>()
         .name("mint-vpn-preauth-keys")
 
         .then::<steps::PrintURLs>()
         .name("print-urls")
         .end_workflow()
-        .build("up", 2)
+        .build("up", 3)
 }
 
 #[cfg(test)]
@@ -299,7 +337,7 @@ mod tests {
     fn test_build_returns_valid_definition() {
         let def = build();
         assert_eq!(def.id, "up");
-        assert_eq!(def.version, 2);
+        assert_eq!(def.version, 3);
         assert!(
             def.steps.len() > 20,
             "expected >20 steps, got {}",
@@ -352,7 +390,7 @@ mod tests {
             .iter()
             .filter(|s| s.step_type.contains("WaitForRollout"))
             .collect();
-        assert_eq!(rollout_steps.len(), 3, "should have 3 WaitForRollout steps");
+        assert_eq!(rollout_steps.len(), 9, "should have 9 WaitForRollout steps (ory-hydra, ory-kratos, valkey, kratos, hydra, tuwunel, wfe-server, zot, grafana)");
         for s in &rollout_steps {
             let config = s.step_config.as_ref().unwrap();
             assert!(config.get("namespace").is_some());
@@ -420,5 +458,55 @@ mod tests {
             !tls_secret.outcomes.is_empty(),
             "ensure-tls-secret should wire to apply-cert-manager"
         );
+    }
+
+    #[test]
+    fn test_seed_kratos_admin_identity_present() {
+        let def = build();
+        let step = def
+            .steps
+            .iter()
+            .find(|s| s.name.as_deref() == Some("seed-kratos-admin-identity"))
+            .expect("should have seed-kratos-admin-identity step");
+        assert!(step.step_type.contains("SeedKratosAdminIdentity"));
+    }
+
+    #[test]
+    fn test_monitoring_applied_late() {
+        let def = build();
+        let monitoring_idx = def
+            .steps
+            .iter()
+            .position(|s| s.name.as_deref() == Some("apply-monitoring"))
+            .expect("should have apply-monitoring step");
+        let ory_idx = def
+            .steps
+            .iter()
+            .position(|s| s.name.as_deref() == Some("apply-ory"))
+            .expect("should have apply-ory step");
+        assert!(
+            monitoring_idx > ory_idx,
+            "monitoring should be applied after ory"
+        );
+    }
+
+    #[test]
+    fn test_no_bootstrap_gitea_step() {
+        let def = build();
+        let found = def
+            .steps
+            .iter()
+            .any(|s| s.name.as_deref() == Some("bootstrap-gitea"));
+        assert!(!found, "bootstrap-gitea should not exist in v3");
+    }
+
+    #[test]
+    fn test_no_sync_gitea_password_step() {
+        let def = build();
+        let found = def
+            .steps
+            .iter()
+            .any(|s| s.name.as_deref() == Some("sync-gitea-admin-password"));
+        assert!(!found, "sync-gitea-admin-password should not exist in v3");
     }
 }

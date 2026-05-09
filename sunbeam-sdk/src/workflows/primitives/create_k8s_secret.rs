@@ -81,7 +81,7 @@ impl StepBody for CreateK8sSecret {
             } else if cred_ref == "s3_json" {
                 let ak = creds.get("s3-access-key").cloned().unwrap_or_default();
                 let sk = creds.get("s3-secret-key").cloned().unwrap_or_default();
-                crate::workflows::seed::steps::k8s_secrets::build_s3_json(&ak, &sk)
+                crate::workflows::steps::k8s_secrets::build_s3_json(&ak, &sk)
             } else {
                 creds.get(cred_ref).cloned().unwrap_or_default()
             };
