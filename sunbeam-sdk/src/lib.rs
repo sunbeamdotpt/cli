@@ -23,8 +23,6 @@ pub mod describe;
 pub mod doctor;
 /// Pod exec and interactive shell helpers.
 pub mod exec;
-/// Gitea API client and repository helpers.
-pub mod gitea;
 /// Kubernetes client setup and manifest operations.
 pub mod kube;
 /// Service discovery via cluster annotations.
