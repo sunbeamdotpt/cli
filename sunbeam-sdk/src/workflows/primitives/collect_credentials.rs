@@ -20,7 +20,6 @@ const CRED_MAPPINGS: &[(&str, &str, &str)] = &[
     ("kratos-secrets-cookie", "kratos", "secrets-cookie"),
     ("s3-access-key", "seaweedfs", "access-key"),
     ("s3-secret-key", "seaweedfs", "secret-key"),
-    ("gitea-admin-password", "gitea", "admin-password"),
     ("hive-oidc-client-id", "hive", "oidc-client-id"),
     ("hive-oidc-client-secret", "hive", "oidc-client-secret"),
     ("people-django-secret", "people", "django-secret-key"),
@@ -39,7 +38,6 @@ const KV_SERVICES: &[&str] = &[
     "hydra",
     "kratos",
     "seaweedfs",
-    "gitea",
     "hive",
     "livekit",
     "people",
@@ -134,7 +132,7 @@ mod tests {
 
     #[test]
     fn cred_mappings_cover_all_expected_keys() {
-        assert_eq!(CRED_MAPPINGS.len(), 15);
+        assert_eq!(CRED_MAPPINGS.len(), 14);
         assert!(
             CRED_MAPPINGS
                 .iter()
@@ -149,6 +147,6 @@ mod tests {
 
     #[test]
     fn kv_services_count() {
-        assert_eq!(KV_SERVICES.len(), 19);
+        assert_eq!(KV_SERVICES.len(), 18);
     }
 }

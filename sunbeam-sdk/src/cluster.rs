@@ -35,13 +35,4 @@ pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) 
     }
 }
 
-#[cfg(test)]
-mod tests {
 
-    use crate::constants::GITEA_ADMIN_USER;
-
-    #[test]
-    fn gitea_admin_user_constant() {
-        assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-    }
-}
