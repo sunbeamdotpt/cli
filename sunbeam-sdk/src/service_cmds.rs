@@ -77,8 +77,8 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             }
         }
         ServiceAction::Seed => {
-            crate::output::step("Seeding secrets (workflow engine)...");
-            run_workflow("seed", 2, 900, crate::workflows::seed::print_summary).await
+            crate::output::warn("`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
+            Ok(())
         }
         ServiceAction::Verify => {
             crate::output::step("Verifying VSO -> OpenBao integration...");
@@ -222,7 +222,9 @@ async fn run_workflow(
 
     // Register the workflow definition
     match name {
-        "seed" => crate::workflows::seed::register(&host).await,
+        "seed" => {
+            crate::output::warn("The seed workflow has been merged into `up`. Use `sunbeam up` instead.");
+        }
         "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
     }
