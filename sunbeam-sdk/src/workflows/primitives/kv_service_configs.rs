@@ -22,10 +22,6 @@ pub fn all_service_configs() -> Vec<Value> {
             {"key":"access-key","generator":"rand_token"},
             {"key":"secret-key","generator":"rand_token"}
         ]}),
-        json!({"service":"gitea","fields":[
-            {"key":"admin-username","generator":"gitea_admin"},
-            {"key":"admin-password","generator":"rand_token"}
-        ]}),
         json!({"service":"livekit","fields":[
             {"key":"api-key","generator":"static:devkey"},
             {"key":"api-secret","generator":"rand_token"}
@@ -76,7 +72,6 @@ pub fn all_service_names() -> Vec<&'static str> {
         "hydra",
         "kratos",
         "seaweedfs",
-        "gitea",
         "livekit",
         "login-ui",
         "kratos-admin",
@@ -104,9 +99,9 @@ mod tests {
 
     #[test]
     fn service_count() {
-        // 10 independent + 1 kratos-admin (dependent)
-        assert_eq!(all_service_configs().len(), 10);
-        assert_eq!(all_service_names().len(), 11);
+        // 9 independent + 1 kratos-admin (dependent)
+        assert_eq!(all_service_configs().len(), 9);
+        assert_eq!(all_service_names().len(), 10);
     }
 
     #[test]
