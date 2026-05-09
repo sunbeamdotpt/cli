@@ -99,15 +99,13 @@ pub struct VerifyData {
 }
 
 /// Workflow data for the `bootstrap` workflow.
+///
+/// Deprecated: bootstrap workflow has been merged into `up`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BootstrapData {
     #[serde(default, rename = "__ctx")]
     /// Ctx.
     pub ctx: Option<StepContext>,
-    /// Gitea pod.
-    pub gitea_pod: Option<String>,
-    /// Gitea admin pass.
-    pub gitea_admin_pass: Option<String>,
     /// Domain.
     pub domain: Option<String>,
 }
@@ -274,8 +272,6 @@ mod tests {
     #[test]
     fn test_bootstrap_data_default() {
         let d = BootstrapData::default();
-        assert!(d.gitea_pod.is_none());
-        assert!(d.gitea_admin_pass.is_none());
         assert!(d.domain.is_none());
     }
 
@@ -283,14 +279,11 @@ mod tests {
     fn test_bootstrap_data_roundtrip() {
         let d = BootstrapData {
             ctx: Some(make_ctx()),
-            gitea_pod: Some("gitea-0".to_string()),
-            gitea_admin_pass: Some("admin123".to_string()),
             domain: Some("test.local".to_string()),
         };
         let json = serde_json::to_value(&d).unwrap();
         let back: BootstrapData = serde_json::from_value(json).unwrap();
-        assert_eq!(back.gitea_pod.as_deref(), Some("gitea-0"));
-        assert_eq!(back.gitea_admin_pass.as_deref(), Some("admin123"));
+        assert_eq!(back.domain.as_deref(), Some("test.local"));
     }
 
     // -- Cross-data-type: ensure WFE can use serde_json::Value as data --

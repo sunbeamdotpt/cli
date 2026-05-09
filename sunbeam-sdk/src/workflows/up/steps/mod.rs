@@ -18,11 +18,10 @@ pub mod vpn;
 pub use certificates::{EnsureTLSCert, EnsureTLSSecret};
 pub use finalize::PrintURLs;
 pub use infrastructure::{EnsureBuildKit, EnsureCilium};
-pub use platform::BootstrapGitea;
 pub use vpn::MintVpnPreAuthKeys;
 
-// Steps shared from seed workflow (data-struct-agnostic, reusable)
-pub use crate::workflows::seed::steps::{
-    ConfigureDatabaseEngine, FindOpenBaoPod, InitOrUnsealOpenBao, SyncGiteaAdminPassword,
+// Steps shared from the common steps pool (data-struct-agnostic, reusable)
+pub use crate::workflows::steps::{
+    ConfigureDatabaseEngine, FindOpenBaoPod, InitOrUnsealOpenBao, SeedKratosAdminIdentity,
     WaitForPostgres, WaitPodRunning,
 };
