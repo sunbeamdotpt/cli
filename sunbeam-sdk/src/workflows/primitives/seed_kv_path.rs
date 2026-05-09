@@ -11,7 +11,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::openbao::BaoClient;
 use crate::output::ok;
 use crate::secrets::{
-    self, GITEA_ADMIN_USER, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_token, rand_token_n,
+    self, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_token, rand_token_n,
     scw_config,
 };
 
@@ -33,7 +33,6 @@ fn make_generator(gen_type: &str) -> Box<dyn Fn() -> String + Send + Sync> {
         "scw_config_access" => Box::new(|| scw_config("access-key")),
         "scw_config_secret" => Box::new(|| scw_config("secret-key")),
         "smtp_uri" => Box::new(|| SMTP_URI.to_string()),
-        "gitea_admin" => Box::new(|| GITEA_ADMIN_USER.to_string()),
         "socks_proxy" => Box::new(|| format!("sunbeam:{}", rand_token())),
         _ => Box::new(String::new),
     }
@@ -53,7 +52,7 @@ fn make_generator(gen_type: &str) -> Box<dyn Fn() -> String + Send + Sync> {
 /// ```
 ///
 /// Generator types: `rand_token`, `rand_token_50`, `fernet_key`, `smtp_uri`,
-/// `gitea_admin`, `scw_config_access`, `scw_config_secret`, `socks_proxy`,
+/// `scw_config_access`, `scw_config_secret`, `socks_proxy`,
 /// `static:<value>`, `dkim_private`, `dkim_public`.
 ///
 /// For `messages` service with DKIM: use gen types `dkim_private` and `dkim_public`.

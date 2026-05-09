@@ -20,11 +20,9 @@ use crate::output::{ok, warn};
 // ── Constants ───────────────────────────────────────────────────────────────
 
 pub(crate) const ADMIN_USERNAME: &str = "estudio-admin";
-pub(crate) const GITEA_ADMIN_USER: &str = "gitea_admin";
 pub(crate) const PG_USERS: &[&str] = &[
     "kratos",
     "hydra",
-    "gitea",
     "penpot",
     "stalwart",
     "headscale",
@@ -479,13 +477,17 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(ADMIN_USERNAME, "estudio-admin");
-        assert_eq!(GITEA_ADMIN_USER, "gitea_admin");
-        assert_eq!(PG_USERS.len(), 8);
+        assert_eq!(PG_USERS.len(), 7);
         assert!(PG_USERS.contains(&"kratos"));
         assert!(PG_USERS.contains(&"hydra"));
         assert!(PG_USERS.contains(&"wfe"));
         assert!(PG_USERS.contains(&"headscale"));
         assert!(PG_USERS.contains(&"typst_editor"));
+    }
+
+    #[test]
+    fn pg_users_does_not_contain_gitea() {
+        assert!(!PG_USERS.contains(&"gitea"));
     }
 
     #[test]
@@ -520,7 +522,6 @@ mod tests {
         let expected = [
             "kratos",
             "hydra",
-            "gitea",
             "penpot",
             "stalwart",
             "headscale",

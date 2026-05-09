@@ -3,7 +3,6 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::constants::GITEA_ADMIN_USER;
 use crate::workflows::data::UpData;
 
 fn resolve_domain(data: &UpData) -> String {
@@ -43,10 +42,6 @@ impl StepBody for PrintURLs {
             ("Chat", format!("https://chat.{domain}/")),
             ("Mail", format!("https://mail.{domain}/")),
             ("People", format!("https://people.{domain}/")),
-            (
-                "Gitea",
-                format!("https://src.{domain}/  ({GITEA_ADMIN_USER} / <from openbao>)"),
-            ),
         ];
 
         for (name, url) in urls {
