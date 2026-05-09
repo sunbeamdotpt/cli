@@ -36,7 +36,6 @@ pub(crate) fn pg_db_map() -> HashMap<&'static str, &'static str> {
     [
         ("kratos", "kratos_db"),
         ("hydra", "hydra_db"),
-        ("gitea", "gitea_db"),
         ("penpot", "penpot_db"),
         ("stalwart", "stalwart_db"),
         ("headscale", "headscale_db"),
@@ -229,7 +228,7 @@ mod tests {
     #[test]
     fn test_pg_db_map_contains_all_users() {
         let map = pg_db_map();
-        assert_eq!(map.len(), 8);
+        assert_eq!(map.len(), 7);
         for user in crate::secrets::PG_USERS {
             assert!(map.contains_key(user), "pg_db_map missing key for: {user}");
         }

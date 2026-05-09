@@ -45,17 +45,16 @@ pub async fn register(host: &wfe::WorkflowHost) {
     host.register_step::<steps::EnsureBuildKit>().await;
     host.register_step::<steps::EnsureTLSCert>().await;
     host.register_step::<steps::EnsureTLSSecret>().await;
-    host.register_step::<steps::BootstrapGitea>().await;
     host.register_step::<steps::MintVpnPreAuthKeys>().await;
     host.register_step::<steps::PrintURLs>().await;
 
-    // Steps shared from seed workflow
+    // Steps shared from the common steps pool
     host.register_step::<steps::FindOpenBaoPod>().await;
     host.register_step::<steps::WaitPodRunning>().await;
     host.register_step::<steps::InitOrUnsealOpenBao>().await;
     host.register_step::<steps::WaitForPostgres>().await;
     host.register_step::<steps::ConfigureDatabaseEngine>().await;
-    host.register_step::<steps::SyncGiteaAdminPassword>().await;
+    host.register_step::<steps::SeedKratosAdminIdentity>().await;
 
     // Register workflow definition
     host.register_workflow_definition(definition::build()).await;
