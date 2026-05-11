@@ -28,7 +28,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::{ok, step, warn};
+use crate::output::{ok, step};
 use crate::workflows::data::UpData;
 
 const HEADSCALE_NS: &str = "vpn";
@@ -103,11 +103,12 @@ impl StepBody for MintVpnPreAuthKeys {
             let key = mint_preauth_key(&pod, HEADSCALE_USER, USER_TAG, KEY_EXPIRATION)
                 .await
                 .map_err(|e| wfe_core::WfeError::StepExecution(format!("mint user key: {e}")))?;
-            if let Err(e) = write_user_config_key(&key) {
-                warn(&format!("Failed to persist user key to config: {e}"));
-            } else {
-                ok("Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
-            }
+            write_user_config_key(&key).map_err(|e| {
+                wfe_core::WfeError::StepExecution(format!(
+                    "Failed to persist user key to config: {e}"
+                ))
+            })?;
+            ok("Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
         } else {
             ok("User vpn-auth-key already present - skipping mint.");
         }

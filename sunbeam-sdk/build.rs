@@ -17,6 +17,13 @@ fn main() {
     download_and_embed("kustomize", KUSTOMIZE_VERSION, &os, &arch, &out_dir);
     download_and_embed("helm", HELM_VERSION, &os, &arch, &out_dir);
 
+    // Embed lima-sunbeam.yaml for VM provisioning
+    let lima_yaml_src = Path::new("../lima-sunbeam.yaml");
+    let lima_yaml_dst = out_dir.join("lima-sunbeam.yaml");
+    fs::copy(lima_yaml_src, &lima_yaml_dst)
+        .expect("lima-sunbeam.yaml not found at ../lima-sunbeam.yaml");
+    println!("cargo:rerun-if-changed=../lima-sunbeam.yaml");
+
     // Set version info from git
     let commit = git_commit_sha();
     println!("cargo:rustc-env=SUNBEAM_COMMIT={commit}");

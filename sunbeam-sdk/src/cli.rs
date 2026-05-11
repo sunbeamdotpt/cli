@@ -29,7 +29,33 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Verb {
     /// Full cluster bring-up.
-    Up,
+    Up {
+        /// Override a manifest field (kind/namespace/name/field/path=value).
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// Disable a resource or pattern (kind/namespace/name or glob).
+        #[arg(long)]
+        disable: Vec<String>,
+        /// Re-enable a resource or pattern.
+        #[arg(long)]
+        enable: Vec<String>,
+        /// Show all discoverable manifest parameters and exit.
+        #[arg(long)]
+        show_params: bool,
+    },
+
+    /// Full cluster tear-down.
+    Down {
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Also delete infrastructure namespaces (cert-manager, longhorn-system).
+        #[arg(long)]
+        infra: bool,
+        /// Preserve data namespace (postgres, opensearch, openbao).
+        #[arg(long)]
+        keep_data: bool,
+    },
 
     /// Manage sunbeam configuration.
     Config {
@@ -283,6 +309,15 @@ pub enum ServiceAction {
         /// Print the post-substitution YAML without calling kubectl apply.
         #[arg(long)]
         dry_run: bool,
+        /// Override a manifest field (kind/namespace/name/field/path=value).
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// Disable a resource or pattern.
+        #[arg(long)]
+        disable: Vec<String>,
+        /// Re-enable a resource or pattern.
+        #[arg(long)]
+        enable: Vec<String>,
     },
 
     /// Generate/store all credentials in OpenBao.
@@ -908,14 +943,9 @@ pub enum StackAction {
         description: Option<String>,
     },
     /// Checkout the SHAs recorded in a stack.
-    Apply {
-        name: String,
-    },
+    Apply { name: String },
     /// Diff two stacks (or a stack vs current HEAD).
-    Diff {
-        left: String,
-        right: Option<String>,
-    },
+    Diff { left: String, right: Option<String> },
 }
 
 fn validate_date(s: &str) -> std::result::Result<String, String> {
@@ -966,7 +996,123 @@ pub async fn dispatch() -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Up) => {
+        Some(Verb::Down {
+            yes,
+            infra,
+            keep_data,
+        }) => {
+            // Confirmation prompt (kept outside the workflow so the workflow
+            // itself is non-interactive and fully automatable).
+            if !yes {
+                let mut to_delete: Vec<&str> = crate::down::APP_NAMESPACES.to_vec();
+                if infra {
+                    to_delete.extend(crate::down::INFRA_NAMESPACES);
+                }
+                if keep_data {
+                    to_delete.retain(|&ns| ns != "data");
+                }
+                eprintln!(
+                    "The following namespaces will be deleted:\n  {}",
+                    to_delete.join("\n  ")
+                );
+                eprint!("\nProceed? [y/N] ");
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            crate::output::step("Tearing down cluster (workflow engine)...");
+
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::down::register(&host).await;
+
+            let step_ctx = crate::workflows::StepContext::from_active();
+            let initial_data = serde_json::json!({
+                "__ctx": step_ctx,
+                "infra": infra,
+                "keep_data": keep_data,
+                "namespaces_to_delete": [],
+                "remaining_namespaces": [],
+            });
+
+            let instance = wfe::run_workflow_sync(
+                &host,
+                "down",
+                1,
+                initial_data,
+                std::time::Duration::from_secs(1800),
+            )
+            .await
+            .map_err(|e| SunbeamError::Other(format!("down workflow failed: {e}")))?;
+
+            crate::workflows::down::print_summary(&instance);
+            crate::workflows::host::shutdown_host(host).await;
+
+            if instance.status != wfe_core::models::WorkflowStatus::Complete {
+                return Err(SunbeamError::Other(format!(
+                    "down workflow ended with status {:?}",
+                    instance.status
+                )));
+            }
+
+            Ok(())
+        }
+
+        Some(Verb::Up {
+            set,
+            disable,
+            enable,
+            show_params,
+        }) => {
+            // Resolve overlay for parameter discovery
+            let infra_dir = crate::config::get_infra_dir();
+            let resolved_domain = if let Some(d) = cli.domain.as_deref().filter(|s| !s.is_empty()) {
+                d.to_string()
+            } else {
+                crate::config::domain().to_string()
+            };
+            let is_local_dev = resolved_domain.ends_with("sslip.io")
+                || resolved_domain.ends_with("nip.io")
+                || resolved_domain == "localhost"
+                || resolved_domain.starts_with("192.168.")
+                || resolved_domain.starts_with("10.")
+                || resolved_domain.starts_with("172.");
+            let overlay_name = if is_local_dev { "local" } else { "production" };
+            let overlay = infra_dir.join("overlays").join(overlay_name);
+
+            let email = if let Some(e) = cli.email.as_deref().filter(|s| !s.is_empty()) {
+                e.to_string()
+            } else {
+                crate::config::load_config().acme_email
+            };
+
+            if show_params {
+                crate::output::step("Loading deployment configs...");
+                let catalog = crate::manifest_params::discover_from_overlay(
+                    &overlay,
+                    &resolved_domain,
+                    &email,
+                )
+                .await
+                .map_err(|e| SunbeamError::Other(format!("Failed to discover manifests: {e}")))?;
+                crate::manifest_params::print_catalog(&catalog);
+                return Ok(());
+            }
+
+            let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+
             crate::output::step("Bringing up cluster (workflow engine)...");
 
             let ctx_name = {
@@ -982,10 +1128,16 @@ pub async fn dispatch() -> Result<()> {
             crate::workflows::up::register(&host).await;
 
             let step_ctx = crate::workflows::StepContext::from_active();
-            let initial_data = serde_json::json!({
+            let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "domain": "",
             });
+            if !overrides.items.is_empty() {
+                initial_data["manifest_overrides"] =
+                    serde_json::to_value(&overrides).map_err(|e| {
+                        SunbeamError::Other(format!("Failed to serialize overrides: {e}"))
+                    })?;
+            }
 
             let instance = wfe::run_workflow_sync(
                 &host,
@@ -1258,7 +1410,16 @@ pub async fn dispatch() -> Result<()> {
                 reusable,
                 ephemeral,
                 expiration,
-            } => crate::vpn_cmds::cmd_vpn_create_key(&user, user_id, reusable, ephemeral, &expiration).await,
+            } => {
+                crate::vpn_cmds::cmd_vpn_create_key(
+                    &user,
+                    user_id,
+                    reusable,
+                    ephemeral,
+                    &expiration,
+                )
+                .await
+            }
         },
 
         Some(Verb::Completions { shell }) => {
@@ -1289,14 +1450,22 @@ pub async fn dispatch() -> Result<()> {
 
         Some(Verb::Wt { action }) => crate::operations::cli::dispatch_worktree(action).await,
 
-        Some(Verb::Build { args }) => crate::project::cli::dispatch(ProjectAction::Build(args)).await,
+        Some(Verb::Build { args }) => {
+            crate::project::cli::dispatch(ProjectAction::Build(args)).await
+        }
         Some(Verb::Test { args }) => crate::project::cli::dispatch(ProjectAction::Test(args)).await,
         Some(Verb::Lint { args }) => crate::project::cli::dispatch(ProjectAction::Lint(args)).await,
         Some(Verb::Fmt { args }) => crate::project::cli::dispatch(ProjectAction::Fmt(args)).await,
-        Some(Verb::Package { args }) => crate::project::cli::dispatch(ProjectAction::Package(args)).await,
-        Some(Verb::Deploy { args }) => crate::project::cli::dispatch(ProjectAction::Deploy(args)).await,
+        Some(Verb::Package { args }) => {
+            crate::project::cli::dispatch(ProjectAction::Package(args)).await
+        }
+        Some(Verb::Deploy { args }) => {
+            crate::project::cli::dispatch(ProjectAction::Deploy(args)).await
+        }
         Some(Verb::Dev { args }) => crate::project::cli::dispatch(ProjectAction::Dev(args)).await,
-        Some(Verb::Clean { args }) => crate::project::cli::dispatch(ProjectAction::Clean(args)).await,
+        Some(Verb::Clean { args }) => {
+            crate::project::cli::dispatch(ProjectAction::Clean(args)).await
+        }
         Some(Verb::Doc { args }) => crate::project::cli::dispatch(ProjectAction::Doc(args)).await,
     }
 }
@@ -1314,7 +1483,7 @@ mod tests {
     #[test]
     fn test_up() {
         let cli = parse(&["sunbeam", "up"]);
-        assert!(matches!(cli.verb, Some(Verb::Up)));
+        assert!(matches!(cli.verb, Some(Verb::Up { .. })));
     }
 
     #[test]
@@ -1484,9 +1653,10 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "apply"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Apply {
-                    namespace, dry_run, ..
-                },
+                action:
+                    ServiceAction::Apply {
+                        namespace, dry_run, ..
+                    },
             }) => {
                 assert!(namespace.is_none());
                 assert!(!dry_run);
@@ -1522,9 +1692,10 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "apply", "ory", "--dry-run"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Apply {
-                    namespace, dry_run, ..
-                },
+                action:
+                    ServiceAction::Apply {
+                        namespace, dry_run, ..
+                    },
             }) => {
                 assert_eq!(namespace.unwrap(), "ory");
                 assert!(dry_run);
@@ -1538,9 +1709,10 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "apply", "--all", "--dry-run"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Apply {
-                    apply_all, dry_run, ..
-                },
+                action:
+                    ServiceAction::Apply {
+                        apply_all, dry_run, ..
+                    },
             }) => {
                 assert!(apply_all);
                 assert!(dry_run);
@@ -1958,9 +2130,10 @@ mod tests {
         let cli = parse(&["sunbeam", "operations", "compose", "up"]);
         match cli.verb {
             Some(Verb::Operations {
-                action: OperationsAction::Compose {
-                    action: ComposeAction::Up { services, wait },
-                },
+                action:
+                    OperationsAction::Compose {
+                        action: ComposeAction::Up { services, wait },
+                    },
             }) => {
                 assert!(services.is_empty());
                 assert!(wait);
@@ -1974,9 +2147,10 @@ mod tests {
         let cli = parse(&["sunbeam", "ops", "compose", "down", "--volumes"]);
         match cli.verb {
             Some(Verb::Operations {
-                action: OperationsAction::Compose {
-                    action: ComposeAction::Down { volumes },
-                },
+                action:
+                    OperationsAction::Compose {
+                        action: ComposeAction::Down { volumes },
+                    },
             }) => {
                 assert!(volumes);
             }
@@ -1999,14 +2173,15 @@ mod tests {
         ]);
         match cli.verb {
             Some(Verb::Operations {
-                action: OperationsAction::Stack {
-                    action:
-                        StackAction::Pin {
-                            name,
-                            projects,
-                            description,
-                        },
-                },
+                action:
+                    OperationsAction::Stack {
+                        action:
+                            StackAction::Pin {
+                                name,
+                                projects,
+                                description,
+                            },
+                    },
             }) => {
                 assert_eq!(name, "release-1.0");
                 assert_eq!(projects, vec!["cli", "sol"]);
@@ -2109,9 +2284,7 @@ mod tests {
 
     #[test]
     fn test_with_deps_flag() {
-        let cli = parse(&[
-            "sunbeam", "build", "-p", "sol", "--with-deps",
-        ]);
+        let cli = parse(&["sunbeam", "build", "-p", "sol", "--with-deps"]);
         match cli.verb {
             Some(Verb::Build { args }) => {
                 assert_eq!(args.projects, vec!["sol"]);

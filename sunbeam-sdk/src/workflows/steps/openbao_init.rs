@@ -11,7 +11,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+use crate::output::ok;
 use crate::secrets;
 use crate::workflows::StepContext;
 
@@ -157,8 +157,8 @@ impl StepBody for InitOrUnsealOpenBao {
             }
         }
         let pf = pf.unwrap();
-        let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
-        let bao = BaoClient::new(&bao_url);
+        let mut bao_url = format!("http://127.0.0.1:{}", pf.local_port);
+        let mut bao = BaoClient::new(&bao_url);
 
         // Wait for API to respond
         let mut status = None;
@@ -193,33 +193,7 @@ impl StepBody for InitOrUnsealOpenBao {
             already_initialized = true;
         }
 
-        if !already_initialized {
-            ok("Initializing OpenBao...");
-            match bao.init(1, 1).await {
-                Ok(init) => {
-                    unseal_key = init.keys_base64[0].clone();
-                    root_token = init.root_token.clone();
-                    let mut secret_data = HashMap::new();
-                    secret_data.insert("key".to_string(), unseal_key.clone());
-                    secret_data.insert("root-token".to_string(), root_token.clone());
-                    k::create_secret("data", "openbao-keys", secret_data)
-                        .await
-                        .map_err(|e| step_err(e.to_string()))?;
-                    ok("Initialized -- keys stored in secret/openbao-keys.");
-                }
-                Err(e) => {
-                    warn(&format!(
-                        "Init failed -- resetting OpenBao storage... ({e})"
-                    ));
-                    let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
-                    let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
-                    warn("OpenBao storage reset. Run again after the pod restarts.");
-                    let mut result = ExecutionResult::next();
-                    result.output_data = Some(serde_json::json!({ "skip_seed": true }));
-                    return Ok(result);
-                }
-            }
-        } else {
+        if already_initialized {
             ok("Already initialized.");
             if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await
                 && key != "placeholder"
@@ -230,6 +204,130 @@ impl StepBody for InitOrUnsealOpenBao {
                 && token != "placeholder"
             {
                 root_token = token;
+            }
+
+            // If vault is initialized but we lost the root token, reset storage
+            // and wait for the pod to restart so we can re-initialize inline.
+            if root_token.is_empty() {
+                ok("Vault is initialized but root token is missing -- resetting storage...");
+                let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
+                let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
+                ok("Waiting for OpenBao pod to restart...");
+
+                // Poll for a new openbao pod to reach Running (up to 5 min).
+                let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
+                let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
+                    kube::Api::namespaced(client.clone(), "data");
+                let lp = kube::api::ListParams::default()
+                    .labels("app.kubernetes.io/name=openbao,component=server");
+                let mut new_pod = String::new();
+                for _ in 0..60 {
+                    if let Ok(pod_list) = pods.list(&lp).await {
+                        if let Some(pod) = pod_list.items.first() {
+                            if let Some(name) = pod.metadata.name.as_deref() {
+                                if let Some(phase) =
+                                    pod.status.as_ref().and_then(|s| s.phase.as_deref())
+                                {
+                                    if phase == "Running" {
+                                        new_pod = name.to_string();
+                                        ok(&format!("OpenBao restarted ({new_pod})."));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                if new_pod.is_empty() {
+                    return Err(step_err("OpenBao pod did not restart after storage reset"));
+                }
+
+                // Re-establish port-forward to the new pod.
+                let mut pf2 = None;
+                for attempt in 0..10 {
+                    match secrets::port_forward("data", &new_pod, 8200).await {
+                        Ok(p) => {
+                            pf2 = Some(p);
+                            break;
+                        }
+                        Err(_) if attempt < 9 => {
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        Err(e) => {
+                            return Err(step_err(format!(
+                                "Port-forward to restarted OpenBao failed: {e}"
+                            )));
+                        }
+                    }
+                }
+                let pf2 = pf2.unwrap();
+                bao_url = format!("http://127.0.0.1:{}", pf2.local_port);
+                bao = BaoClient::new(&bao_url);
+
+                // Wait for API and confirm uninitialized.
+                for attempt in 0..30 {
+                    if let Ok(s) = bao.seal_status().await {
+                        if !s.initialized {
+                            ok("OpenBao is fresh (uninitialized).");
+                            break;
+                        }
+                    }
+                    if attempt < 29 {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
+                }
+
+                // Now fall through to the initialization block below.
+                // We set already_initialized = false so the next block runs.
+                already_initialized = false;
+            }
+        }
+
+        if !already_initialized {
+            ok("Initializing OpenBao...");
+            let mut init_err = None;
+            let mut init_result = None;
+            for attempt in 0..5 {
+                match bao.init(1, 1).await {
+                    Ok(init) => {
+                        init_result = Some(init);
+                        break;
+                    }
+                    Err(e) => {
+                        init_err = Some(e);
+                        if attempt < 4 {
+                            ok(&format!(
+                                "OpenBao init attempt {} failed, retrying in {}s...",
+                                attempt + 1,
+                                3 + attempt * 2
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                3 + attempt as u64 * 2,
+                            ))
+                            .await;
+                        }
+                    }
+                }
+            }
+            match init_result {
+                Some(init) => {
+                    unseal_key = init.keys_base64[0].clone();
+                    root_token = init.root_token.clone();
+                    let mut secret_data = HashMap::new();
+                    secret_data.insert("key".to_string(), unseal_key.clone());
+                    secret_data.insert("root-token".to_string(), root_token.clone());
+                    k::create_secret("data", "openbao-keys", secret_data)
+                        .await
+                        .map_err(|e| step_err(e.to_string()))?;
+                    ok("Initialized -- keys stored in secret/openbao-keys.");
+                }
+                None => {
+                    return Err(step_err(format!(
+                        "OpenBao init failed after 5 attempts: {}. Manual fix required: check pod logs and network connectivity.",
+                        init_err.unwrap()
+                    )));
+                }
             }
         }
 
@@ -246,13 +344,6 @@ impl StepBody for InitOrUnsealOpenBao {
             bao.unseal(&unseal_key)
                 .await
                 .map_err(|e| step_err(format!("Failed to unseal OpenBao: {e}")))?;
-        }
-
-        if root_token.is_empty() {
-            warn("No root token available -- skipping vault operations.");
-            let mut result = ExecutionResult::next();
-            result.output_data = Some(serde_json::json!({ "skip_seed": true }));
-            return Ok(result);
         }
 
         // Enable & tune KV engine
