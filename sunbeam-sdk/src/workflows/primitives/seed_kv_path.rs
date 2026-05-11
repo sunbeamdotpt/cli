@@ -11,7 +11,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::openbao::BaoClient;
 use crate::output::ok;
 use crate::secrets::{
-    self, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_token, rand_token_n,
+    self, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_string_32, rand_token, rand_token_n,
     scw_config,
 };
 
@@ -29,6 +29,7 @@ fn make_generator(gen_type: &str) -> Box<dyn Fn() -> String + Send + Sync> {
     match gen_type {
         "rand_token" => Box::new(rand_token),
         "rand_token_50" => Box::new(|| rand_token_n(50)),
+        "rand_string_32" => Box::new(rand_string_32),
         "fernet_key" => Box::new(gen_fernet_key),
         "scw_config_access" => Box::new(|| scw_config("access-key")),
         "scw_config_secret" => Box::new(|| scw_config("secret-key")),

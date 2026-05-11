@@ -19,32 +19,34 @@ pub mod config;
 pub mod constants;
 /// kubectl describe wrappers.
 pub mod describe;
+/// Service discovery via cluster annotations.
+pub mod discovery;
 /// Connectivity and sanity diagnostics.
 pub mod doctor;
+/// Cluster tear-down commands.
+pub mod down;
 /// Pod exec and interactive shell helpers.
 pub mod exec;
 /// Kubernetes client setup and manifest operations.
 pub mod kube;
-/// Service discovery via cluster annotations.
-pub mod discovery;
+/// Runtime manifest parameter discovery and override application.
+pub mod manifest_params;
 /// Kustomize build, apply, and namespace filtering.
 pub mod manifests;
 /// OpenBao (HashiCorp Vault fork) API client.
 pub mod openbao;
 /// Workspace-level operations (compose, stack, worktree).
 pub mod operations;
-/// Per-project build, test, and deployment commands.
-pub mod project;
-/// Local proxy and port-forward helpers.
-pub mod proxy;
-/// Topological sort for workspace project graphs.
-pub mod topo;
 /// CLI output helpers (tables, JSON, YAML, step banners).
 pub mod output;
 /// Project management (Planka + Gitea ticket sync).
 pub mod pm;
 /// Kubernetes port-forward utilities.
 pub mod port_forward;
+/// Per-project build, test, and deployment commands.
+pub mod project;
+/// Local proxy and port-forward helpers.
+pub mod proxy;
 /// Infrastructure manifest registry and namespace discovery.
 pub mod registry;
 /// OpenBao secret reading and seeding.
@@ -55,6 +57,8 @@ pub mod service_cmds;
 pub mod services;
 /// Embedded binary extraction (kustomize, helm).
 pub mod tools;
+/// Topological sort for workspace project graphs.
+pub mod topo;
 /// Self-update from Gitea CI artifacts.
 pub mod update;
 /// Identity management (Kratos user CRUD).
