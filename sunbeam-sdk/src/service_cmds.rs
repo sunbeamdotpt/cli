@@ -38,7 +38,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
         ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
         ServiceAction::Deploy { target, all } => match target {
             Some(t) if !all => cmd_deploy(&t, domain, email).await,
-            _ => crate::manifests::cmd_apply(domain, email, "").await,
+            _ => crate::manifests::cmd_apply(domain, email, "", &[], None).await,
         },
         ServiceAction::Apply {
             namespace,
@@ -46,6 +46,9 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             domain: apply_domain,
             email: apply_email,
             dry_run,
+            set,
+            disable,
+            enable,
         } => {
             let d = if apply_domain.is_empty() {
                 domain.to_string()
@@ -58,6 +61,7 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
                 apply_email
             };
             let ns = namespace.unwrap_or_default();
+            let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
             if !dry_run && ns.is_empty() && !apply_all {
                 crate::output::warn("This will apply ALL namespaces.");
@@ -71,9 +75,9 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
             }
 
             if dry_run {
-                crate::manifests::cmd_apply_dry_run(&d, &e, &ns).await
+                crate::manifests::cmd_apply_dry_run(&d, &e, &ns, &[], Some(&overrides)).await
             } else {
-                crate::manifests::cmd_apply(&d, &e, &ns).await
+                crate::manifests::cmd_apply(&d, &e, &ns, &[], Some(&overrides)).await
             }
         }
         ServiceAction::Seed => {
@@ -223,7 +227,9 @@ async fn run_workflow(
     // Register the workflow definition
     match name {
         "seed" => {
-            crate::output::warn("The seed workflow has been merged into `up`. Use `sunbeam up` instead.");
+            crate::output::warn(
+                "The seed workflow has been merged into `up`. Use `sunbeam up` instead.",
+            );
         }
         "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
@@ -271,7 +277,7 @@ async fn cmd_deploy(target: &str, domain: &str, email: &str) -> Result<()> {
 
     for ns in &namespaces {
         step(&format!("Applying manifests for {ns}..."));
-        crate::manifests::cmd_apply(domain, email, ns).await?;
+        crate::manifests::cmd_apply(domain, email, ns, &[], None).await?;
     }
 
     for svc in &resolved {

@@ -12,6 +12,8 @@ pub mod primitives;
 pub mod steps;
 /// Up.
 pub mod up;
+/// Down.
+pub mod down;
 /// Verify.
 pub mod verify;
 
