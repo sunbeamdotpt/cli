@@ -4,7 +4,8 @@ use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{Namespace, Secret};
+use k8s_openapi::api::core::v1::{Namespace, Node, Secret};
+use k8s_openapi::kube_aggregator::pkg::apis::apiregistration::v1::APIService;
 use kube::api::{Api, ApiResource, DeleteParams, DynamicObject, ListParams, Patch, PatchParams};
 use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::discovery::{self, Scope};
@@ -87,15 +88,49 @@ pub async fn get_client() -> Result<Client> {
 // Core Kubernetes operations
 // ---------------------------------------------------------------------------
 
+/// Query APIServices and return the group names of any that are not available.
+async fn discover_broken_api_groups(client: &Client) -> Result<Vec<String>> {
+    let api: Api<APIService> = Api::all(client.clone());
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| SunbeamError::kube(format!("Failed to list APIServices: {e}")))?;
+
+    let mut broken = Vec::new();
+    for svc in list.items {
+        let available = svc.status.as_ref().and_then(|s| {
+            s.conditions
+                .as_ref()?
+                .iter()
+                .find(|c| c.type_ == "Available")
+        });
+        if available.map(|c| c.status != "True").unwrap_or(true) {
+            if let Some(name) = svc.metadata.name {
+                // APIService names are like "v1alpha1.acme.scaleway.com"
+                // Extract the group part (everything after the first dot)
+                if let Some(dot) = name.find('.') {
+                    let group = &name[dot + 1..];
+                    if !group.is_empty() && !broken.contains(&group.to_string()) {
+                        broken.push(group.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(broken)
+}
+
 /// Compute a stable SHA-256 hex hash of the `spec` field of a Job manifest document.
 ///
 /// Only the `spec` key is hashed (metadata and status are excluded) so that
 /// label/annotation changes on the Job wrapper don't trigger unnecessary
 /// deletions, while any container/template/volume drift will be detected.
 fn job_spec_hash(doc_json: &serde_json::Value) -> String {
-    let spec = doc_json.get("spec").cloned().unwrap_or(serde_json::Value::Null);
-    let canonical =
-        serde_json::to_string(&spec).unwrap_or_default();
+    let spec = doc_json
+        .get("spec")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let canonical = serde_json::to_string(&spec).unwrap_or_default();
     let digest = Sha256::digest(canonical.as_bytes());
     format!("{digest:x}")
 }
@@ -114,154 +149,343 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
     let client = get_client().await?;
     let ssapply = PatchParams::apply("sunbeam").force();
 
+    // Run discovery once and cache the result for all documents.
+    // Without this, every document triggers a full API discovery round-trip,
+    // which overwhelms the API server when applying 100+ resources.
+    //
+    // Broken APIServices (e.g. stale webhook registrations) cause 503s during
+    // discovery. We query APIServices first and exclude unavailable groups so
+    // discovery doesn't fail on them.
+    let broken_groups = discover_broken_api_groups(&client)
+        .await
+        .unwrap_or_default();
+    if !broken_groups.is_empty() {
+        crate::output::ok(&format!(
+            "Excluding broken API groups from discovery: {}",
+            broken_groups.join(", ")
+        ));
+    }
+
+    let mut disc = None;
+    let mut last_err = None;
+    for attempt in 1..=5 {
+        let d = discovery::Discovery::new(client.clone())
+            .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        match d.run().await {
+            Ok(d) => {
+                disc = Some(d);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < 5 {
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * attempt)).await;
+                }
+            }
+        }
+    }
+    let mut disc = match disc {
+        Some(d) => d,
+        None => {
+            return Err(SunbeamError::kube(format!(
+                "API discovery failed after 5 attempts: {}",
+                last_err.unwrap()
+            )));
+        }
+    };
+
+    // Split manifest into CRDs and everything else.
+    // CRDs must be applied first so their APIs are registered before we try
+    // to apply custom resources that use them.
+    let mut crd_docs: Vec<&str> = Vec::new();
+    let mut other_docs: Vec<&str> = Vec::new();
+
     for doc in manifest.split("\n---") {
         let doc = doc.trim();
         if doc.is_empty() || doc == "---" {
             continue;
         }
-
-        // Parse the YAML to a DynamicObject so we can route it
-        let obj: serde_yaml::Value =
-            serde_yaml::from_str(doc).ctx("Failed to parse YAML document")?;
-
-        let api_version = obj.get("apiVersion").and_then(|v| v.as_str()).unwrap_or("");
-        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let metadata = obj.get("metadata");
-        let name = metadata
-            .and_then(|m| m.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let namespace = metadata
-            .and_then(|m| m.get("namespace"))
-            .and_then(|v| v.as_str());
-
-        if name.is_empty() || kind.is_empty() {
-            continue; // skip incomplete documents
-        }
-
-        // ---------------------------------------------------------------
-        // Job immutability: delete the live Job when its spec has changed.
-        // ---------------------------------------------------------------
-        if kind == "Job" {
-            let patch_json: serde_json::Value =
-                serde_yaml::from_str(doc).ctx("Failed to parse Job YAML to JSON")?;
-            let new_hash = job_spec_hash(&patch_json);
-
-            let job_ns = namespace.unwrap_or("default");
-            let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
-
-            if let Ok(Some(live_job)) = jobs.get_opt(name).await {
-                let live_hash = live_job
-                    .metadata
-                    .annotations
-                    .as_ref()
-                    .and_then(|a| a.get(SPEC_HASH_ANNOTATION))
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-
-                if live_hash != new_hash {
-                    crate::output::ok(&format!(
-                        "Job {job_ns}/{name} spec changed — deleting before re-apply..."
-                    ));
-                    let dp = DeleteParams::default();
-                    let _ = jobs.delete(name, &dp).await;
-                }
-                // Hash matches: live Job is identical; SSA below is a no-op but harmless.
-            }
-        }
-
-        // Use discovery to find the right API resource
-        let (ar, scope) = resolve_api_resource(&client, api_version, kind).await?;
-
-        let api: Api<DynamicObject> = if let Some(ns) = namespace {
-            Api::namespaced_with(client.clone(), ns, &ar)
-        } else if scope == Scope::Namespaced {
-            // Namespaced resource without a namespace specified; use default
-            Api::default_namespaced_with(client.clone(), &ar)
+        if doc.contains("kind: CustomResourceDefinition") {
+            crd_docs.push(doc);
         } else {
-            Api::all_with(client.clone(), &ar)
-        };
-
-        let mut patch: serde_json::Value =
-            serde_yaml::from_str(doc).ctx("Failed to parse YAML to JSON value")?;
-
-        // For Jobs, stamp a sunbeam.pt/spec-hash annotation so that
-        // pre_apply_cleanup can tell whether the spec changed since the last
-        // apply.  The hash covers only the `spec` field — metadata/status are
-        // excluded because they change on every apply regardless of user intent.
-        if kind == "Job" {
-            use sha2::Digest;
-            let spec_json = patch
-                .get("spec")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let canonical = serde_json::to_string(&spec_json).unwrap_or_default();
-            let hash = format!("{:x}", sha2::Sha256::digest(canonical.as_bytes()));
-
-            let annotations = patch
-                .pointer_mut("/metadata/annotations")
-                .and_then(|v| v.as_object_mut());
-            if let Some(map) = annotations {
-                map.insert(
-                    "sunbeam.pt/spec-hash".to_string(),
-                    serde_json::Value::String(hash),
-                );
-            } else if let Some(metadata) = patch.get_mut("metadata") {
-                if let Some(obj) = metadata.as_object_mut() {
-                    let mut ann = serde_json::Map::new();
-                    ann.insert(
-                        "sunbeam.pt/spec-hash".to_string(),
-                        serde_json::Value::String(hash),
-                    );
-                    obj.insert(
-                        "annotations".to_string(),
-                        serde_json::Value::Object(ann),
-                    );
-                }
-            }
+            other_docs.push(doc);
         }
+    }
 
-        api.patch(name, &ssapply, &Patch::Apply(patch))
+    let mut errors: Vec<String> = Vec::new();
+
+    // Pass 1: apply CRDs
+    for doc in &crd_docs {
+        match apply_one_doc(&client, &ssapply, &disc, doc).await {
+            Ok(name) if !name.is_empty() => {
+                crate::output::ok(&format!("  Applied {name}"));
+            }
+            Err(e) => errors.push(e),
+            _ => {}
+        }
+    }
+
+    // If we applied any CRDs, refresh discovery so the new APIs are known.
+    if !crd_docs.is_empty() {
+        crate::output::ok("CRDs applied — refreshing API discovery...");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        match discovery::Discovery::new(client.clone())
+            .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            .run()
             .await
-            .with_ctx(|| format!("Failed to apply {kind}/{name}"))?;
+        {
+            Ok(d) => disc = d,
+            Err(e) => {
+                errors.push(format!("Failed to refresh discovery after CRD apply: {e}"));
+            }
+        };
+    }
 
-        // ---------------------------------------------------------------
-        // After a successful Job apply, stamp the spec hash annotation so
-        // subsequent runs can detect spec drift without deleting needlessly.
-        // ---------------------------------------------------------------
-        if kind == "Job" {
-            let patch_json: serde_json::Value =
-                serde_yaml::from_str(doc).ctx("Failed to parse Job YAML to JSON (post-apply)")?;
-            let hash = job_spec_hash(&patch_json);
-            let job_ns = namespace.unwrap_or("default");
-            let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
-            let annotation_patch = serde_json::json!({
-                "metadata": {
-                    "annotations": {
-                        SPEC_HASH_ANNOTATION: hash
+    // Pre-create any namespaces referenced by the manifest so that
+    // cluster-scoped resources (e.g. RoleBindings) that target them don't
+    // fail with "namespace not found".
+    let ns_api: Api<Namespace> = Api::all(client.clone());
+    let mut seen_ns: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for doc in &other_docs {
+        if let Ok(obj) = serde_yaml::from_str::<serde_yaml::Value>(doc) {
+            // Namespace field on the resource itself
+            if let Some(ns) = obj
+                .get("metadata")
+                .and_then(|m| m.get("namespace"))
+                .and_then(|v| v.as_str())
+            {
+                seen_ns.insert(ns.to_string());
+            }
+            // For RoleBindings, the subject namespace
+            if let Some(subjects) = obj.get("subjects").and_then(|s| s.as_sequence()) {
+                for sub in subjects {
+                    if let Some(ns) = sub.get("namespace").and_then(|v| v.as_str()) {
+                        seen_ns.insert(ns.to_string());
                     }
                 }
-            });
-            if let Err(e) = jobs
-                .patch(
-                    name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&annotation_patch),
-                )
-                .await
-            {
-                crate::output::warn(&format!(
-                    "Failed to stamp spec-hash on Job {job_ns}/{name}: {e}"
-                ));
             }
         }
     }
+    for ns in seen_ns {
+        ns_api
+            .patch(
+                &ns,
+                &ssapply,
+                &Patch::Apply(serde_json::json!({
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": { "name": &ns }
+                })),
+            )
+            .await
+            .map_err(|e| SunbeamError::kube(format!("Failed to ensure namespace {ns}: {e}")))?;
+    }
+
+    // Pass 2: apply everything else
+    // Webhooks (cert-manager, CNPG, etc.) may not be ready immediately after
+    // their deployments are applied. Retry on webhook errors with backoff.
+    for doc in &other_docs {
+        let mut last_err = None;
+        for attempt in 0..12 {
+            match apply_one_doc(&client, &ssapply, &disc, doc).await {
+                Ok(name) => {
+                    if !name.is_empty() {
+                        crate::output::ok(&format!("  Applied {name}"));
+                    }
+                    last_err = None;
+                    break;
+                }
+                Err(e) if is_webhook_error(&e) && attempt < 11 => {
+                    crate::output::ok(&format!(
+                        "Webhook not ready for doc (attempt {}), retrying in 10s...",
+                        attempt + 1
+                    ));
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            errors.push(e);
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(SunbeamError::kube(format!(
+            "Apply had {} error(s): {}",
+            errors.len(),
+            errors.join("; ")
+        )));
+    }
+
     Ok(())
 }
 
-/// Resolve an API resource from apiVersion and kind using discovery.
-async fn resolve_api_resource(
+/// Apply a single YAML document using pre-built discovery.
+/// Returns a display string like "ingress/ConfigMap/pingora-config" on success.
+async fn apply_one_doc(
     client: &Client,
+    ssapply: &PatchParams,
+    disc: &discovery::Discovery,
+    doc: &str,
+) -> std::result::Result<String, String> {
+    let obj: serde_yaml::Value =
+        serde_yaml::from_str(doc).map_err(|e| format!("Failed to parse YAML document: {e}"))?;
+
+    let api_version = obj.get("apiVersion").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let metadata = obj.get("metadata");
+    let name = metadata
+        .and_then(|m| m.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let namespace = metadata
+        .and_then(|m| m.get("namespace"))
+        .and_then(|v| v.as_str());
+
+    if name.is_empty() || kind.is_empty() {
+        return Ok(String::new()); // skip incomplete documents
+    }
+
+    // ---------------------------------------------------------------
+    // Job immutability: delete the live Job when its spec has changed.
+    // ---------------------------------------------------------------
+    if kind == "Job" {
+        let patch_json: serde_json::Value =
+            serde_yaml::from_str(doc).map_err(|e| format!("Failed to parse Job YAML: {e}"))?;
+        let new_hash = job_spec_hash(&patch_json);
+
+        let job_ns = namespace.unwrap_or("default");
+        let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
+
+        if let Ok(Some(live_job)) = jobs.get_opt(name).await {
+            let live_hash = live_job
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(SPEC_HASH_ANNOTATION))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+
+            if live_hash != new_hash {
+                crate::output::ok(&format!(
+                    "Job {job_ns}/{name} spec changed — deleting before re-apply..."
+                ));
+                let dp = DeleteParams::default();
+                let _ = jobs.delete(name, &dp).await;
+            }
+        }
+    }
+
+    // Use discovery to find the right API resource
+    let (ar, scope) = match resolve_api_resource(disc, api_version, kind) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(format!(
+                "Could not discover API resource for {api_version}/{kind}: {e}"
+            ));
+        }
+    };
+
+    let api: Api<DynamicObject> = if let Some(ns) = namespace {
+        Api::namespaced_with(client.clone(), ns, &ar)
+    } else if scope == Scope::Namespaced {
+        Api::default_namespaced_with(client.clone(), &ar)
+    } else {
+        Api::all_with(client.clone(), &ar)
+    };
+
+    let mut patch: serde_json::Value = match serde_yaml::from_str(doc) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(format!("Failed to parse {kind}/{name} to JSON: {e}"));
+        }
+    };
+
+    if kind == "Job" {
+        use sha2::Digest;
+        let spec_json = patch
+            .get("spec")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let canonical = serde_json::to_string(&spec_json).unwrap_or_default();
+        let hash = format!("{:x}", sha2::Sha256::digest(canonical.as_bytes()));
+
+        let annotations = patch
+            .pointer_mut("/metadata/annotations")
+            .and_then(|v| v.as_object_mut());
+        if let Some(map) = annotations {
+            map.insert(
+                "sunbeam.pt/spec-hash".to_string(),
+                serde_json::Value::String(hash),
+            );
+        } else if let Some(metadata) = patch.get_mut("metadata") {
+            if let Some(obj) = metadata.as_object_mut() {
+                let mut ann = serde_json::Map::new();
+                ann.insert(
+                    "sunbeam.pt/spec-hash".to_string(),
+                    serde_json::Value::String(hash),
+                );
+                obj.insert("annotations".to_string(), serde_json::Value::Object(ann));
+            }
+        }
+    }
+
+    api.patch(name, ssapply, &Patch::Apply(patch))
+        .await
+        .map_err(|e| format!("Failed to apply {kind}/{name}: {e}"))?;
+
+    // Stamp spec-hash on Jobs after successful apply
+    if kind == "Job" {
+        let patch_json: serde_json::Value =
+            serde_yaml::from_str(doc).map_err(|e| format!("Failed to parse Job YAML: {e}"))?;
+        let hash = job_spec_hash(&patch_json);
+        let job_ns = namespace.unwrap_or("default");
+        let jobs: Api<Job> = Api::namespaced(client.clone(), job_ns);
+        let annotation_patch = serde_json::json!({
+            "metadata": {
+                "annotations": {
+                    SPEC_HASH_ANNOTATION: hash
+                }
+            }
+        });
+        if let Err(e) = jobs
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(&annotation_patch),
+            )
+            .await
+        {
+            return Err(format!(
+                "Failed to stamp spec-hash on Job {job_ns}/{name}: {e}"
+            ));
+        }
+    }
+
+    let id = if let Some(ns) = namespace {
+        format!("{ns}/{kind}/{name}")
+    } else {
+        format!("{kind}/{name}")
+    };
+    Ok(id)
+}
+
+/// Returns true if the error message indicates a webhook that isn't ready yet.
+fn is_webhook_error(err: &str) -> bool {
+    err.contains("failed calling webhook")
+        || err.contains("no endpoints available for service")
+        || err.contains("connection refused")
+        || err.contains("context deadline exceeded")
+}
+
+/// Resolve an API resource from apiVersion and kind using a pre-built discovery.
+fn resolve_api_resource(
+    disc: &discovery::Discovery,
     api_version: &str,
     kind: &str,
 ) -> Result<(ApiResource, Scope)> {
@@ -272,11 +496,6 @@ async fn resolve_api_resource(
     } else {
         ("", api_version) // core API group
     };
-
-    let disc = discovery::Discovery::new(client.clone())
-        .run()
-        .await
-        .ctx("API discovery failed")?;
 
     for api_group in disc.groups() {
         if api_group.name() == group {
@@ -420,10 +639,7 @@ pub async fn find_pod_by_label_or_any(ns: &str, label: &str) -> Option<(String, 
     }
 
     // Fallback: any Running pod in the namespace.
-    let all_pods = pods
-        .list(&kube::api::ListParams::default())
-        .await
-        .ok()?;
+    let all_pods = pods.list(&kube::api::ListParams::default()).await.ok()?;
     all_pods
         .items
         .iter()
@@ -456,6 +672,62 @@ pub async fn kube_exec(
         .exec(pod, cmd_strings, &ep)
         .await
         .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
+
+    let stdout = {
+        let mut stdout_reader = attached.stdout().ctx("No stdout stream from exec")?;
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stdout_reader, &mut buf).await?;
+        String::from_utf8_lossy(&buf).to_string()
+    };
+
+    let status = attached.take_status().ctx("No status channel from exec")?;
+
+    // Wait for the status
+    let exit_code = if let Some(status) = status.await {
+        status
+            .status
+            .map(|s| if s == "Success" { 0 } else { 1 })
+            .unwrap_or(1)
+    } else {
+        1
+    };
+
+    Ok((exit_code, stdout.trim().to_string()))
+}
+
+/// Execute a command in a pod with optional stdin data and return (exit_code, stdout).
+pub async fn kube_exec_with_stdin(
+    ns: &str,
+    pod: &str,
+    cmd: &[&str],
+    container: Option<&str>,
+    stdin_data: Option<&[u8]>,
+) -> Result<(i32, String)> {
+    let client = get_client().await?;
+    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), ns);
+
+    let ep = kube::api::AttachParams {
+        stdout: true,
+        stderr: true,
+        stdin: stdin_data.is_some(),
+        container: container.map(|c| c.to_string()),
+        ..Default::default()
+    };
+
+    let cmd_strings: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
+    let mut attached = pods
+        .exec(pod, cmd_strings, &ep)
+        .await
+        .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
+
+    // Write stdin data if provided
+    if let Some(data) = stdin_data {
+        if let Some(mut stdin_writer) = attached.stdin() {
+            use tokio::io::AsyncWriteExt;
+            stdin_writer.write_all(data).await?;
+            stdin_writer.shutdown().await.ok();
+        }
+    }
 
     let stdout = {
         let mut stdout_reader = attached.stdout().ctx("No stdout stream from exec")?;
@@ -532,39 +804,32 @@ pub async fn get_domain() -> Result<String> {
     Ok(format!("{ip}.sslip.io"))
 }
 
-/// Get the socket_vmnet IP of the Lima sunbeam VM.
+/// Get the cluster node's InternalIP (Lima VM IP in local dev).
+///
+/// Uses the Kubernetes API to read the first node's InternalIP address.
+/// This avoids `limactl shell` which is unreliable during workflow execution.
 async fn get_lima_ip() -> String {
-    let output = tokio::process::Command::new("limactl")
-        .args(["shell", "sunbeam", "ip", "-4", "addr", "show", "eth1"])
-        .output()
-        .await;
+    let client = match get_client().await {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
 
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if line.contains("inet ")
-                && let Some(addr) = line.split_whitespace().nth(1)
-                && let Some(ip) = addr.split('/').next()
-            {
-                return ip.to_string();
+    let nodes: Api<Node> = Api::all(client);
+    match nodes.list(&ListParams::default()).await {
+        Ok(node_list) => {
+            for node in node_list.items {
+                if let Some(status) = node.status
+                    && let Some(addrs) = status.addresses
+                {
+                    for addr in addrs {
+                        if addr.type_ == "InternalIP" {
+                            return addr.address;
+                        }
+                    }
+                }
             }
         }
-    }
-
-    // Fallback: hostname -I
-    let output2 = tokio::process::Command::new("limactl")
-        .args(["shell", "sunbeam", "hostname", "-I"])
-        .output()
-        .await;
-
-    if let Ok(out) = output2 {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let ips: Vec<&str> = stdout.split_whitespace().collect();
-        if ips.len() >= 2 {
-            return ips[ips.len() - 1].to_string();
-        } else if !ips.is_empty() {
-            return ips[0].to_string();
-        }
+        Err(_) => {}
     }
 
     String::new()
