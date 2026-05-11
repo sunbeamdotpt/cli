@@ -16,6 +16,7 @@ pub fn all_service_configs() -> Vec<Value> {
         json!({"service":"kratos","fields":[
             {"key":"secrets-default","generator":"rand_token"},
             {"key":"secrets-cookie","generator":"rand_token"},
+            {"key":"secrets-cipher","generator":"rand_string_32"},
             {"key":"smtp-connection-uri","generator":"smtp_uri"}
         ]}),
         json!({"service":"seaweedfs","fields":[
