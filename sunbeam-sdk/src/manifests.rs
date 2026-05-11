@@ -3,17 +3,45 @@
 use crate::error::Result;
 
 /// Return only the YAML documents that belong to the given namespace.
-pub fn filter_by_namespace(manifests: &str, namespace: &str) -> String {
+///
+/// Keeps namespace-scoped resources in the target namespace, the Namespace
+/// resource itself, and cluster-scoped resources (which have no `namespace:`
+/// field). The latter are needed because Helm charts emit ClusterRoles and
+/// CRDs that are required for the namespace's workloads to function.
+///
+/// `skip_patterns`: if any pattern is found in a document's text, that
+/// document is dropped. Used to exclude e.g. the Scaleway DNS webhook on
+/// local dev domains.
+pub fn filter_by_namespace(manifests: &str, namespace: &str, skip_patterns: &[String]) -> String {
     let mut kept = Vec::new();
     for doc in manifests.split("\n---") {
         let doc = doc.trim();
         if doc.is_empty() {
             continue;
         }
-        let has_ns = doc.contains(&format!("namespace: {namespace}"));
-        let is_ns_resource =
+        let has_target_ns = doc.contains(&format!("namespace: {namespace}"));
+        let is_target_ns =
             doc.contains("kind: Namespace") && doc.contains(&format!("name: {namespace}"));
-        if has_ns || is_ns_resource {
+        // Cluster-scoped resources (ClusterRole, CRD, etc.) don't have a
+        // namespace field. Include them so that Helm RBAC and webhooks are
+        // not silently dropped. Exclude Namespace resources for other
+        // namespaces — those are not cluster-scoped in the logical sense.
+        let is_cluster_scoped = !doc.contains("namespace: ") && !doc.contains("kind: Namespace");
+        // Some charts (cert-manager) create Roles/RoleBindings in kube-system
+        // for leader election. Include those so RBAC isn't silently dropped.
+        let is_system_ns = doc.contains("namespace: kube-system");
+        let should_skip = skip_patterns.iter().any(|p| {
+            // Match on metadata.name to avoid accidentally skipping resources
+            // that merely mention the pattern in their data/content (e.g. a
+            // ConfigMap whose payload references another resource by name).
+            doc.lines().any(|line| {
+                let trimmed = line.trim_start();
+                trimmed == format!("name: {p}")
+                    || trimmed == format!("name: \"{p}\"")
+                    || trimmed == format!("name: '{p}'")
+            })
+        });
+        if !should_skip && (has_target_ns || is_target_ns || is_cluster_scoped || is_system_ns) {
             kept.push(doc);
         }
     }
@@ -28,7 +56,13 @@ pub fn filter_by_namespace(manifests: &str, namespace: &str) -> String {
 /// Runs a second convergence pass if cert-manager is present in the overlay —
 /// cert-manager registers a ValidatingWebhook that must be running before
 /// ClusterIssuer / Certificate resources can be created.
-pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()> {
+pub async fn cmd_apply(
+    domain: &str,
+    email: &str,
+    namespace: &str,
+    skip_patterns: &[String],
+    overrides: Option<&crate::manifest_params::Overrides>,
+) -> Result<()> {
     // Fall back to active context for ACME email if not provided via CLI flag.
     // (The legacy top-level `acme_email` is migrated into the context on config
     // load — see config::load_config.)
@@ -48,7 +82,14 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
     if resolved_domain.is_empty() {
         bail!("--domain is required for apply on first deploy");
     }
-    let overlay = infra_dir.join("overlays").join("production");
+    let is_local_dev = resolved_domain.ends_with("sslip.io")
+        || resolved_domain.ends_with("nip.io")
+        || resolved_domain == "localhost"
+        || resolved_domain.starts_with("192.168.")
+        || resolved_domain.starts_with("10.")
+        || resolved_domain.starts_with("172.");
+    let overlay_name = if is_local_dev { "local" } else { "production" };
+    let overlay = infra_dir.join("overlays").join(overlay_name);
 
     let scope = if namespace.is_empty() {
         String::new()
@@ -76,8 +117,12 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
     let before = snapshot_configmaps().await;
     let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
 
+    if let Some(ov) = overrides {
+        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
+    }
+
     if !namespace.is_empty() {
-        manifests = filter_by_namespace(&manifests, namespace);
+        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
         if manifests.trim().is_empty() {
             crate::output::warn(&format!(
                 "No resources found for namespace '{namespace}' -- check the name and try again."
@@ -86,12 +131,7 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
         }
     }
 
-    // First pass: may emit errors for resources that depend on webhooks not yet running
-    if let Err(e) = crate::kube::kube_apply(&manifests).await {
-        crate::output::warn(&format!(
-            "First apply pass had errors (may be expected): {e}"
-        ));
-    }
+    crate::kube::kube_apply(&manifests).await?;
 
     // If cert-manager is in the overlay, wait for its webhook then re-apply
     let cert_manager_present = overlay.join("../../base/cert-manager").exists();
@@ -101,7 +141,11 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
         && wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await
     {
         crate::output::ok("Running convergence pass for cert-manager resources...");
-        let manifests2 = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+        let mut manifests2 =
+            crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+        if let Some(ov) = overrides {
+            manifests2 = crate::manifest_params::apply_overrides(&manifests2, ov)?;
+        }
         crate::kube::kube_apply(&manifests2).await?;
     }
 
@@ -118,7 +162,13 @@ pub async fn cmd_apply(domain: &str, email: &str, namespace: &str) -> Result<()>
 
 /// Build the kustomize overlay, substitute domain/email, and print the
 /// resulting YAML to stdout without calling kubectl apply.
-pub async fn cmd_apply_dry_run(domain: &str, email: &str, namespace: &str) -> Result<()> {
+pub async fn cmd_apply_dry_run(
+    domain: &str,
+    email: &str,
+    namespace: &str,
+    skip_patterns: &[String],
+    overrides: Option<&crate::manifest_params::Overrides>,
+) -> Result<()> {
     let email = if email.is_empty() {
         crate::config::load_config().acme_email
     } else {
@@ -135,12 +185,23 @@ pub async fn cmd_apply_dry_run(domain: &str, email: &str, namespace: &str) -> Re
     if resolved_domain.is_empty() {
         bail!("--domain is required for apply on first deploy");
     }
-    let overlay = infra_dir.join("overlays").join("production");
+    let is_local_dev = resolved_domain.ends_with("sslip.io")
+        || resolved_domain.ends_with("nip.io")
+        || resolved_domain == "localhost"
+        || resolved_domain.starts_with("192.168.")
+        || resolved_domain.starts_with("10.")
+        || resolved_domain.starts_with("172.");
+    let overlay_name = if is_local_dev { "local" } else { "production" };
+    let overlay = infra_dir.join("overlays").join(overlay_name);
 
     let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
 
+    if let Some(ov) = overrides {
+        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
+    }
+
     if !namespace.is_empty() {
-        manifests = filter_by_namespace(&manifests, namespace);
+        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
         if manifests.trim().is_empty() {
             crate::output::warn(&format!(
                 "No resources found for namespace '{namespace}' -- check the name and try again."
@@ -925,14 +986,14 @@ spec:
 
     #[test]
     fn test_keeps_matching_namespace() {
-        let result = filter_by_namespace(MULTI_DOC, "stalwart");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart", &[]);
         assert!(result.contains("name: stalwart-config"));
         assert!(result.contains("name: stalwart\n"));
     }
 
     #[test]
     fn test_excludes_other_namespaces() {
-        let result = filter_by_namespace(MULTI_DOC, "stalwart");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart", &[]);
         assert!(!result.contains("namespace: ingress"));
         assert!(!result.contains("name: pingora-config"));
         assert!(!result.contains("name: pingora\n"));
@@ -940,13 +1001,13 @@ spec:
 
     #[test]
     fn test_includes_namespace_resource_itself() {
-        let result = filter_by_namespace(MULTI_DOC, "stalwart");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart", &[]);
         assert!(result.contains("kind: Namespace"));
     }
 
     #[test]
     fn test_ingress_filter() {
-        let result = filter_by_namespace(MULTI_DOC, "ingress");
+        let result = filter_by_namespace(MULTI_DOC, "ingress", &[]);
         assert!(result.contains("name: pingora-config"));
         assert!(result.contains("name: pingora"));
         assert!(!result.contains("namespace: stalwart"));
@@ -954,39 +1015,55 @@ spec:
 
     #[test]
     fn test_unknown_namespace_returns_empty() {
-        let result = filter_by_namespace(MULTI_DOC, "nonexistent");
+        let result = filter_by_namespace(MULTI_DOC, "nonexistent", &[]);
         assert!(result.trim().is_empty());
     }
 
     #[test]
     fn test_empty_input_returns_empty() {
-        let result = filter_by_namespace("", "stalwart");
+        let result = filter_by_namespace("", "stalwart", &[]);
         assert!(result.trim().is_empty());
     }
 
     #[test]
     fn test_result_starts_with_separator() {
-        let result = filter_by_namespace(MULTI_DOC, "stalwart");
+        let result = filter_by_namespace(MULTI_DOC, "stalwart", &[]);
         assert!(result.starts_with("---"));
     }
 
     #[test]
     fn test_does_not_include_namespace_resource_for_wrong_ns() {
-        let result = filter_by_namespace(MULTI_DOC, "ingress");
+        let result = filter_by_namespace(MULTI_DOC, "ingress", &[]);
         assert!(!result.contains("kind: Namespace"));
     }
 
     #[test]
     fn test_single_doc_matching() {
         let doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: ory\n";
-        let result = filter_by_namespace(doc, "ory");
+        let result = filter_by_namespace(doc, "ory", &[]);
         assert!(result.contains("name: x"));
     }
 
     #[test]
     fn test_single_doc_not_matching() {
         let doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: ory\n";
-        let result = filter_by_namespace(doc, "stalwart");
+        let result = filter_by_namespace(doc, "stalwart", &[]);
         assert!(result.trim().is_empty());
+    }
+
+    #[test]
+    fn test_skip_by_name() {
+        let doc = "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: pingora-tls\n  namespace: ingress\n";
+        let result = filter_by_namespace(doc, "ingress", &["pingora-tls".to_string()]);
+        assert!(result.trim().is_empty());
+    }
+
+    #[test]
+    fn test_skip_does_not_match_data_content() {
+        // A ConfigMap that mentions pingora-tls in its data should NOT be
+        // skipped — the skip pattern must match metadata.name.
+        let doc = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: pingora-config\n  namespace: ingress\ndata:\n  config.toml: |\n    tls_secret = \"pingora-tls\"\n";
+        let result = filter_by_namespace(doc, "ingress", &["pingora-tls".to_string()]);
+        assert!(result.contains("name: pingora-config"));
     }
 }
