@@ -75,7 +75,7 @@ impl StepBody for WriteKVPath {
             .map_err(|e| step_err(e.to_string()))?;
         let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
 
-        bao.kv_patch("secret", service, &path_data)
+        bao.kv_put("secret", service, &path_data)
             .await
             .map_err(|e| step_err(format!("WriteKVPath({service}): {e}")))?;
 

@@ -41,10 +41,18 @@ pub async fn register(host: &wfe::WorkflowHost) {
         .await;
 
     // Steps unique to up
+    host.register_step::<steps::EnsureLimaVm>().await;
     host.register_step::<steps::EnsureCilium>().await;
     host.register_step::<steps::EnsureBuildKit>().await;
+    host.register_step::<steps::BootstrapCriticalImages>().await;
+    host.register_step::<steps::EnsureSeaweedFSBuckets>().await;
     host.register_step::<steps::EnsureTLSCert>().await;
     host.register_step::<steps::EnsureTLSSecret>().await;
+    host.register_step::<steps::WaitForCertManagerWebhook>()
+        .await;
+    host.register_step::<steps::WaitForCNPGWebhook>().await;
+    host.register_step::<steps::WaitForLonghornWebhook>().await;
+    host.register_step::<steps::BuildProjectImages>().await;
     host.register_step::<steps::MintVpnPreAuthKeys>().await;
     host.register_step::<steps::PrintURLs>().await;
 

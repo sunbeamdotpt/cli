@@ -1,4 +1,4 @@
-# Lima VM: Alpine + k3s + Cilium + nerdctl + BuildKit
+# Lima VM: Ubuntu LTS + k3s + Cilium + nerdctl + BuildKit
 # Usage:
 #   limactl create --name sunbeam lima-sunbeam.yaml
 #   limactl start sunbeam
@@ -13,9 +13,9 @@ memory: 24GiB
 disk: 60GiB
 
 images:
-  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-aarch64-uefi-cloudinit-r0.qcow2"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: "aarch64"
-  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-x86_64-uefi-cloudinit-r0.qcow2"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
     arch: "x86_64"
 
 mounts: []
@@ -26,33 +26,41 @@ containerd:
   user: false
 
 provision:
-  # 1. Base packages (Alpine uses apk, not apt)
+  # 1. Base packages
   - mode: system
     script: |
-      #!/bin/sh
+      #!/bin/bash
       set -eux
-      apk update
-      apk add --no-cache \
+      apt-get update
+      apt-get install -y \
         curl bash iptables ip6tables coreutils findutils grep \
-        openrc openssh pigz tar gzip
+        open-iscsi openssh-server pigz tar gzip
+      # Ensure iscsid starts on boot (Longhorn requires it)
+      systemctl enable iscsid || true
+      systemctl start iscsid || true
 
-  # 2. Mount propagation fix (Alpine/OpenRC doesn't set rshared by default; Cilium needs it for BPF)
+  # 2. Mount propagation fix (Cilium needs rshared for BPF)
   - mode: system
     script: |
-      #!/bin/sh
+      #!/bin/bash
       set -eux
-      # Make root and key mounts shared so containers can mount BPF/cgroup filesystems
       mount --make-rshared /
-      # Persist across reboots via a local init script that runs before k3s
-      cat > /etc/init.d/mount-shared << 'EOF'
-      #!/sbin/openrc-run
-      name="mount-shared"
-      description="Set mount propagation to rshared for Cilium BPF"
-      depend() { before k3s; }
-      start() { mount --make-rshared /; }
+      # Persist across reboots via systemd service that runs before k3s
+      cat > /etc/systemd/system/mount-shared.service << 'EOF'
+      [Unit]
+      Description=Set mount propagation to rshared for Cilium BPF
+      Before=k3s.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/mount --make-rshared /
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
       EOF
-      chmod +x /etc/init.d/mount-shared
-      rc-update add mount-shared boot 2>/dev/null || true
+      systemctl daemon-reload
+      systemctl enable mount-shared || true
 
   # 3. Install k3s (no traefik, no servicelb, no flannel — Cilium will handle CNI)
   - mode: system
@@ -68,7 +76,7 @@ provision:
           --disable-network-policy" sh -
       fi
 
-  # 3. Install Cilium CLI
+  # 4. Install Cilium CLI
   - mode: system
     script: |
       #!/bin/bash
@@ -81,7 +89,7 @@ provision:
         | tar -xz -C /usr/local/bin
       chmod +x /usr/local/bin/cilium
 
-  # 4. Install Cilium into k3s
+  # 5. Install Cilium into k3s
   - mode: system
     script: |
       #!/bin/bash
@@ -99,7 +107,7 @@ provision:
       # Wait for Cilium to be ready (up to 5 min)
       cilium status --wait --wait-duration 5m || true
 
-  # 5. Install nerdctl
+  # 6. Install nerdctl
   - mode: system
     script: |
       #!/bin/bash
@@ -113,7 +121,7 @@ provision:
         | tar -xz -C /usr/local/bin
       chmod +x /usr/local/bin/nerdctl
 
-  # 6. Install host-level BuildKit daemon
+  # 7. Install host-level BuildKit daemon
   - mode: system
     script: |
       #!/bin/bash
@@ -127,25 +135,28 @@ provision:
         | tar -xz -C /usr/local
       chmod +x /usr/local/bin/buildkitd /usr/local/bin/buildctl
 
-  # 7. BuildKit OpenRC service (Alpine uses OpenRC, not systemd)
+  # 8. BuildKit systemd service (Ubuntu uses systemd)
   - mode: system
     script: |
-      #!/bin/sh
+      #!/bin/bash
       set -eux
-      cat > /etc/init.d/buildkit << 'EOF'
-      #!/sbin/openrc-run
-      name="BuildKit"
-      description="BuildKit daemon"
-      command="/usr/local/bin/buildkitd"
-      command_args=""
-      command_background=true
-      pidfile="/run/${RC_SVCNAME}.pid"
-      output_log="/var/log/buildkit.log"
-      error_log="/var/log/buildkit.log"
+      cat > /etc/systemd/system/buildkit.service << 'EOF'
+      [Unit]
+      Description=BuildKit daemon
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/buildkitd
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
       EOF
-      chmod +x /etc/init.d/buildkit
-      rc-update add buildkit default 2>/dev/null || true
-      rc-service buildkit start 2>/dev/null || true
+      systemctl daemon-reload
+      systemctl enable buildkit || true
+      systemctl start buildkit || true
       # Wait for socket and fix permissions so Lima can forward it
       for i in $(seq 1 10); do
         [ -S /run/buildkit/buildkitd.sock ] && break
@@ -153,7 +164,7 @@ provision:
       done
       chmod 666 /run/buildkit/buildkitd.sock 2>/dev/null || true
 
-  # 8. Deploy in-cluster BuildKit (DaemonSet)
+  # 9. Deploy in-cluster BuildKit (DaemonSet)
   - mode: system
     script: |
       #!/bin/bash

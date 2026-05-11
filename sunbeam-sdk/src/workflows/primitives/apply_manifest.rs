@@ -50,9 +50,37 @@ impl StepBody for ApplyManifest {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        // Auto-skip Scaleway DNS webhook resources on local dev domains
+        // (sslip.io, nip.io, etc.) since they require external DNS creds.
+        let mut skip_patterns: Vec<String> = config
+            .get("skip_patterns")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if domain.ends_with("sslip.io") || domain.ends_with("nip.io") {
+            for pat in &[
+                "scaleway-certmanager-webhook",
+                "letsencrypt-staging",
+                "letsencrypt-production",
+                "pingora-tls",
+            ] {
+                if !skip_patterns.contains(&pat.to_string()) {
+                    skip_patterns.push(pat.to_string());
+                }
+            }
+        }
+
         step(&format!("Applying {namespace}..."));
 
-        crate::manifests::cmd_apply(domain, email, namespace)
+        let overrides = data
+            .get("manifest_overrides")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+        crate::manifests::cmd_apply(domain, email, namespace, &skip_patterns, overrides.as_ref())
             .await
             .map_err(|e| step_err(e.to_string()))?;
 

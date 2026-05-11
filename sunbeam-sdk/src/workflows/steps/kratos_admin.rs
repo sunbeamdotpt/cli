@@ -8,7 +8,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::error::SunbeamError;
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+use crate::output::{ok};
 use crate::secrets::{self, ADMIN_USERNAME, KratosIdentity, KratosRecovery};
 use crate::workflows::data::SeedData;
 
@@ -64,8 +64,9 @@ impl StepBody for SeedKratosAdminIdentity {
         let domain = match k::get_domain().await {
             Ok(d) => d,
             Err(e) => {
-                warn(&format!("Could not determine domain: {e}"));
-                return Ok(ExecutionResult::next());
+                return Err(wfe_core::WfeError::StepExecution(format!(
+                    "Could not determine domain: {e}"
+                )));
             }
         };
         let admin_email = admin_email(&domain);
@@ -174,9 +175,9 @@ impl StepBody for SeedKratosAdminIdentity {
                 }));
             }
             Err(e) => {
-                warn(&format!(
-                    "Could not seed Kratos admin identity (Kratos may not be ready): {e}"
-                ));
+                return Err(wfe_core::WfeError::StepExecution(format!(
+                    "Could not seed Kratos admin identity: {e}"
+                )));
             }
         }
 
