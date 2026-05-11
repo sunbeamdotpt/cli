@@ -13,7 +13,7 @@
 
 use serde_json::json;
 use wfe_core::builder::WorkflowBuilder;
-use wfe_core::models::WorkflowDefinition;
+use wfe_core::models::{ErrorBehavior, WorkflowDefinition};
 
 use super::steps;
 use crate::workflows::primitives::kv_service_configs;
@@ -27,38 +27,66 @@ use crate::workflows::steps::postgres::pg_db_map;
 /// Build the up workflow definition (version 3).
 pub fn build() -> WorkflowDefinition {
     WorkflowBuilder::<serde_json::Value>::new()
+        .default_error_behavior(ErrorBehavior::Terminate)
+        // ── Phase 0: Lima VM (local dev only) ──────────────────────────
+        .start_with::<steps::EnsureLimaVm>()
+        .name("ensure-lima-vm")
+
         // ── Phase 1: Infrastructure ────────────────────────────────────
-        .start_with::<steps::EnsureCilium>()
+        .then::<steps::EnsureCilium>()
         .name("ensure-cilium")
 
-        .parallel(|p| p
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-longhorn",
-                    Some(json!({"namespace": "longhorn-system"})));
-            })
-            .branch(|b| {
-                let id0 = b.add_step_typed::<steps::EnsureTLSCert>("ensure-tls-cert", None);
-                let id1 = b.add_step_typed::<steps::EnsureTLSSecret>("ensure-tls-secret", None);
-                let id2 = b.add_step_typed::<ApplyManifest>("apply-cert-manager",
-                    Some(json!({"namespace": "cert-manager"})));
-                b.wire_outcome(id0, id1, None);
-                b.wire_outcome(id1, id2, None);
-            })
-        )
-
+        // Cert-manager MUST be applied and ready before any other namespace.
+        // Every namespace filter includes cluster-scoped resources (ClusterRoles,
+        // webhooks, etc.) and cert-manager's validating webhook rejects
+        // ClusterIssuer / Certificate creates if its own webhook pod isn't ready.
+        .then::<steps::EnsureTLSCert>()
+        .name("ensure-tls-cert")
+        .then::<steps::EnsureTLSSecret>()
+        .name("ensure-tls-secret")
         .then::<ApplyManifest>()
-        .name("apply-data")
-        .config(json!({"namespace": "data"}))
+        .name("apply-cert-manager")
+        .config(json!({"namespace": "cert-manager", "skip": ["scaleway-dns-credentials", "vso-auth"]}))
+        .then::<WaitForRollout>()
+        .name("wait-cert-manager")
+        .config(json!({"namespace": "cert-manager", "deployment": "cert-manager", "timeout_secs": 120}))
+        .then::<steps::WaitForCertManagerWebhook>()
+        .name("wait-cert-manager-webhook")
+
+        // Longhorn must be applied and ready before data (PVCs need Longhorn
+        // webhook validation) and before build (buildkitd may use Longhorn PVCs).
+        .then::<ApplyManifest>()
+        .name("apply-longhorn")
+        .config(json!({"namespace": "longhorn-system"}))
+        .then::<steps::WaitForLonghornWebhook>()
+        .name("wait-longhorn-webhook")
 
         .parallel(|p| p
             .branch(|b| {
-                b.add_step_typed::<steps::EnsureBuildKit>("ensure-buildkit", None);
+                b.add_step_typed::<ApplyManifest>("apply-data",
+                    Some(json!({"namespace": "data"})));
             })
             .branch(|b| {
                 b.add_step_typed::<ApplyManifest>("apply-build",
                     Some(json!({"namespace": "build"})));
             })
         )
+
+        .then::<steps::WaitForCNPGWebhook>()
+        .name("wait-cnpg-webhook")
+
+        .then::<WaitForRollout>()
+        .name("wait-buildkitd")
+        .config(json!({"namespace": "build", "deployment": "buildkitd", "timeout_secs": 120}))
+
+        // ── Phase 1b: Bootstrap critical images ───────────────────────
+        // The proxy image is required by the ingress controller (pingora),
+        // but image builds normally happen AFTER ingress is ready. On a
+        // fresh install this creates a deadlock. Build the proxy image
+        // here using host Docker and import it into k3s containerd so
+        // pingora can start when its manifest is applied.
+        .then::<steps::BootstrapCriticalImages>()
+        .name("bootstrap-critical-images")
 
         // ── Phase 2: OpenBao init (sequential) ────────────────────────
         .then::<steps::FindOpenBaoPod>()
@@ -111,8 +139,8 @@ pub fn build() -> WorkflowDefinition {
         .then::<WriteVaultRole>()
         .name("write-vso-role")
         .config(json!({"mount": "kubernetes", "role": "vso", "config": {
-            "bound_service_account_names": "default",
-            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe",
+            "bound_service_account_names": "default,headscale,wfe-server",
+            "bound_service_account_namespaces": "ory,devtools,storage,stalwart,matrix,media,data,monitoring,cert-manager,vpn,wfe,press,oci",
             "policies": "vso-reader",
             "ttl": "1h"
         }}))
@@ -143,64 +171,10 @@ pub fn build() -> WorkflowDefinition {
         .then::<steps::ConfigureDatabaseEngine>()
         .name("configure-database-engine")
 
-        // ── Phase 5: Platform manifests ───────────────────────────────
-        .then::<ApplyManifest>()
-        .name("apply-vso")
-        .config(json!({"namespace": "vault-secrets-operator"}))
-
-        .parallel(|p| p
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-ingress",
-                    Some(json!({"namespace": "ingress"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-ory",
-                    Some(json!({"namespace": "ory"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-devtools",
-                    Some(json!({"namespace": "devtools"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-storage",
-                    Some(json!({"namespace": "storage"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-media",
-                    Some(json!({"namespace": "media"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-stalwart",
-                    Some(json!({"namespace": "stalwart"})));
-            })
-            .branch(|b| {
-                // VPN bootstrap path — headscale needs cert-manager + the
-                // headscale_db postgres role from Phase 4. Both are done by
-                // the time this branch fires.
-                b.add_step_typed::<ApplyManifest>("apply-vpn",
-                    Some(json!({"namespace": "vpn"})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<ApplyManifest>("apply-oci",
-                    Some(json!({"namespace": "oci"})));
-            })
-        )
-
-        // CRITICAL: Ory Helm charts run DB migrations as hooks. ApplyManifest
-        // does NOT wait for hooks. Block here until Hydra and Kratos are
-        // actually ready before anything that depends on them continues.
-        .parallel(|p| p
-            .branch(|b| {
-                b.add_step_typed::<WaitForRollout>("wait-ory-hydra",
-                    Some(json!({"namespace": "ory", "deployment": "hydra", "timeout_secs": 300})));
-            })
-            .branch(|b| {
-                b.add_step_typed::<WaitForRollout>("wait-ory-kratos",
-                    Some(json!({"namespace": "ory", "deployment": "kratos", "timeout_secs": 300})));
-            })
-        )
-
-        // ── Phase 6: K8s secrets (parallel by namespace) ──────────────
+        // ── Phase 5: Ensure namespaces + create secrets BEFORE applying
+        // manifests. Helm charts (Ory, etc.) reference these secrets at
+        // pod creation time — if secrets don't exist, pods enter
+        // CreateContainerConfigError and never recover.
         .parallel(|p| p
             .branch(|b| {
                 let ns = b.add_step_typed::<EnsureNamespace>("ensure-ns-ory",
@@ -235,16 +209,133 @@ pub fn build() -> WorkflowDefinition {
                 b.wire_outcome(s1, s2, None);
             })
             .branch(|b| {
-                b.add_step_typed::<EnsureNamespace>("ensure-ns-matrix",
-                    Some(json!({"namespace": "matrix"})));
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-ingress",
+                    Some(json!({"namespace": "ingress"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-devtools",
+                    Some(json!({"namespace": "devtools"})));
             })
             .branch(|b| {
                 b.add_step_typed::<EnsureNamespace>("ensure-ns-media",
                     Some(json!({"namespace": "media"})));
             })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-stalwart",
+                    Some(json!({"namespace": "stalwart"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-vpn",
+                    Some(json!({"namespace": "vpn"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-oci",
+                    Some(json!({"namespace": "oci"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-vso",
+                    Some(json!({"namespace": "vault-secrets-operator"})));
+            })
         )
 
+        // ── Phase 6: Platform manifests ───────────────────────────────
+        .parallel(|p| p
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-vso",
+                    Some(json!({"namespace": "vault-secrets-operator"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-ingress",
+                    Some(json!({"namespace": "ingress"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-ory",
+                    Some(json!({"namespace": "ory"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-devtools",
+                    Some(json!({"namespace": "devtools"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-storage",
+                    Some(json!({"namespace": "storage"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-media",
+                    Some(json!({"namespace": "media"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-stalwart",
+                    Some(json!({"namespace": "stalwart"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-vpn",
+                    Some(json!({"namespace": "vpn"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-oci",
+                    Some(json!({"namespace": "oci"})));
+            })
+        )
+
+        // Wait for ingress controller before anything that needs external
+        // connectivity (Gitea on 443, image pushes to src.* / oci.*).
+        .then::<WaitForRollout>()
+        .name("wait-ingress")
+        .config(json!({"namespace": "ingress", "deployment": "pingora", "timeout_secs": 300}))
+
+        // Re-apply data namespace after VSO is installed so that VaultAuth and
+        // VaultStaticSecret resources (e.g. postgres-superuser-creds) that were
+        // skipped during the first apply (VSO CRDs didn't exist yet) are created.
+        .then::<ApplyManifest>()
+        .name("reapply-data")
+        .config(json!({"namespace": "data"}))
+
+        // CRITICAL: Ory Helm charts run DB migrations as hooks. ApplyManifest
+        // does NOT wait for hooks. Block here until Hydra and Kratos are
+        // actually ready before anything that depends on them continues.
+        .parallel(|p| p
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-ory-hydra",
+                    Some(json!({"namespace": "ory", "deployment": "hydra", "timeout_secs": 300})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-ory-kratos",
+                    Some(json!({"namespace": "ory", "deployment": "kratos", "timeout_secs": 300})));
+            })
+        )
+
+        // SeaweedFS buckets must exist before zot starts (zot uses S3 backend).
+        .then::<steps::EnsureSeaweedFSBuckets>()
+        .name("ensure-seaweedfs-buckets")
+
+        // Zot (OCI registry) must be ready before we build images that push
+        // to oci.*.
+        .then::<WaitForRollout>()
+        .name("wait-zot-early")
+        .config(json!({"namespace": "oci", "deployment": "zot", "timeout_secs": 120}))
+
+        // Build and push project images via manifest ecosystem.
+        // Sequential builds keep peak disk usage bounded for fresh installs.
+        .then::<steps::BuildProjectImages>()
+        .name("build-project-images")
+
         // ── Phase 7: Application manifests ────────────────────────────
+        .parallel(|p| p
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-matrix",
+                    Some(json!({"namespace": "matrix"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-wfe",
+                    Some(json!({"namespace": "wfe"})));
+            })
+            .branch(|b| {
+                b.add_step_typed::<EnsureNamespace>("ensure-ns-press",
+                    Some(json!({"namespace": "press"})));
+            })
+        )
+
         .parallel(|p| p
             .branch(|b| {
                 b.add_step_typed::<ApplyManifest>("apply-matrix",
@@ -306,6 +397,19 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<WaitForRollout>("wait-zot",
                     Some(json!({"namespace": "oci", "deployment": "zot", "timeout_secs": 120})));
             })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-press",
+                    Some(json!({"namespace": "press", "deployment": "press", "timeout_secs": 300})));
+            })
+            // sol is parked at 0 replicas (proto build issue) — skip wait.
+            // .branch(|b| {
+            //     b.add_step_typed::<WaitForRollout>("wait-sol",
+            //         Some(json!({"namespace": "matrix", "deployment": "sol", "timeout_secs": 300})));
+            // })
+            .branch(|b| {
+                b.add_step_typed::<WaitForRollout>("wait-kratos-admin",
+                    Some(json!({"namespace": "ory", "deployment": "kratos-admin-ui", "timeout_secs": 300})));
+            })
         )
 
         // ── Phase 11: Observability  (MOVED from Phase 1) ─────────────
@@ -346,10 +450,17 @@ mod tests {
     }
 
     #[test]
-    fn test_first_step_is_ensure_cilium() {
+    fn test_first_step_is_ensure_lima_vm() {
         let def = build();
-        assert_eq!(def.steps[0].name, Some("ensure-cilium".into()));
-        assert!(def.steps[0].step_type.contains("EnsureCilium"));
+        assert_eq!(def.steps[0].name, Some("ensure-lima-vm".into()));
+        assert!(def.steps[0].step_type.contains("EnsureLimaVm"));
+    }
+
+    #[test]
+    fn test_second_step_is_ensure_cilium() {
+        let def = build();
+        assert_eq!(def.steps[1].name, Some("ensure-cilium".into()));
+        assert!(def.steps[1].step_type.contains("EnsureCilium"));
     }
 
     #[test]
@@ -390,7 +501,11 @@ mod tests {
             .iter()
             .filter(|s| s.step_type.contains("WaitForRollout"))
             .collect();
-        assert_eq!(rollout_steps.len(), 9, "should have 9 WaitForRollout steps (ory-hydra, ory-kratos, valkey, kratos, hydra, tuwunel, wfe-server, zot, grafana)");
+        assert_eq!(
+            rollout_steps.len(),
+            15,
+            "should have 15 WaitForRollout steps (cert-manager, ory-hydra, ory-kratos, buildkitd, ingress, valkey, kratos, hydra, tuwunel, wfe-server, zot, zot-early, press, kratos-admin, grafana)"
+        );
         for s in &rollout_steps {
             let config = s.step_config.as_ref().unwrap();
             assert!(config.get("namespace").is_some());
@@ -508,5 +623,15 @@ mod tests {
             .iter()
             .any(|s| s.name.as_deref() == Some("sync-gitea-admin-password"));
         assert!(!found, "sync-gitea-admin-password should not exist in v3");
+    }
+
+    #[test]
+    fn test_default_error_behavior_is_terminate() {
+        let def = build();
+        assert_eq!(
+            def.default_error_behavior,
+            wfe_core::models::ErrorBehavior::Terminate,
+            "up workflow should terminate immediately on any step failure"
+        );
     }
 }
