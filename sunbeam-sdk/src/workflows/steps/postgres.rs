@@ -12,7 +12,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+use crate::output::ok;
 use crate::secrets;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -36,11 +36,12 @@ pub(crate) fn pg_db_map() -> HashMap<&'static str, &'static str> {
     [
         ("kratos", "kratos_db"),
         ("hydra", "hydra_db"),
+        ("keto", "keto_db"),
         ("penpot", "penpot_db"),
         ("stalwart", "stalwart_db"),
         ("headscale", "headscale_db"),
         ("wfe", "wfe_db"),
-        ("typst_editor", "typst_editor_db"),
+        ("press", "press_db"),
     ]
     .into_iter()
     .collect()
@@ -115,13 +116,13 @@ impl StepBody for WaitForPostgres {
         }
 
         if pg_pod.is_empty() {
-            warn("Postgres not ready after 5 min -- continuing anyway.");
+            return Err(step_err(
+                "Postgres not ready after 5 min -- check CNPG cluster status",
+            ));
         }
 
         let mut result = ExecutionResult::next();
-        if !pg_pod.is_empty() {
-            result.output_data = Some(serde_json::json!({ "pg_pod": pg_pod }));
-        }
+        result.output_data = Some(serde_json::json!({ "pg_pod": pg_pod }));
         Ok(result)
     }
 }
@@ -150,30 +151,28 @@ impl StepBody for ConfigureDatabaseEngine {
         let ob_pod = match json_str(data, "ob_pod") {
             Some(p) => p,
             None => {
-                warn("Skipping DB engine config -- missing ob_pod.");
-                return Ok(ExecutionResult::next());
+                return Err(step_err(
+                    "DB engine config requires ob_pod from OpenBao step",
+                ));
             }
         };
         let root_token = match json_str(data, "root_token") {
             Some(t) if !t.is_empty() => t,
             _ => {
-                warn("Skipping DB engine config -- missing root_token.");
-                return Ok(ExecutionResult::next());
+                return Err(step_err(
+                    "DB engine config requires root_token from OpenBao step",
+                ));
             }
         };
 
-        match secrets::port_forward("data", &ob_pod, 8200).await {
-            Ok(pf) => {
-                let bao = BaoClient::with_token(
-                    &format!("http://127.0.0.1:{}", pf.local_port),
-                    &root_token,
-                );
-                if let Err(e) = secrets::configure_db_engine(&bao).await {
-                    warn(&format!("DB engine config failed: {e}"));
-                }
-            }
-            Err(e) => warn(&format!("Port-forward to OpenBao failed: {e}")),
-        }
+        let pf = secrets::port_forward("data", &ob_pod, 8200)
+            .await
+            .map_err(|e| step_err(format!("Port-forward to OpenBao failed: {e}")))?;
+        let bao =
+            BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), &root_token);
+        secrets::configure_db_engine(&bao)
+            .await
+            .map_err(|e| step_err(format!("DB engine config failed: {e}")))?;
 
         Ok(ExecutionResult::next())
     }
@@ -228,7 +227,7 @@ mod tests {
     #[test]
     fn test_pg_db_map_contains_all_users() {
         let map = pg_db_map();
-        assert_eq!(map.len(), 7);
+        assert_eq!(map.len(), 8);
         for user in crate::secrets::PG_USERS {
             assert!(map.contains_key(user), "pg_db_map missing key for: {user}");
         }

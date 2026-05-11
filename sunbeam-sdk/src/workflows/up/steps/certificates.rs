@@ -7,8 +7,13 @@ use crate::kube as k;
 use crate::output::{ok, step};
 use crate::workflows::data::UpData;
 
-fn secrets_dir() -> std::path::PathBuf {
-    crate::config::get_infra_dir().join("secrets").join("local")
+fn secrets_dir(context_name: &str) -> std::path::PathBuf {
+    let name = if context_name.is_empty() {
+        "default"
+    } else {
+        context_name
+    };
+    crate::config::context_dir(name).join("secrets")
 }
 
 // ── EnsureTLSCert ───────────────────────────────────────────────────────────
@@ -27,16 +32,31 @@ impl StepBody for EnsureTLSCert {
 
         step("TLS certificate...");
 
-        let dir = secrets_dir();
+        let ctx_name = data
+            .ctx
+            .as_ref()
+            .map(|c| c.context_name.as_str())
+            .unwrap_or("default");
+        let dir = secrets_dir(ctx_name);
         let cert_path = dir.join("tls.crt");
         let key_path = dir.join("tls.key");
 
         if cert_path.exists() {
-            ok(&format!("Cert exists. Domain: {domain}"));
-            return Ok(ExecutionResult::next());
+            // Verify the existing cert is for the current domain
+            let cert_pem = std::fs::read_to_string(&cert_path).map_err(|e| {
+                wfe_core::WfeError::StepExecution(format!("Failed to read existing cert: {e}"))
+            })?;
+            let cert_for_domain = cert_pem.contains(&format!("*.{domain}"));
+            if cert_for_domain {
+                ok(&format!("Cert exists. Domain: {domain}"));
+                return Ok(ExecutionResult::next());
+            }
+            ok(&format!(
+                "Existing cert is for a different domain — regenerating for *.{domain}..."
+            ));
+        } else {
+            ok(&format!("Generating wildcard cert for *.{domain}..."));
         }
-
-        ok(&format!("Generating wildcard cert for *.{domain}..."));
         std::fs::create_dir_all(&dir).map_err(|e| {
             wfe_core::WfeError::StepExecution(format!(
                 "Failed to create secrets dir {}: {e}",
@@ -85,7 +105,68 @@ impl StepBody for EnsureTLSCert {
         }
 
         ok(&format!("Cert generated. Domain: {domain}"));
+
+        // Ensure Docker allows pushing to the local registry without cert
+        // validation (self-signed wildcard cert).
+        configure_docker_insecure_registries(&domain);
+
         Ok(ExecutionResult::next())
+    }
+}
+
+/// Add src.<domain> and oci.<domain> to Docker's insecure-registries list
+/// so `docker buildx --push` works against the local zot registry.
+fn configure_docker_insecure_registries(domain: &str) {
+    let daemon_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+        .join(".docker/daemon.json");
+
+    let mut cfg: serde_json::Map<String, serde_json::Value> =
+        std::fs::read_to_string(&daemon_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
+    let registries = vec![format!("src.{domain}"), format!("oci.{domain}")];
+    let mut updated = false;
+
+    let existing: Vec<String> = cfg
+        .get("insecure-registries")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let mut new_list: Vec<serde_json::Value> =
+        existing.iter().map(|s| serde_json::Value::String(s.clone())).collect();
+
+    for reg in &registries {
+        if !existing.iter().any(|e| e == reg) {
+            new_list.push(serde_json::Value::String(reg.clone()));
+            updated = true;
+        }
+    }
+
+    if updated {
+        cfg.insert(
+            "insecure-registries".to_string(),
+            serde_json::Value::Array(new_list),
+        );
+        if let Err(e) = (|| -> std::io::Result<()> {
+            let tmp = daemon_path.with_extension("json.tmp");
+            std::fs::write(&tmp, serde_json::to_string_pretty(&cfg)?)?;
+            std::fs::rename(&tmp, &daemon_path)?;
+            Ok(())
+        })() {
+            crate::output::warn(&format!(
+                "Failed to update Docker daemon.json for insecure registries: {e}\n\
+                 You may need to manually add {registries:?} to ~/.docker/daemon.json -> insecure-registries"
+            ));
+        } else {
+            crate::output::ok(&format!(
+                "Docker insecure-registries updated: {registries:?}. \
+                 Restart Docker Desktop for changes to take effect."
+            ));
+        }
     }
 }
 
@@ -98,7 +179,7 @@ pub struct EnsureTLSSecret;
 #[async_trait::async_trait]
 impl StepBody for EnsureTLSSecret {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
+        let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
         step("TLS secret...");
@@ -107,7 +188,12 @@ impl StepBody for EnsureTLSSecret {
             .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
-        let dir = secrets_dir();
+        let ctx_name = data
+            .ctx
+            .as_ref()
+            .map(|c| c.context_name.as_str())
+            .unwrap_or("default");
+        let dir = secrets_dir(ctx_name);
         let cert_pem = std::fs::read_to_string(dir.join("tls.crt")).map_err(|e| {
             wfe_core::WfeError::StepExecution(format!("Failed to read tls.crt: {e}"))
         })?;
@@ -118,9 +204,6 @@ impl StepBody for EnsureTLSSecret {
         let client = k::get_client()
             .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
-        let api: kube::api::Api<k8s_openapi::api::core::v1::Secret> =
-            kube::api::Api::namespaced(client.clone(), "ingress");
-
         let b64_cert = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
             cert_pem.as_bytes(),
@@ -130,7 +213,12 @@ impl StepBody for EnsureTLSSecret {
             key_pem.as_bytes(),
         );
 
-        let secret_obj = serde_json::json!({
+        let pp = kube::api::PatchParams::apply("sunbeam").force();
+
+        // Ingress TLS secret
+        let ingress_api: kube::api::Api<k8s_openapi::api::core::v1::Secret> =
+            kube::api::Api::namespaced(client.clone(), "ingress");
+        let ingress_secret = serde_json::json!({
             "apiVersion": "v1",
             "kind": "Secret",
             "metadata": {
@@ -139,20 +227,154 @@ impl StepBody for EnsureTLSSecret {
             },
             "type": "kubernetes.io/tls",
             "data": {
-                "tls.crt": b64_cert,
-                "tls.key": b64_key,
+                "tls.crt": &b64_cert,
+                "tls.key": &b64_key,
             },
         });
-
-        let pp = kube::api::PatchParams::apply("sunbeam").force();
-        api.patch("pingora-tls", &pp, &kube::api::Patch::Apply(secret_obj))
+        ingress_api
+            .patch("pingora-tls", &pp, &kube::api::Patch::Apply(ingress_secret))
             .await
             .map_err(|e| {
-                wfe_core::WfeError::StepExecution(format!("Failed to create TLS secret: {e}"))
+                wfe_core::WfeError::StepExecution(format!(
+                    "Failed to create ingress TLS secret: {e}"
+                ))
+            })?;
+
+        // Headscale TLS secret (same wildcard cert covers vpn.{domain})
+        k::ensure_ns("vpn")
+            .await
+            .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
+        let vpn_api: kube::api::Api<k8s_openapi::api::core::v1::Secret> =
+            kube::api::Api::namespaced(client.clone(), "vpn");
+        let vpn_secret = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "headscale-tls",
+                "namespace": "vpn",
+            },
+            "type": "kubernetes.io/tls",
+            "data": {
+                "tls.crt": &b64_cert,
+                "tls.key": &b64_key,
+            },
+        });
+        vpn_api
+            .patch("headscale-tls", &pp, &kube::api::Patch::Apply(vpn_secret))
+            .await
+            .map_err(|e| {
+                wfe_core::WfeError::StepExecution(format!(
+                    "Failed to create headscale TLS secret: {e}"
+                ))
             })?;
 
         ok("Done.");
         Ok(ExecutionResult::next())
+    }
+}
+
+// ── WaitForCertManagerWebhook ───────────────────────────────────────────────
+
+/// Wait for cert-manager webhook to be fully ready.
+///
+/// On a fresh install, cainjector must inject the CA bundle into the
+/// validating webhook before any `Certificate` resources can be created.
+/// This step waits for:
+/// 1. cert-manager, webhook, and cainjector deployments to be ready
+/// 2. The `v1.cert-manager.io` APIService to report `Available=True`
+#[derive(Default)]
+pub struct WaitForCertManagerWebhook;
+
+#[async_trait::async_trait]
+impl StepBody for WaitForCertManagerWebhook {
+    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        use k8s_openapi::api::apps::v1::Deployment;
+        use k8s_openapi::kube_aggregator::pkg::apis::apiregistration::v1::APIService;
+        use kube::api::{Api, ListParams};
+        use std::time::{Duration, Instant};
+
+        step("Waiting for cert-manager webhook...");
+
+        let client = k::get_client()
+            .await
+            .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
+        let deploy_api: Api<Deployment> = Api::namespaced(client.clone(), "cert-manager");
+        let apiservice_api: Api<APIService> = Api::all(client.clone());
+
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let deployments = &[
+            "cert-manager",
+            "cert-manager-webhook",
+            "cert-manager-cainjector",
+        ];
+
+        loop {
+            if Instant::now() > deadline {
+                return Err(wfe_core::WfeError::StepExecution(
+                    "Timed out waiting for cert-manager webhook to be ready".into(),
+                ));
+            }
+
+            let mut all_ready = true;
+
+            for name in deployments {
+                match deploy_api.get_opt(name).await {
+                    Ok(Some(dep)) => {
+                        let ready = dep
+                            .status
+                            .as_ref()
+                            .and_then(|s| s.conditions.as_ref())
+                            .map_or(false, |conds| {
+                                conds
+                                    .iter()
+                                    .any(|c| c.type_ == "Available" && c.status == "True")
+                            });
+                        if !ready {
+                            all_ready = false;
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        all_ready = false;
+                        break;
+                    }
+                    Err(e) => {
+                        return Err(wfe_core::WfeError::StepExecution(format!(
+                            "Failed to get deployment cert-manager/{name}: {e}"
+                        )));
+                    }
+                }
+            }
+
+            if all_ready {
+                // Check APIService availability
+                match apiservice_api.get_opt("v1.cert-manager.io").await {
+                    Ok(Some(svc)) => {
+                        let available = svc
+                            .status
+                            .as_ref()
+                            .and_then(|s| s.conditions.as_ref())
+                            .map_or(false, |conds| {
+                                conds
+                                    .iter()
+                                    .any(|c| c.type_ == "Available" && c.status == "True")
+                            });
+                        if available {
+                            ok("cert-manager webhook is ready.");
+                            return Ok(ExecutionResult::next());
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        return Err(wfe_core::WfeError::StepExecution(format!(
+                            "Failed to get APIService v1.cert-manager.io: {e}"
+                        )));
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
     }
 }
 
@@ -177,11 +399,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn secrets_dir_ends_with_secrets_local() {
-        let dir = secrets_dir();
+    fn secrets_dir_uses_context_name() {
+        let dir = secrets_dir("test-ctx");
+        let s = dir.to_string_lossy();
         assert!(
-            dir.ends_with("secrets/local"),
-            "secrets_dir() should end with secrets/local, got: {}",
+            s.contains("test-ctx") && s.contains("secrets"),
+            "secrets_dir should contain context name and 'secrets', got: {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn secrets_dir_defaults_to_default_context() {
+        let dir = secrets_dir("");
+        let s = dir.to_string_lossy();
+        assert!(
+            s.contains("default") && s.contains("secrets"),
+            "secrets_dir('') should default to 'default' context, got: {}",
             dir.display()
         );
     }

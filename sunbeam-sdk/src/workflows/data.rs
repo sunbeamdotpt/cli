@@ -24,6 +24,7 @@ pub struct SeedData {
     /// Sealed.
     pub sealed: Option<bool>,
     /// Skip seed.
+    #[serde(default)]
     pub skip_seed: bool,
 
     // -- Phase 2: KV seeding --
@@ -96,6 +97,24 @@ pub struct VerifyData {
     pub test_value: Option<String>,
     /// Synced.
     pub synced: bool,
+}
+
+/// Workflow data for the `down` workflow.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DownData {
+    #[serde(default, rename = "__ctx")]
+    /// Ctx.
+    pub ctx: Option<StepContext>,
+    /// Also delete infrastructure namespaces.
+    pub infra: bool,
+    /// Preserve data namespace.
+    pub keep_data: bool,
+    /// Namespaces discovered for deletion.
+    #[serde(default)]
+    pub namespaces_to_delete: Vec<String>,
+    /// Namespaces still stuck after wait.
+    #[serde(default)]
+    pub remaining_namespaces: Vec<String>,
 }
 
 /// Workflow data for the `bootstrap` workflow.
