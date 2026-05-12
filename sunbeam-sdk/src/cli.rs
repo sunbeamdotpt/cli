@@ -42,6 +42,9 @@ pub enum Verb {
         /// Show all discoverable manifest parameters and exit.
         #[arg(long)]
         show_params: bool,
+        /// Output a Graphviz DOT graph of the workflow and exit.
+        #[arg(long)]
+        graph: bool,
     },
 
     /// Full cluster tear-down.
@@ -1075,7 +1078,14 @@ pub async fn dispatch() -> Result<()> {
             disable,
             enable,
             show_params,
+            graph,
         }) => {
+            if graph {
+                let def = crate::workflows::up::definition::build();
+                println!("{}", def.to_dot());
+                return Ok(());
+            }
+
             // Resolve overlay for parameter discovery
             let infra_dir = crate::config::get_infra_dir();
             let resolved_domain = if let Some(d) = cli.domain.as_deref().filter(|s| !s.is_empty()) {
@@ -1484,6 +1494,15 @@ mod tests {
     fn test_up() {
         let cli = parse(&["sunbeam", "up"]);
         assert!(matches!(cli.verb, Some(Verb::Up { .. })));
+    }
+
+    #[test]
+    fn test_up_graph_flag() {
+        let cli = parse(&["sunbeam", "up", "--graph"]);
+        match cli.verb {
+            Some(Verb::Up { graph, .. }) => assert!(graph),
+            _ => panic!("expected Up with --graph"),
+        }
     }
 
     #[test]
