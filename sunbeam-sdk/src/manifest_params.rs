@@ -424,8 +424,9 @@ pub fn print_catalog(resources: &[ResourceEntry]) {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            let display = if current_str.len() > 40 {
-                format!("{}...", &current_str[..37])
+            let display = if current_str.contains('\n') {
+                let first_line = current_str.lines().next().unwrap_or("");
+                format!("{first_line}...")
             } else {
                 current_str
             };
