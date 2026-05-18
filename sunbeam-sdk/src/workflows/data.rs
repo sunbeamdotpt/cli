@@ -84,6 +84,9 @@ pub struct UpData {
     /// Skip Cilium check.
     #[serde(default)]
     pub skip_cilium: bool,
+    /// Use Lima VM for the cluster (local k3s via limactl).
+    #[serde(default)]
+    pub use_lima: bool,
 }
 
 /// Workflow data for the `verify` workflow.
@@ -120,6 +123,9 @@ pub struct DownData {
     /// Namespaces still stuck after wait.
     #[serde(default)]
     pub remaining_namespaces: Vec<String>,
+    /// Use Lima VM for the cluster (local k3s via limactl).
+    #[serde(default)]
+    pub use_lima: bool,
 }
 
 /// Workflow data for the `bootstrap` workflow.
@@ -259,6 +265,7 @@ mod tests {
             dirty_paths: vec![],
             pg_pod: Some("postgres-1".to_string()),
             skip_cilium: false,
+            use_lima: false,
         };
         let json = serde_json::to_value(&d).unwrap();
         let back: UpData = serde_json::from_value(json).unwrap();
