@@ -245,73 +245,44 @@ impl StepBody for ForceDeleteStuckNamespaces {
     }
 }
 
-// ── StopLimaVm ──────────────────────────────────────────────────────────────
+// ── DeleteLimaVm ────────────────────────────────────────────────────────────
 
-/// Stop the Lima sunbeam VM if it exists and is running.
+/// Delete the Lima sunbeam VM.
 ///
 /// This is a best-effort step — failure does not block the workflow.
-/// Skipped entirely for production domains.
 #[derive(Default)]
-pub struct StopLimaVm;
+pub struct DeleteLimaVm;
+
+/// Run `limactl delete sunbeam --force` directly.
+pub async fn delete_lima_vm() -> Result<(), String> {
+    let status = tokio::process::Command::new("limactl")
+        .args(["delete", "sunbeam", "--force"])
+        .status()
+        .await
+        .map_err(|e| format!("Failed to run limactl delete: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("limactl delete exited with status: {status}"))
+    }
+}
 
 #[async_trait::async_trait]
-impl StepBody for StopLimaVm {
+impl StepBody for DeleteLimaVm {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: DownData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| step_err(format!("DownData parse: {e}")))?;
 
-        let domain = data
-            .ctx
-            .as_ref()
-            .map(|c| c.domain.as_str())
-            .unwrap_or("");
-
-        let is_local_dev = domain.is_empty()
-            || domain.ends_with("sslip.io")
-            || domain.ends_with("nip.io")
-            || domain == "localhost"
-            || domain.starts_with("192.168.")
-            || domain.starts_with("10.")
-            || domain.starts_with("172.");
-
-        if !is_local_dev {
-            ok("Non-local domain — skipping Lima VM management.");
+        if !data.use_lima {
+            ok("--use-lima not set — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        step("Checking Lima VM...");
-
-        let output = tokio::process::Command::new("limactl")
-            .args(["list", "sunbeam", "--format", "{{.Status}}"])
-            .output()
-            .await;
-
-        let status = match output {
-            Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            Err(e) => {
-                warn(&format!("Could not query Lima status: {e}"));
-                return Ok(ExecutionResult::next());
-            }
-        };
-
-        if status.is_empty() || status == "None" {
-            ok("Lima VM 'sunbeam' does not exist.");
-            return Ok(ExecutionResult::next());
-        }
-
-        if status == "Running" {
-            step("Stopping Lima VM 'sunbeam'...");
-            match tokio::process::Command::new("limactl")
-                .args(["stop", "sunbeam"])
-                .status()
-                .await
-            {
-                Ok(st) if st.success() => ok("Lima VM stopped."),
-                Ok(st) => warn(&format!("limactl stop exited with code: {st}")),
-                Err(e) => warn(&format!("Failed to stop Lima VM: {e}")),
-            }
-        } else {
-            ok(&format!("Lima VM 'sunbeam' is {status}."));
+        step("Deleting Lima VM 'sunbeam'...");
+        match delete_lima_vm().await {
+            Ok(()) => ok("Lima VM deleted."),
+            Err(e) => warn(&format!("{e}")),
         }
 
         Ok(ExecutionResult::next())
@@ -343,7 +314,14 @@ mod tests {
     }
 
     #[test]
-    fn stop_lima_vm_is_default() {
-        let _ = StopLimaVm;
+    fn delete_lima_vm_is_default() {
+        let _ = DeleteLimaVm;
+    }
+
+    #[test]
+    fn delete_lima_vm_fn_exists() {
+        // Ensure the standalone delete function is available.
+        // Actual limactl invocation is tested in integration tests.
+        let _ = delete_lima_vm;
     }
 }

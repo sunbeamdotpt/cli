@@ -47,16 +47,8 @@ impl StepBody for EnsureLimaVm {
             &data.domain
         };
 
-        let is_local_dev = domain.is_empty()
-            || domain.ends_with("sslip.io")
-            || domain.ends_with("nip.io")
-            || domain == "localhost"
-            || domain.starts_with("192.168.")
-            || domain.starts_with("10.")
-            || domain.starts_with("172.");
-
-        if !is_local_dev {
-            ok("Non-local domain — skipping Lima VM management.");
+        if !data.use_lima {
+            ok("--use-lima not set — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
