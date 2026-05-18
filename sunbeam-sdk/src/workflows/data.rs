@@ -79,6 +79,11 @@ pub struct UpData {
     // -- Postgres phase --
     /// Pg pod.
     pub pg_pod: Option<String>,
+
+    // -- Infrastructure phase --
+    /// Skip Cilium check.
+    #[serde(default)]
+    pub skip_cilium: bool,
 }
 
 /// Workflow data for the `verify` workflow.
@@ -235,6 +240,7 @@ mod tests {
         assert!(d.ctx.is_none());
         assert!(d.domain.is_empty());
         assert!(!d.skip_seed);
+        assert!(!d.skip_cilium);
         assert!(d.ob_pod.is_none());
         assert!(d.creds.is_empty());
         assert!(d.pg_pod.is_none());
@@ -252,6 +258,7 @@ mod tests {
             creds: HashMap::new(),
             dirty_paths: vec![],
             pg_pod: Some("postgres-1".to_string()),
+            skip_cilium: false,
         };
         let json = serde_json::to_value(&d).unwrap();
         let back: UpData = serde_json::from_value(json).unwrap();
