@@ -12,7 +12,6 @@ pub async fn register(host: &wfe::WorkflowHost) {
     host.register_step::<steps::DeleteNamespaces>().await;
     host.register_step::<steps::WaitForTermination>().await;
     host.register_step::<steps::ForceDeleteStuckNamespaces>().await;
-    host.register_step::<steps::StopLimaVm>().await;
 
     host.register_workflow_definition(definition::build()).await;
 }
