@@ -39,6 +39,9 @@ pub enum Verb {
         /// Re-enable a resource or pattern.
         #[arg(long)]
         enable: Vec<String>,
+        /// Skip the Cilium CNI check.
+        #[arg(long)]
+        skip_cilium: bool,
         /// Show all discoverable manifest parameters and exit.
         #[arg(long)]
         show_params: bool,
@@ -1077,6 +1080,7 @@ pub async fn dispatch() -> Result<()> {
             set,
             disable,
             enable,
+            skip_cilium,
             show_params,
             graph,
         }) => {
@@ -1141,6 +1145,7 @@ pub async fn dispatch() -> Result<()> {
             let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "domain": "",
+                "skip_cilium": skip_cilium,
             });
             if !overrides.items.is_empty() {
                 initial_data["manifest_overrides"] =
