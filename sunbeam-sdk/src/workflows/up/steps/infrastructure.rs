@@ -4,7 +4,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::{ok, step};
+use crate::output::{ok, step, warn};
 use crate::workflows::data::UpData;
 
 // ── EnsureCilium ────────────────────────────────────────────────────────────
@@ -18,6 +18,12 @@ impl StepBody for EnsureCilium {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
+
+        if data.skip_cilium {
+            warn("Skipping Cilium check (--skip-cilium).");
+            ok("Cilium check skipped.");
+            return Ok(ExecutionResult::next());
+        }
 
         let step_ctx = data
             .ctx
