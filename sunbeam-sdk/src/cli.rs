@@ -48,6 +48,9 @@ pub enum Verb {
         /// Output a Graphviz DOT graph of the workflow and exit.
         #[arg(long)]
         graph: bool,
+        /// Use Lima VM for the cluster (local k3s via limactl).
+        #[arg(long)]
+        use_lima: bool,
     },
 
     /// Full cluster tear-down.
@@ -61,6 +64,9 @@ pub enum Verb {
         /// Preserve data namespace (postgres, opensearch, openbao).
         #[arg(long)]
         keep_data: bool,
+        /// Use Lima VM for the cluster (local k3s via limactl).
+        #[arg(long)]
+        use_lima: bool,
     },
 
     /// Manage sunbeam configuration.
@@ -1006,6 +1012,7 @@ pub async fn dispatch() -> Result<()> {
             yes,
             infra,
             keep_data,
+            use_lima,
         }) => {
             // Confirmation prompt (kept outside the workflow so the workflow
             // itself is non-interactive and fully automatable).
@@ -1030,6 +1037,15 @@ pub async fn dispatch() -> Result<()> {
                 }
             }
 
+            if use_lima {
+                crate::output::step("Deleting Lima VM 'sunbeam'...");
+                match crate::workflows::down::steps::delete_lima_vm().await {
+                    Ok(()) => crate::output::ok("Lima VM deleted."),
+                    Err(e) => crate::output::warn(&format!("Failed to delete Lima VM: {e}")),
+                }
+                return Ok(());
+            }
+
             crate::output::step("Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
@@ -1049,6 +1065,7 @@ pub async fn dispatch() -> Result<()> {
                 "__ctx": step_ctx,
                 "infra": infra,
                 "keep_data": keep_data,
+                "use_lima": use_lima,
                 "namespaces_to_delete": [],
                 "remaining_namespaces": [],
             });
@@ -1083,6 +1100,7 @@ pub async fn dispatch() -> Result<()> {
             skip_cilium,
             show_params,
             graph,
+            use_lima,
         }) => {
             if graph {
                 let def = crate::workflows::up::definition::build();
@@ -1097,14 +1115,7 @@ pub async fn dispatch() -> Result<()> {
             } else {
                 crate::config::domain().to_string()
             };
-            let is_local_dev = resolved_domain.ends_with("sslip.io")
-                || resolved_domain.ends_with("nip.io")
-                || resolved_domain == "localhost"
-                || resolved_domain.starts_with("192.168.")
-                || resolved_domain.starts_with("10.")
-                || resolved_domain.starts_with("172.");
-            let overlay_name = if is_local_dev { "local" } else { "production" };
-            let overlay = infra_dir.join("overlays").join(overlay_name);
+            let overlay = infra_dir.join("overlays");
 
             let email = if let Some(e) = cli.email.as_deref().filter(|s| !s.is_empty()) {
                 e.to_string()
@@ -1146,6 +1157,7 @@ pub async fn dispatch() -> Result<()> {
                 "__ctx": step_ctx,
                 "domain": "",
                 "skip_cilium": skip_cilium,
+                "use_lima": use_lima,
             });
             if !overrides.items.is_empty() {
                 initial_data["manifest_overrides"] =
@@ -1507,6 +1519,24 @@ mod tests {
         match cli.verb {
             Some(Verb::Up { graph, .. }) => assert!(graph),
             _ => panic!("expected Up with --graph"),
+        }
+    }
+
+    #[test]
+    fn test_up_use_lima_flag() {
+        let cli = parse(&["sunbeam", "up", "--use-lima"]);
+        match cli.verb {
+            Some(Verb::Up { use_lima, .. }) => assert!(use_lima),
+            _ => panic!("expected Up with --use-lima"),
+        }
+    }
+
+    #[test]
+    fn test_down_use_lima_flag() {
+        let cli = parse(&["sunbeam", "down", "--use-lima"]);
+        match cli.verb {
+            Some(Verb::Down { use_lima, .. }) => assert!(use_lima),
+            _ => panic!("expected Down with --use-lima"),
         }
     }
 
