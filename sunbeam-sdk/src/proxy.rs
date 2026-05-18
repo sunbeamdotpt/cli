@@ -15,12 +15,11 @@ use crate::error::{Result, ResultExt, SunbeamError};
 /// wait up to `timeout_secs` for the Job to complete.
 ///
 /// The template file lives at
-/// `<infra_dir>/sbbb/base/build/image-puller-job.template.yaml` and uses the
+/// `<infra_dir>/base/build/image-puller-job.template.yaml` and uses the
 /// literal string `IMAGE_REF` as the substitution target.
 pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()> {
     let infra_dir = crate::config::get_infra_dir();
     let template_path = infra_dir
-        .join("sbbb")
         .join("base")
         .join("build")
         .join("image-puller-job.template.yaml");
