@@ -18,11 +18,12 @@ fn main() {
     download_and_embed("helm", HELM_VERSION, &os, &arch, &out_dir);
 
     // Embed lima-sunbeam.yaml for VM provisioning
-    let lima_yaml_src = Path::new("../lima-sunbeam.yaml");
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let lima_yaml_src = manifest_dir.join("../../../lima-sunbeam.yaml");
     let lima_yaml_dst = out_dir.join("lima-sunbeam.yaml");
-    fs::copy(lima_yaml_src, &lima_yaml_dst)
-        .expect("lima-sunbeam.yaml not found at ../lima-sunbeam.yaml");
-    println!("cargo:rerun-if-changed=../lima-sunbeam.yaml");
+    fs::copy(&lima_yaml_src, &lima_yaml_dst)
+        .expect(&format!("lima-sunbeam.yaml not found at {}", lima_yaml_src.display()));
+    println!("cargo:rerun-if-changed={}", lima_yaml_src.display());
 
     // Set version info from git
     let commit = git_commit_sha();

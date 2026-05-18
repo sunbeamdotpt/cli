@@ -66,11 +66,10 @@ impl StepBody for EnsureCilium {
         }
         ok("Cilium is healthy.");
 
-        // For local dev, always resolve domain from the live cluster so that
-        // VM IP changes (e.g. new Lima instance) are picked up automatically.
-        // Production contexts keep their statically configured domain.
+        // When using Lima, resolve domain from the live cluster so that VM IP
+        // changes (e.g. new Lima instance) are picked up automatically.
         let mut result = ExecutionResult::next();
-        if is_local_dev_domain(&data.domain) {
+        if data.use_lima {
             let live_domain = k::get_domain()
                 .await
                 .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
@@ -81,16 +80,6 @@ impl StepBody for EnsureCilium {
 
         Ok(result)
     }
-}
-
-fn is_local_dev_domain(domain: &str) -> bool {
-    domain.is_empty()
-        || domain.ends_with("sslip.io")
-        || domain.ends_with("nip.io")
-        || domain == "localhost"
-        || domain.starts_with("192.168.")
-        || domain.starts_with("10.")
-        || domain.starts_with("172.")
 }
 
 async fn check_cilium_pods(client: &kube::Client, ns: &str) -> bool {
