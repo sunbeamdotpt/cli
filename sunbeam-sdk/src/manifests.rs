@@ -82,14 +82,7 @@ pub async fn cmd_apply(
     if resolved_domain.is_empty() {
         bail!("--domain is required for apply on first deploy");
     }
-    let is_local_dev = resolved_domain.ends_with("sslip.io")
-        || resolved_domain.ends_with("nip.io")
-        || resolved_domain == "localhost"
-        || resolved_domain.starts_with("192.168.")
-        || resolved_domain.starts_with("10.")
-        || resolved_domain.starts_with("172.");
-    let overlay_name = if is_local_dev { "local" } else { "production" };
-    let overlay = infra_dir.join("overlays").join(overlay_name);
+    let overlay = infra_dir.join("overlays");
 
     let scope = if namespace.is_empty() {
         String::new()
@@ -185,14 +178,7 @@ pub async fn cmd_apply_dry_run(
     if resolved_domain.is_empty() {
         bail!("--domain is required for apply on first deploy");
     }
-    let is_local_dev = resolved_domain.ends_with("sslip.io")
-        || resolved_domain.ends_with("nip.io")
-        || resolved_domain == "localhost"
-        || resolved_domain.starts_with("192.168.")
-        || resolved_domain.starts_with("10.")
-        || resolved_domain.starts_with("172.");
-    let overlay_name = if is_local_dev { "local" } else { "production" };
-    let overlay = infra_dir.join("overlays").join(overlay_name);
+    let overlay = infra_dir.join("overlays");
 
     let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
 
