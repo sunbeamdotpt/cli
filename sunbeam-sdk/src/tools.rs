@@ -1,10 +1,11 @@
-//! Embedded binary extraction (kustomize, helm).
+//! Runtime binary download and caching (kustomize, helm).
 
 use crate::error::{Result, ResultExt};
+use std::io::Read;
 use std::path::PathBuf;
 
-static KUSTOMIZE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kustomize"));
-static HELM_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/helm"));
+const KUSTOMIZE_VERSION: &str = "v5.8.1";
+const HELM_VERSION: &str = "v4.1.0";
 
 /// Legacy bin cache dir — used only for migration.
 fn legacy_cache_dir() -> PathBuf {
@@ -40,82 +41,115 @@ fn cache_dir() -> PathBuf {
     new_dir
 }
 
-/// Extract an embedded binary to the cache directory if not already present.
-fn extract_embedded(data: &[u8], name: &str) -> Result<PathBuf> {
+fn current_platform() -> (&'static str, &'static str) {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        other => other,
+    };
+
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => other,
+    };
+
+    (os, arch)
+}
+
+fn download_url(tool: &str, version: &str, os: &str, arch: &str) -> String {
+    match tool {
+        "kustomize" => format!(
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/\
+             kustomize%2F{version}/kustomize_{version}_{os}_{arch}.tar.gz"
+        ),
+        "helm" => format!("https://get.helm.sh/helm-{version}-{os}-{arch}.tar.gz"),
+        _ => panic!("Unknown tool: {tool}"),
+    }
+}
+
+fn archive_entry_path(tool: &str, os: &str, arch: &str) -> String {
+    match tool {
+        "kustomize" => "kustomize".to_string(),
+        "helm" => format!("{os}-{arch}/helm"),
+        _ => unreachable!(),
+    }
+}
+
+/// Download and extract a tool to the cache directory if not already present.
+fn ensure_tool(tool: &str, version: &str) -> Result<PathBuf> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)
         .with_ctx(|| format!("Failed to create cache dir: {}", dir.display()))?;
 
-    let dest = dir.join(name);
+    let dest = dir.join(tool);
 
-    // Skip if already extracted and same size
-    if dest.exists()
-        && let Ok(meta) = std::fs::metadata(&dest)
-        && meta.len() == data.len() as u64
-    {
+    // Skip if already present
+    if dest.exists() {
         return Ok(dest);
     }
 
-    std::fs::write(&dest, data).with_ctx(|| format!("Failed to write {}", dest.display()))?;
+    let (os, arch) = current_platform();
+    let url = download_url(tool, version, os, arch);
+    let entry_path = archive_entry_path(tool, os, arch);
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+    tracing::info!("Downloading {tool} {version} for {os}/{arch}...");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .ctx("Failed to build HTTP client")?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .with_ctx(|| format!("Failed to download {tool} from {url}"))?;
+    let bytes = response
+        .bytes()
+        .with_ctx(|| format!("Failed to read {tool} response"))?;
+
+    let decoder = flate2::read::GzDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries().ctx("Failed to read tar entries")? {
+        let mut entry = entry.ctx("Failed to read tar entry")?;
+        let path = entry.path().ctx("Failed to read entry path")?.to_path_buf();
+        if path.to_string_lossy() == entry_path {
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).ctx("Failed to read binary")?;
+            std::fs::write(&dest, &data)
+                .with_ctx(|| format!("Failed to write {}", dest.display()))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+                    .ctx("Failed to set permissions")?;
+            }
+
+            tracing::info!("Installed {tool} ({} bytes)", data.len());
+            return Ok(dest);
+        }
     }
 
-    Ok(dest)
+    Err(crate::error::SunbeamError::Other(format!(
+        "Could not find {entry_path} in {tool} archive"
+    )))
 }
 
-/// Ensure kustomize is extracted and return its path.
+/// Ensure kustomize is downloaded and return its path.
 pub fn ensure_kustomize() -> Result<PathBuf> {
-    extract_embedded(KUSTOMIZE_BIN, "kustomize")
+    ensure_tool("kustomize", KUSTOMIZE_VERSION)
 }
 
-/// Ensure helm is extracted and return its path.
+/// Ensure helm is downloaded and return its path.
 pub fn ensure_helm() -> Result<PathBuf> {
-    extract_embedded(HELM_BIN, "helm")
+    ensure_tool("helm", HELM_VERSION)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn kustomize_bin_is_non_empty() {
-        assert!(
-            !KUSTOMIZE_BIN.is_empty(),
-            "Embedded kustomize binary should not be empty"
-        );
-    }
-
-    #[test]
-    fn helm_bin_is_non_empty() {
-        assert!(
-            !HELM_BIN.is_empty(),
-            "Embedded helm binary should not be empty"
-        );
-    }
-
-    #[test]
-    fn kustomize_bin_has_reasonable_size() {
-        // kustomize binary should be at least 1 MB
-        assert!(
-            KUSTOMIZE_BIN.len() > 1_000_000,
-            "Embedded kustomize binary seems too small: {} bytes",
-            KUSTOMIZE_BIN.len()
-        );
-    }
-
-    #[test]
-    fn helm_bin_has_reasonable_size() {
-        // helm binary should be at least 1 MB
-        assert!(
-            HELM_BIN.len() > 1_000_000,
-            "Embedded helm binary seems too small: {} bytes",
-            HELM_BIN.len()
-        );
-    }
 
     #[test]
     fn cache_dir_ends_with_sunbeam_bin() {
@@ -188,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn extracted_kustomize_is_executable() {
+    fn downloaded_kustomize_is_executable() {
         let path = ensure_kustomize().expect("ensure_kustomize should succeed");
         #[cfg(unix)]
         {
@@ -204,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn extracted_helm_is_executable() {
+    fn downloaded_helm_is_executable() {
         let path = ensure_helm().expect("ensure_helm should succeed");
         #[cfg(unix)]
         {
