@@ -21,8 +21,19 @@ pub struct Cli {
     pub email: Option<String>,
 
     /// Log output mode.
+    ///
+    /// The `RUST_LOG` environment variable overrides the default level filter
+    /// (e.g. `RUST_LOG=sunbeam=debug` or `RUST_LOG=trace`).
     #[arg(short, long, value_enum, default_value_t = crate::logging::LogMode::Line, global = true)]
     pub log_mode: crate::logging::LogMode,
+
+    /// Increase logging verbosity. Use once for debug, twice for trace.
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
+    /// Suppress non-error output (sets log level to warn).
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
 
     #[command(subcommand)]
     /// Verb.
@@ -744,7 +755,7 @@ pub struct ProjectRunArgs {
     pub jobs: Option<usize>,
     /// Print commands before running.
     #[arg(long)]
-    pub verbose: bool,
+    pub echo: bool,
     /// Print what would run, don't execute.
     #[arg(long)]
     pub dry_run: bool,

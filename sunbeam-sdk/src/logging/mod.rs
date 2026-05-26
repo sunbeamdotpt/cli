@@ -33,12 +33,16 @@ pub enum LogMode {
 /// Initialize the global tracing subscriber for the given mode.
 ///
 /// Must be called once before any spans or events are emitted.
-pub fn init_subscriber(mode: LogMode) -> Result<()> {
+///
+/// `level_override` takes precedence over the default filter but loses to
+/// the `RUST_LOG` environment variable.
+pub fn init_subscriber(mode: LogMode, level_override: Option<&str>) -> Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(
+            let filter = level_override.unwrap_or(
                 "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,warn",
-            )
+            );
+            tracing_subscriber::EnvFilter::new(filter)
         });
 
     match mode {
