@@ -44,6 +44,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
                 Ok(())
             }
         },
+        ServiceAction::List { format } => cmd_list(format).await,
         ServiceAction::Apply {
             namespace,
             apply_all,
@@ -258,6 +259,29 @@ async fn run_workflow(
     }
 
     Ok(())
+}
+
+/// List available services from the infrastructure directory.
+async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
+    let infra_dir = crate::config::get_infra_dir();
+    let services = crate::manifests::discover_services(&infra_dir)?;
+
+    if services.is_empty() {
+        crate::output::warn("No services found in the infrastructure directory.");
+        return Ok(());
+    }
+
+    #[derive(serde::Serialize)]
+    struct ServiceRow {
+        name: String,
+    }
+
+    let rows: Vec<ServiceRow> = services
+        .into_iter()
+        .map(|name| ServiceRow { name })
+        .collect();
+
+    crate::output::render_list(&rows, &["SERVICE"], |r| vec![r.name.clone()], format)
 }
 
 /// Deploy service(s) by name, category, or namespace.
