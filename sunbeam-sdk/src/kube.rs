@@ -144,7 +144,6 @@ fn job_spec_hash(doc_json: &serde_json::Value) -> String {
 ///    applying so the new spec takes effect (Jobs are immutable once created).
 /// 4. After a successful apply, patch the annotation onto the Job so future
 ///    runs can detect whether a re-apply is actually needed.
-#[allow(dead_code)]
 pub async fn kube_apply(manifest: &str) -> Result<()> {
     let client = get_client().await?;
     let ssapply = PatchParams::apply("sunbeam").force();
