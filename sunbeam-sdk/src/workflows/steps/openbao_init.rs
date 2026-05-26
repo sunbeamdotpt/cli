@@ -11,9 +11,11 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::ok;
+use crate::output::{ok, warn};
 use crate::secrets;
+use crate::vault_keystore::{keystore_exists, load_keystore, save_keystore, VaultKeystore};
 use crate::workflows::StepContext;
+use chrono::Utc;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -133,6 +135,11 @@ impl StepBody for InitOrUnsealOpenBao {
             None => return Ok(ExecutionResult::next()),
         };
 
+        let step_ctx: StepContext =
+            serde_json::from_value(ctx.workflow.data.get("__ctx").cloned().unwrap_or_default())
+                .map_err(|e| step_err(e.to_string()))?;
+        let domain = step_ctx.domain;
+
         // Port-forward with retries
         let mut pf = None;
         for attempt in 0..10 {
@@ -193,6 +200,13 @@ impl StepBody for InitOrUnsealOpenBao {
             already_initialized = true;
         }
 
+        // Load local keystore as fallback
+        let local_keystore = if !domain.is_empty() {
+            load_keystore(&domain).ok()
+        } else {
+            None
+        };
+
         if already_initialized {
             ok("Already initialized.");
             if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await
@@ -204,6 +218,23 @@ impl StepBody for InitOrUnsealOpenBao {
                 && token != "placeholder"
             {
                 root_token = token;
+            }
+
+            // If cluster secret is missing keys but local keystore has them, restore
+            if (root_token.is_empty() || unseal_key.is_empty()) && local_keystore.is_some() {
+                let ks = local_keystore.as_ref().unwrap();
+                if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
+                    ok("Cluster secret missing keys — restoring from local keystore...");
+                    let mut secret_data = HashMap::new();
+                    secret_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
+                    secret_data.insert("root-token".to_string(), ks.root_token.clone());
+                    k::create_secret("data", "openbao-keys", secret_data)
+                        .await
+                        .map_err(|e| step_err(e.to_string()))?;
+                    unseal_key = ks.unseal_keys_b64[0].clone();
+                    root_token = ks.root_token.clone();
+                    ok("Cluster secret restored from local keystore.");
+                }
             }
 
             // If vault is initialized but we lost the root token, reset storage
@@ -321,6 +352,25 @@ impl StepBody for InitOrUnsealOpenBao {
                         .await
                         .map_err(|e| step_err(e.to_string()))?;
                     ok("Initialized -- keys stored in secret/openbao-keys.");
+
+                    // Save to local keystore
+                    if !domain.is_empty() {
+                        let ks = VaultKeystore {
+                            version: 1,
+                            domain: domain.clone(),
+                            created_at: Utc::now(),
+                            updated_at: Utc::now(),
+                            root_token: root_token.clone(),
+                            unseal_keys_b64: vec![unseal_key.clone()],
+                            key_shares: 1,
+                            key_threshold: 1,
+                        };
+                        if let Err(e) = save_keystore(&ks) {
+                            warn(&format!("Failed to save vault keystore: {e}"));
+                        } else {
+                            ok("Keys saved to local keystore.");
+                        }
+                    }
                 }
                 None => {
                     return Err(step_err(format!(
@@ -344,6 +394,25 @@ impl StepBody for InitOrUnsealOpenBao {
             bao.unseal(&unseal_key)
                 .await
                 .map_err(|e| step_err(format!("Failed to unseal OpenBao: {e}")))?;
+        }
+
+        // If we read keys from cluster but local keystore is missing, backfill
+        if already_initialized && !root_token.is_empty() && !domain.is_empty() && !keystore_exists(&domain) {
+            let ks = VaultKeystore {
+                version: 1,
+                domain: domain.clone(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                root_token: root_token.clone(),
+                unseal_keys_b64: vec![unseal_key.clone()],
+                key_shares: 1,
+                key_threshold: 1,
+            };
+            if let Err(e) = save_keystore(&ks) {
+                warn(&format!("Failed to backfill vault keystore: {e}"));
+            } else {
+                ok("Local keystore backfilled from cluster secret.");
+            }
         }
 
         // Enable & tune KV engine
