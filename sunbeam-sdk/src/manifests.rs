@@ -1,6 +1,6 @@
 //! Kustomize build, apply, and namespace filtering.
 
-use crate::error::Result;
+use crate::error::{Result, ResultExt};
 
 /// Return only the YAML documents that belong to the given namespace.
 ///
@@ -62,6 +62,41 @@ pub struct ApplyOptions {
     pub skip_patterns: Vec<String>,
     /// Runtime manifest overrides (--set, --disable, --enable).
     pub overrides: Option<crate::manifest_params::Overrides>,
+}
+
+/// Discover available service namespaces by scanning `<infra_dir>/base/`
+/// for directories that contain a `kustomization.yaml` (or `.yml`).
+///
+/// Returns a sorted list of directory names. Each name corresponds to a
+/// namespace/service that can be passed to `sunbeam service apply <name>`.
+pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
+    let base = infra_dir.join("base");
+    if !base.exists() {
+        bail!(
+            "Infrastructure base directory not found: {}",
+            base.display()
+        );
+    }
+
+    let mut services = Vec::new();
+    let entries = std::fs::read_dir(&base)
+        .with_ctx(|| format!("Failed to read base directory: {}", base.display()))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let has_kustomization =
+                path.join("kustomization.yaml").is_file() || path.join("kustomization.yml").is_file();
+            if has_kustomization {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    services.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    services.sort_unstable();
+    Ok(services)
 }
 
 /// Build the production kustomize overlay, substitute domain/email, apply via kube-rs.
@@ -1038,5 +1073,176 @@ spec:
         assert!(opts.dry_run);
         assert_eq!(opts.skip_patterns.len(), 1);
         assert!(opts.overrides.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // discover_services tests
+    // -----------------------------------------------------------------------
+
+    use std::fs;
+
+    fn make_dir_with_kustomization(base: &std::path::Path, name: &str, ext: &str) {
+        let dir = base.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("kustomization.{ext}")), "resources: []\n").unwrap();
+    }
+
+    #[test]
+    fn discover_services_empty_base_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        let found = discover_services(tmp.path()).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_services_missing_base_errors() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let err = discover_services(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("base directory not found"));
+    }
+
+    #[test]
+    fn discover_services_finds_yaml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "ory", "yaml");
+        make_dir_with_kustomization(&base, "data", "yaml");
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["data", "ory"]);
+    }
+
+    #[test]
+    fn discover_services_finds_yml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "matrix", "yml");
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["matrix"]);
+    }
+
+    #[test]
+    fn discover_services_ignores_dirs_without_kustomization() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "ory", "yaml");
+        fs::create_dir(base.join("not-a-service")).unwrap();
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["ory"]);
+    }
+
+    #[test]
+    fn discover_services_ignores_files_in_base() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "monitoring", "yaml");
+        fs::write(base.join("README.md"), "# base\n").unwrap();
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["monitoring"]);
+    }
+
+    #[test]
+    fn discover_services_sorts_alphabetically() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "wfe", "yaml");
+        make_dir_with_kustomization(&base, "ory", "yaml");
+        make_dir_with_kustomization(&base, "data", "yaml");
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["data", "ory", "wfe"]);
+    }
+
+    #[test]
+    fn discover_services_ignores_nested_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "stalwart", "yaml");
+        // Nested directory inside a service dir — should not be listed
+        fs::create_dir_all(base.join("stalwart").join("sub-component")).unwrap();
+        fs::write(
+            base.join("stalwart").join("sub-component").join("kustomization.yaml"),
+            "resources: []\n",
+        )
+        .unwrap();
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["stalwart"]);
+    }
+
+    #[test]
+    fn discover_services_yaml_takes_precedence_over_yml() {
+        // A directory with BOTH files should still only be listed once.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        let dir = base.join("press");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("kustomization.yaml"), "resources: []\n").unwrap();
+        fs::write(dir.join("kustomization.yml"), "resources: []\n").unwrap();
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["press"]);
+    }
+
+    #[test]
+    fn discover_services_empty_dir_name_skipped() {
+        // Directories are created normally; impossible to have an empty OS dir name.
+        // This test verifies the file_name parsing branch is safe.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        make_dir_with_kustomization(&base, "vpn", "yaml");
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["vpn"]);
+    }
+
+    #[test]
+    fn discover_services_symlink_to_dir_followed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("base");
+        fs::create_dir(&base).unwrap();
+        let real_dir = tmp.path().join("real-ingress");
+        fs::create_dir(&real_dir).unwrap();
+        fs::write(real_dir.join("kustomization.yaml"), "resources: []\n").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real_dir, base.join("ingress")).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(&real_dir, base.join("ingress")).unwrap();
+        }
+        let found = discover_services(tmp.path()).unwrap();
+        assert_eq!(found, vec!["ingress"]);
+    }
+
+    #[test]
+    fn discover_services_real_infra_sbbb_has_expected_services() {
+        // Sanity-check against the actual on-disk infrastructure directory.
+        let infra = std::path::PathBuf::from("../../../infra/sbbb");
+        if !infra.exists() {
+            // Skip when running outside the monorepo (e.g. published crate tests).
+            return;
+        }
+        let found = discover_services(&infra).unwrap();
+        assert!(
+            found.contains(&"ory".to_string()),
+            "expected 'ory' in discovered services"
+        );
+        assert!(
+            found.contains(&"data".to_string()),
+            "expected 'data' in discovered services"
+        );
+        assert!(
+            found.contains(&"matrix".to_string()),
+            "expected 'matrix' in discovered services"
+        );
+        // Should NOT contain arbitrary non-service directories
+        assert!(!found.contains(&"not-a-service".to_string()));
     }
 }
