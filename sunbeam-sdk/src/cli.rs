@@ -297,6 +297,13 @@ pub enum ServiceAction {
         all: bool,
     },
 
+    /// List all available services that can be applied.
+    List {
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table)]
+        format: crate::output::OutputFormat,
+    },
+
     /// kustomize build + domain subst + kubectl apply.
     ///
     /// The infrastructure directory is NOT a flag on this command — it's a
