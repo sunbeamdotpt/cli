@@ -69,7 +69,9 @@ impl BaoClient {
     // ── System operations ───────────────────────────────────────────────
 
 /// Seal status.
+    #[tracing::instrument(skip(self))]
     pub async fn seal_status(&self) -> Result<SealStatusResponse> {
+        tracing::debug!("seal_status");
         match vaultrs::sys::status(&self.inner).await {
             Ok(status) => {
                 use vaultrs::sys::ServerStatus;
@@ -92,7 +94,9 @@ impl BaoClient {
     }
 
 /// Init.
+    #[tracing::instrument(skip(self))]
     pub async fn init(&self, key_shares: u32, key_threshold: u32) -> Result<InitResponse> {
+        tracing::debug!("init key_shares={key_shares} key_threshold={key_threshold}");
         vaultrs::sys::start_initialization(
             &self.inner,
             key_shares as u64,
@@ -104,7 +108,9 @@ impl BaoClient {
     }
 
 /// Unseal.
+    #[tracing::instrument(skip(self))]
     pub async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
+        tracing::debug!("unseal");
         let resp = vaultrs::sys::unseal(&self.inner, Some(key.to_string()), None, None)
             .await
             .map_err(|e| {
@@ -118,7 +124,9 @@ impl BaoClient {
     // ── Secrets engine management ───────────────────────────────────────
 
 /// Enable secrets engine.
+    #[tracing::instrument(skip(self))]
     pub async fn enable_secrets_engine(&self, path: &str, engine_type: &str) -> Result<()> {
+        tracing::debug!("enable_secrets_engine {path} type={engine_type}");
         match vaultrs::sys::mount::enable(&self.inner, path, engine_type, None).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -137,7 +145,9 @@ impl BaoClient {
     // ── KV v2 operations ────────────────────────────────────────────────
 
 /// Kv get.
+    #[tracing::instrument(skip(self))]
     pub async fn kv_get(&self, mount: &str, path: &str) -> Result<Option<HashMap<String, String>>> {
+        tracing::debug!("kv_get {mount}/{path}");
         match vaultrs::kv2::read::<HashMap<String, serde_json::Value>>(&self.inner, mount, path)
             .await
         {
@@ -168,7 +178,9 @@ impl BaoClient {
     }
 
 /// Kv get field.
+    #[tracing::instrument(skip(self))]
     pub async fn kv_get_field(&self, mount: &str, path: &str, field: &str) -> Result<String> {
+        tracing::debug!("kv_get_field {mount}/{path} field={field}");
         match self.kv_get(mount, path).await? {
             Some(data) => Ok(data.get(field).cloned().unwrap_or_default()),
             None => Ok(String::new()),
@@ -176,12 +188,14 @@ impl BaoClient {
     }
 
 /// Kv put.
+    #[tracing::instrument(skip(self))]
     pub async fn kv_put(
         &self,
         mount: &str,
         path: &str,
         data: &HashMap<String, String>,
     ) -> Result<()> {
+        tracing::debug!("kv_put {mount}/{path}");
         vaultrs::kv2::set(&self.inner, mount, path, data)
             .await
             .map_err(|e| {
@@ -192,12 +206,14 @@ impl BaoClient {
 
     /// Patch (merge) fields into an existing KV v2 secret.
     /// vaultrs doesn't have a patch method, so we use a raw HTTP request.
+    #[tracing::instrument(skip(self))]
     pub async fn kv_patch(
         &self,
         mount: &str,
         path: &str,
         data: &HashMap<String, String>,
     ) -> Result<()> {
+        tracing::debug!("kv_patch {mount}/{path}");
         #[derive(serde::Serialize)]
         struct KvWriteRequest<'a> {
             data: &'a HashMap<String, String>,
@@ -223,7 +239,9 @@ impl BaoClient {
     }
 
 /// Kv delete.
+    #[tracing::instrument(skip(self))]
     pub async fn kv_delete(&self, mount: &str, path: &str) -> Result<()> {
+        tracing::debug!("kv_delete {mount}/{path}");
         match vaultrs::kv2::delete_latest(&self.inner, mount, path).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -242,7 +260,9 @@ impl BaoClient {
     // ── Auth operations ─────────────────────────────────────────────────
 
 /// Auth enable.
+    #[tracing::instrument(skip(self))]
     pub async fn auth_enable(&self, path: &str, method_type: &str) -> Result<()> {
+        tracing::debug!("auth_enable {path} type={method_type}");
         match vaultrs::sys::auth::enable(&self.inner, path, method_type, None).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -259,7 +279,9 @@ impl BaoClient {
     }
 
 /// Write policy.
+    #[tracing::instrument(skip(self))]
     pub async fn write_policy(&self, name: &str, policy_hcl: &str) -> Result<()> {
+        tracing::debug!("write_policy {name}");
         vaultrs::sys::policy::set(&self.inner, name, policy_hcl)
             .await
             .map_err(|e| crate::error::SunbeamError::Other(format!("Write policy {name}: {e}")))
@@ -271,7 +293,9 @@ impl BaoClient {
     ///
     /// Returns the parsed JSON body on success, or `Ok(None)` on 404.
     /// Use for non-KV paths like `transit/<mount>/keys/<name>`.
+    #[tracing::instrument(skip(self))]
     pub async fn read(&self, path: &str) -> Result<Option<serde_json::Value>> {
+        tracing::debug!("read {path}");
         let url = format!("{}/v1/{}", self.base_url, path.trim_start_matches('/'));
         let mut req = reqwest::Client::new().get(&url);
         if let Some(token) = self.token_header() {
@@ -304,7 +328,9 @@ impl BaoClient {
     // ── Generic write (for auth config, roles, etc.) ────────────────────
 
 /// Write.
+    #[tracing::instrument(skip(self))]
     pub async fn write(&self, path: &str, data: &serde_json::Value) -> Result<serde_json::Value> {
+        tracing::debug!("write {path}");
         let url = format!("{}/v1/{}", self.base_url, path.trim_start_matches('/'));
         let mut req = reqwest::Client::new().post(&url).json(data);
         if let Some(token) = self.token_header() {
@@ -332,6 +358,7 @@ impl BaoClient {
     // ── Database secrets engine ─────────────────────────────────────────
 
 /// Write db config.
+    #[tracing::instrument(skip(self))]
     pub async fn write_db_config(
         &self,
         name: &str,
@@ -341,6 +368,7 @@ impl BaoClient {
         password: &str,
         allowed_roles: &str,
     ) -> Result<()> {
+        tracing::debug!("write_db_config {name}");
         let data = serde_json::json!({
             "plugin_name": plugin,
             "connection_url": connection_url,
@@ -362,6 +390,7 @@ impl BaoClient {
         rotation_period: u64,
         rotation_statements: &[&str],
     ) -> Result<()> {
+        tracing::debug!("write_db_static_role {db_name}");
         let data = serde_json::json!({
             "db_name": db_name,
             "username": username,

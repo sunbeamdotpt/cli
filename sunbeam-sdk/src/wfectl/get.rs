@@ -17,7 +17,9 @@ pub struct GetArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: GetArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+    tracing::info!("wfectl get workflow {id}", id = args.workflow_id);
     let resp = client
         .get_workflow(GetWorkflowRequest {
             workflow_id: args.workflow_id.clone(),

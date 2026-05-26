@@ -85,12 +85,14 @@ fn terminal_size() -> Option<(u16, u16)> {
 ///
 /// `cmd` is the argv to run in the pod. `container` selects a specific
 /// container inside the pod, or `None` for the pod's default container.
+#[tracing::instrument]
 pub async fn pod_exec_interactive(
     pods: &Api<Pod>,
     pod_name: &str,
     container: Option<&str>,
     cmd: &[String],
 ) -> Result<i32> {
+    tracing::debug!("pod_exec_interactive {pod_name} container={container:?} cmd={cmd:?}");
     // stdin/stdout/tty=true, stderr=false (stderr is incompatible with tty).
     let ap = AttachParams {
         stdin: true,
