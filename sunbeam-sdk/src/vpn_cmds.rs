@@ -10,7 +10,7 @@
 
 use crate::config::active_context;
 use crate::error::{Result, SunbeamError};
-use crate::output::{ok, step, warn};
+
 use crate::vpn_env::vpn_state_dir;
 
 /// Run `sunbeam connect`.
@@ -18,6 +18,7 @@ use crate::vpn_env::vpn_state_dir;
 /// Default mode spawns a backgrounded daemon and returns once it reaches
 /// Running. With `--foreground`, runs the daemon in-process and blocks
 /// until SIGINT or SIGTERM.
+#[tracing::instrument]
 pub async fn cmd_connect(foreground: bool) -> Result<()> {
     let ctx = active_context();
     if ctx.vpn_url.is_empty() {
@@ -50,9 +51,9 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
     let probe = sunbeam_net::IpcClient::new(&socket);
     if probe.socket_exists() {
         if let Ok(status) = probe.status().await {
-            warn(&format!(
+            tracing::warn!(
                 "VPN daemon already running ({status}). Use `sunbeam disconnect` first."
-            ));
+            );
             return Ok(());
         }
         // Stale socket — clean it up so the new daemon can rebind.
@@ -98,20 +99,20 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
         .spawn()
         .map_err(|e| SunbeamError::Other(format!("spawn daemon: {e}")))?;
 
-    step(&format!(
+    tracing::info!(
         "VPN daemon spawned (pid {}, logs at {})",
         child.id(),
         log_path.display()
-    ));
+    );
 
     // Poll the IPC socket until the daemon reaches Running.
     let client = sunbeam_net::IpcClient::new(&socket);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if std::time::Instant::now() > deadline {
-            warn(
+            tracing::warn!(
                 "VPN daemon did not reach Running state within 30s — \
-                 check the daemon log for details",
+                 check the daemon log for details"
             );
             return Ok(());
         }
@@ -126,11 +127,11 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
                 ..
             }) => {
                 let addrs: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
-                ok(&format!(
+                tracing::info!(
                     "Connected ({}) — {} peers visible",
                     addrs.join(", "),
                     peer_count
-                ));
+                );
                 return Ok(());
             }
             Ok(sunbeam_net::DaemonStatus::Error { message }) => {
@@ -145,6 +146,7 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
 }
 
 /// The hidden `__vpn-daemon` subcommand entry point.
+#[tracing::instrument]
 pub async fn cmd_vpn_daemon() -> Result<()> {
     run_daemon_foreground().await
 }
@@ -198,7 +200,7 @@ async fn run_daemon_foreground() -> Result<()> {
         dns_search_domains: parse_dns_search(&ctx.vpn_dns_search),
     };
 
-    step(&format!("Connecting to {}", ctx.vpn_url));
+    tracing::info!("Connecting to {}", ctx.vpn_url);
     let handle = sunbeam_net::VpnDaemon::start(config)
         .await
         .map_err(|e| SunbeamError::Other(format!("daemon start: {e}")))?;
@@ -214,11 +216,11 @@ async fn run_daemon_foreground() -> Result<()> {
         tokio::select! {
             biased;
             _ = &mut ctrl_c => {
-                step("Interrupt — disconnecting...");
+                tracing::info!("Interrupt — disconnecting...");
                 break;
             }
             _ = sigterm.recv() => {
-                step("SIGTERM — disconnecting...");
+                tracing::info!("SIGTERM — disconnecting...");
                 break;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
@@ -233,11 +235,12 @@ async fn run_daemon_foreground() -> Result<()> {
         .shutdown()
         .await
         .map_err(|e| SunbeamError::Other(format!("daemon shutdown: {e}")))?;
-    ok("Disconnected.");
+    tracing::info!("Disconnected.");
     Ok(())
 }
 
 /// Run `sunbeam disconnect` — signal a running daemon via its IPC socket.
+#[tracing::instrument]
 pub async fn cmd_disconnect() -> Result<()> {
     let socket = vpn_state_dir()?.join("daemon.sock");
     let client = sunbeam_net::IpcClient::new(&socket);
@@ -246,16 +249,17 @@ pub async fn cmd_disconnect() -> Result<()> {
             "no running VPN daemon (control socket missing)".into(),
         ));
     }
-    step("Asking VPN daemon to stop...");
+    tracing::info!("Asking VPN daemon to stop...");
     client
         .stop()
         .await
         .map_err(|e| SunbeamError::Other(format!("IPC stop: {e}")))?;
-    ok("Daemon acknowledged shutdown.");
+    tracing::info!("Daemon acknowledged shutdown.");
     Ok(())
 }
 
 /// Run `sunbeam vpn status` — query a running daemon's status via IPC.
+#[tracing::instrument]
 pub async fn cmd_vpn_status() -> Result<()> {
     let socket = vpn_state_dir()?.join("daemon.sock");
     let client = sunbeam_net::IpcClient::new(&socket);
@@ -394,6 +398,7 @@ fn short_node_key(key: &str) -> String {
 /// must have generated a Headscale API key out-of-band (typically via
 /// `headscale apikeys create` on the cluster) and stored it in the
 /// context config.
+#[tracing::instrument]
 pub async fn cmd_vpn_create_key(
     user: &str,
     user_id: Option<u64>,
@@ -440,7 +445,7 @@ pub async fn cmd_vpn_create_key(
 
     let endpoint = format!("{}/api/v1/preauthkey", ctx.vpn_url.trim_end_matches('/'));
 
-    step(&format!("Creating pre-auth key on {}", ctx.vpn_url));
+    tracing::info!("Creating pre-auth key on {}", ctx.vpn_url);
     let resp = client
         .post(&endpoint)
         .bearer_auth(&ctx.vpn_api_key)
@@ -470,7 +475,7 @@ pub async fn cmd_vpn_create_key(
         .and_then(|k| k.as_str())
         .ok_or_else(|| SunbeamError::Other(format!("no preAuthKey.key in response: {text}")))?;
 
-    ok(&format!("Pre-auth key for user '{user}':"));
+    tracing::info!("Pre-auth key for user '{user}':");
     println!("{key}");
     println!();
     println!("Add it to a context with:");

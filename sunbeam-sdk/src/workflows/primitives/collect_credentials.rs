@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::output::ok;
+
 
 /// Credential mapping: maps a global cred key to a service + field.
 /// E.g., `("hydra-system-secret", "hydra", "system-secret")` means
@@ -65,6 +65,7 @@ pub struct CollectCredentials;
 #[async_trait::async_trait]
 impl StepBody for CollectCredentials {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("collect_credentials");
         let data = &ctx.workflow.data;
 
         if data
@@ -106,11 +107,11 @@ impl StepBody for CollectCredentials {
             }
         }
 
-        ok(&format!(
+        tracing::info!(
             "Collected credentials from {} services ({} dirty)",
             KV_SERVICES.len(),
             dirty_paths.len()
-        ));
+        );
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({

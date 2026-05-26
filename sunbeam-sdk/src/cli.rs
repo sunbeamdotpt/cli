@@ -981,7 +981,9 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
+#[tracing::instrument]
 pub async fn dispatch(cli: Cli) -> Result<()> {
+    tracing::debug!("cli dispatch: verb={:?}", cli.verb);
 
     // Resolve the active context from config + CLI flags (like kubectl).
     // `--domain` / `--email` are Option<String>: `None` means "don't override",
@@ -1062,15 +1064,15 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             }
 
             if use_lima {
-                crate::output::step("Deleting Lima VM 'sunbeam'...");
+                tracing::info!("Deleting Lima VM 'sunbeam'...");
                 match crate::workflows::down::steps::delete_lima_vm().await {
-                    Ok(()) => crate::output::ok("Lima VM deleted."),
-                    Err(e) => crate::output::warn(&format!("Failed to delete Lima VM: {e}")),
+                    Ok(()) => tracing::info!("Lima VM deleted."),
+                    Err(e) => tracing::warn!("Failed to delete Lima VM: {e}"),
                 }
                 return Ok(());
             }
 
-            crate::output::step("Tearing down cluster (workflow engine)...");
+            tracing::info!("Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
                 let cfg = crate::config::load_config();
@@ -1139,7 +1141,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let email = crate::config::active_context().acme_email.clone();
 
             if show_params {
-                crate::output::step("Loading deployment configs...");
+                tracing::info!("Loading deployment configs...");
                 let catalog = crate::manifest_params::discover_from_overlay(
                     &overlay,
                     &resolved_domain,
@@ -1153,7 +1155,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
             let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
-            crate::output::step("Bringing up cluster (workflow engine)...");
+            tracing::info!("Bringing up cluster (workflow engine)...");
 
             let ctx_name = {
                 let cfg = crate::config::load_config();
@@ -1259,16 +1261,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             Some(ConfigAction::UseContext { name }) => {
                 let mut config = crate::config::load_config();
                 if !config.contexts.contains_key(&name) {
-                    crate::output::warn(&format!(
+                    tracing::warn!(
                         "Context '{name}' does not exist. Creating empty context."
-                    ));
+                    );
                     config
                         .contexts
                         .insert(name.clone(), crate::config::Context::default());
                 }
                 config.current_context = name.clone();
                 crate::config::save_config(&config)?;
-                crate::output::ok(&format!("Switched to context '{name}'."));
+                tracing::info!("Switched to context '{name}'.");
                 Ok(())
             }
             Some(ConfigAction::Get) => {
@@ -1278,22 +1280,22 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     &config.current_context
                 };
-                crate::output::ok(&format!("Current context: {current}"));
+                tracing::info!("Current context: {current}");
                 println!();
                 for (name, ctx) in &config.contexts {
                     let marker = if name == current { " *" } else { "" };
-                    crate::output::ok(&format!("Context: {name}{marker}"));
+                    tracing::info!("Context: {name}{marker}");
                     if !ctx.domain.is_empty() {
-                        crate::output::ok(&format!("  domain:       {}", ctx.domain));
+                        tracing::info!("  domain:       {}", ctx.domain);
                     }
                     if !ctx.kube_context.is_empty() {
-                        crate::output::ok(&format!("  kube-context: {}", ctx.kube_context));
+                        tracing::info!("  kube-context: {}", ctx.kube_context);
                     }
                     if !ctx.infra_dir.is_empty() {
-                        crate::output::ok(&format!("  infra-dir:    {}", ctx.infra_dir));
+                        tracing::info!("  infra-dir:    {}", ctx.infra_dir);
                     }
                     if !ctx.acme_email.is_empty() {
-                        crate::output::ok(&format!("  acme-email:   {}", ctx.acme_email));
+                        tracing::info!("  acme-email:   {}", ctx.acme_email);
                     }
                     println!();
                 }

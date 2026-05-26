@@ -4,7 +4,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::{ok, step, warn};
+
 use crate::workflows::data::UpData;
 
 // ── EnsureCilium ────────────────────────────────────────────────────────────
@@ -20,8 +20,8 @@ impl StepBody for EnsureCilium {
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
         if data.skip_cilium {
-            warn("Skipping Cilium check (--skip-cilium).");
-            ok("Cilium check skipped.");
+            tracing::warn!("Skipping Cilium check (--skip-cilium).");
+            tracing::info!("Cilium check skipped.");
             return Ok(ExecutionResult::next());
         }
 
@@ -33,7 +33,7 @@ impl StepBody for EnsureCilium {
         // Initialize kube context for the rest of the workflow
         k::set_context(&step_ctx.kube_context);
 
-        step("Cilium CNI...");
+        tracing::info!("Cilium CNI...");
 
         // Cilium may still be installing after Lima VM provisioning; wait up to 5 min.
         // Re-create the client on each attempt so kubeconfig updates are picked up.
@@ -49,7 +49,7 @@ impl StepBody for EnsureCilium {
                     }
                 }
                 Err(e) => {
-                    step(&format!("Cilium CNI (waiting for API: {e})..."));
+                    tracing::info!("Cilium CNI (waiting for API: {e})...");
                 }
             }
             if std::time::Instant::now() > deadline {
@@ -64,7 +64,7 @@ impl StepBody for EnsureCilium {
                     .into(),
             ));
         }
-        ok("Cilium is healthy.");
+        tracing::info!("Cilium is healthy.");
 
         // When using Lima, resolve domain from the live cluster so that VM IP
         // changes (e.g. new Lima instance) are picked up automatically.
@@ -104,7 +104,7 @@ impl StepBody for EnsureBuildKit {
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
-        step("BuildKit...");
+        tracing::info!("BuildKit...");
 
         let client = k::get_client()
             .await
@@ -114,7 +114,7 @@ impl StepBody for EnsureBuildKit {
         let lp = kube::api::ListParams::default();
         match pods.list(&lp).await {
             Ok(list) if !list.items.is_empty() => {
-                ok("BuildKit is present.");
+                tracing::info!("BuildKit is present.");
                 Ok(ExecutionResult::next())
             }
             _ => Err(wfe_core::WfeError::StepExecution(
@@ -133,7 +133,7 @@ pub struct EnsureSeaweedFSBuckets;
 #[async_trait::async_trait]
 impl StepBody for EnsureSeaweedFSBuckets {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        step("SeaweedFS buckets...");
+        tracing::info!("SeaweedFS buckets...");
 
         // Wait for the seaweedfs master pod (up to 3 min)
         let client = k::get_client()
@@ -191,7 +191,7 @@ impl StepBody for EnsureSeaweedFSBuckets {
             )));
         }
         if stdout.contains("created bucket zot") || stdout.contains("bucket zot already exists") {
-            ok("Created zot bucket.");
+            tracing::info!("Created zot bucket.");
             Ok(ExecutionResult::next())
         } else {
             Err(wfe_core::WfeError::StepExecution(format!(
@@ -217,7 +217,7 @@ impl StepBody for WaitForCNPGWebhook {
         use kube::api::{Api, ListParams};
         use std::time::{Duration, Instant};
 
-        step("Waiting for CNPG webhook...");
+        tracing::info!("Waiting for CNPG webhook...");
 
         let client = k::get_client()
             .await
@@ -257,7 +257,7 @@ impl StepBody for WaitForCNPGWebhook {
                             .and_then(|s| s.addresses.as_ref())
                             .is_some_and(|a| !a.is_empty());
                         if has_addr {
-                            ok("CNPG webhook ready.");
+                            tracing::info!("CNPG webhook ready.");
                             return Ok(ExecutionResult::next());
                         }
                     }
@@ -291,7 +291,7 @@ impl StepBody for WaitForLonghornWebhook {
         use kube::api::{Api, ListParams};
         use std::time::{Duration, Instant};
 
-        step("Waiting for Longhorn webhook...");
+        tracing::info!("Waiting for Longhorn webhook...");
 
         let client = k::get_client()
             .await
@@ -315,7 +315,7 @@ impl StepBody for WaitForLonghornWebhook {
                         .and_then(|s| s.addresses.as_ref())
                         .is_some_and(|a| !a.is_empty());
                     if has_addr {
-                        ok("Longhorn webhook ready.");
+                        tracing::info!("Longhorn webhook ready.");
                         return Ok(ExecutionResult::next());
                     }
                 }

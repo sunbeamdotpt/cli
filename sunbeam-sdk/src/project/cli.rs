@@ -12,13 +12,16 @@ use crate::config::get_infra_dir;
 use crate::discovery::{find_project_root, find_workspace_root, WORKSPACE_FILE};
 use crate::error::{Result, SunbeamError};
 use crate::operations::config::WorkspaceConfig;
-use crate::output::{ok, step, warn};
+
 use crate::project::config::{is_standard_verb, ProjectConfig, STANDARD_VERBS};
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{sort, Graph};
 
 /// Dispatch.
+#[tracing::instrument]
 pub async fn dispatch(action: ProjectAction) -> Result<()> {
+    tracing::debug!("project dispatch: {action:?}");
+    tracing::info!("project dispatch: {action:?}");
     match action {
         ProjectAction::Build(args) => run_verb("build", args).await,
         ProjectAction::Test(args) => run_verb("test", args).await,
@@ -66,10 +69,10 @@ async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
         }
     })?;
 
-    crate::output::ok(&format!(
+    tracing::info!(
         "Bumped infra/sbbb/base/ingress/kustomization.yaml → newTag: {tag}"
-    ));
-    crate::output::ok("Run `sunbeam service apply ingress` to roll out the new proxy image.");
+    );
+    tracing::info!("Run `sunbeam service apply ingress` to roll out the new proxy image.");
     Ok(())
 }
 
@@ -93,7 +96,7 @@ async fn run_single(verb: &str, opts: RunOptions) -> Result<()> {
     let cfg = ProjectConfig::load(&project_root.join("sunbeam.yaml"))?;
     let outcome = crate::project::runner::run(&cfg, &project_root, verb, &opts).await?;
     if matches!(outcome, RunOutcome::Skipped) {
-        warn(&format!("  skipped (no {verb} target)"));
+        tracing::warn!("  skipped (no {verb} target)");
     }
     Ok(())
 }
@@ -208,7 +211,7 @@ async fn run_workspace_at(
             let (name, outcome) = res
                 .map_err(|e| SunbeamError::Other(format!("task join error: {e}")))??;
             if matches!(outcome, RunOutcome::Skipped) {
-                warn(&format!("  {name}: skipped (no {verb} target)"));
+                tracing::warn!("  {name}: skipped (no {verb} target)");
             }
         }
     }
@@ -313,7 +316,7 @@ async fn cmd_order_at(cwd: &std::path::Path, verb: &str) -> Result<()> {
                 }
             })
             .collect();
-        ok(&format!("group {i}: {}", tokens.join("  ")));
+        tracing::info!("group {i}: {}", tokens.join("  "));
     }
 
     Ok(())
@@ -467,15 +470,15 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
 
     let mut failed = false;
     for (name, cfg) in &targets {
-        step(&format!("check {name}"));
+        tracing::info!("check {name}");
 
-        ok(&format!("✓ schema {} parsed", cfg.schema));
+        tracing::info!("✓ schema {} parsed", cfg.schema);
 
         // Project name uniqueness in workspace.
         if owned_names.contains(name) {
-            ok("✓ name registered in workspace manifest");
+            tracing::info!("✓ name registered in workspace manifest");
         } else {
-            warn(&format!("✗ project name {name:?} not in workspace.owned"));
+            tracing::warn!("✗ project name {name:?} not in workspace.owned");
             failed = true;
         }
 
@@ -487,9 +490,9 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             }
         }
         if bad_proj_deps.is_empty() {
-            ok(&format!("✓ deps.projects ({} entries) all resolve", cfg.deps.projects.len()));
+            tracing::info!("✓ deps.projects ({} entries) all resolve", cfg.deps.projects.len());
         } else {
-            warn(&format!("✗ deps.projects: unknown {bad_proj_deps:?}"));
+            tracing::warn!("✗ deps.projects: unknown {bad_proj_deps:?}");
             failed = true;
         }
 
@@ -501,9 +504,9 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             }
         }
         if bad_svc_deps.is_empty() {
-            ok(&format!("✓ deps.services ({} entries) all resolve", cfg.deps.services.len()));
+            tracing::info!("✓ deps.services ({} entries) all resolve", cfg.deps.services.len());
         } else {
-            warn(&format!("✗ deps.services: unknown {bad_svc_deps:?}"));
+            tracing::warn!("✗ deps.services: unknown {bad_svc_deps:?}");
             failed = true;
         }
 
@@ -514,27 +517,27 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             .filter(|v| !is_standard_verb(v))
             .collect();
         if custom.is_empty() {
-            ok(&format!(
+            tracing::info!(
                 "✓ targets: all standard ({} of {} defined)",
                 cfg.targets.len(),
                 STANDARD_VERBS.len()
-            ));
+            );
         } else {
-            ok(&format!(
+            tracing::info!(
                 "✓ targets: {} standard + custom: {custom:?}",
                 cfg.targets.len() - custom.len()
-            ));
+            );
         }
     }
 
     // Cycle check at the end (workspace-wide, reported once).
     match &cycle_err {
         Some(e) => {
-            warn(&format!("✗ workspace dep graph has cycle: {e}"));
+            tracing::warn!("✗ workspace dep graph has cycle: {e}");
             failed = true;
         }
         None => {
-            ok("✓ workspace dep graph is acyclic");
+            tracing::info!("✓ workspace dep graph is acyclic");
         }
     }
 
