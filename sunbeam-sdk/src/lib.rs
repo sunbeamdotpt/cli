@@ -47,6 +47,8 @@ pub mod port_forward;
 pub mod project;
 /// Local proxy and port-forward helpers.
 pub mod proxy;
+/// Unified tracing-based logging subsystem.
+pub mod logging;
 /// Infrastructure manifest registry and namespace discovery.
 pub mod registry;
 /// OpenBao secret reading and seeding.
