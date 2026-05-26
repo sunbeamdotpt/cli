@@ -59,7 +59,9 @@ pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
 /// when no workspace is found. Useful for commands that want to opportunistically
 /// pick up workspace context without requiring it.
 pub fn find_workspace_root_opt(start: &Path) -> Result<Option<PathBuf>> {
-    if let Some(dir) = env_workspace()? {
+    // Treat an invalid SUNBEAM_WORKSPACE as "no workspace" and fall back to
+    // ancestor traversal rather than surfacing an error.
+    if let Some(dir) = env_workspace().ok().flatten() {
         return Ok(Some(dir));
     }
     Ok(find_ancestor(start, WORKSPACE_FILE))
@@ -98,7 +100,12 @@ fn find_ancestor(start: &Path, filename: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    // Env-var tests mutate process-global state. Serialize them so concurrent
+    // test threads don't race on SUNBEAM_WORKSPACE.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn touch(path: &Path) {
         fs::write(path, "schema: 1\n").unwrap();
@@ -133,6 +140,7 @@ mod tests {
 
     #[test]
     fn finds_workspace_via_ancestor() {
+        let _lock = ENV_LOCK.lock().unwrap();
         // Isolate from any ambient SUNBEAM_WORKSPACE in the test env.
         let _guard = EnvGuard::unset(WORKSPACE_ENV);
         let tmp = TempDir::new().unwrap();
@@ -145,6 +153,7 @@ mod tests {
 
     #[test]
     fn workspace_env_override_wins() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         touch(&tmp.path().join(WORKSPACE_FILE));
         let _guard = EnvGuard::set(WORKSPACE_ENV, tmp.path().to_str().unwrap());
@@ -157,6 +166,7 @@ mod tests {
 
     #[test]
     fn workspace_env_without_file_errors() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let _guard = EnvGuard::set(WORKSPACE_ENV, tmp.path().to_str().unwrap());
         let err = find_workspace_root(tmp.path()).unwrap_err();
@@ -165,6 +175,7 @@ mod tests {
 
     #[test]
     fn workspace_opt_returns_none_when_missing() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::unset(WORKSPACE_ENV);
         let tmp = TempDir::new().unwrap();
         let nested = tmp.path().join("no_ws");
