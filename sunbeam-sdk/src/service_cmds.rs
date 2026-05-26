@@ -262,9 +262,12 @@ async fn run_workflow(
 }
 
 /// List available services from the infrastructure directory.
+#[tracing::instrument(skip(format))]
 async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
+    tracing::info!("Discovering services...");
     let infra_dir = crate::config::get_infra_dir();
     let services = crate::manifests::discover_services(&infra_dir)?;
+    tracing::info!(count = services.len(), "Found services");
 
     if services.is_empty() {
         crate::output::warn("No services found in the infrastructure directory.");
