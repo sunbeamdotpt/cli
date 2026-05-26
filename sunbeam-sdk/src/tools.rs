@@ -104,6 +104,7 @@ fn ensure_tool(tool: &str, version: &str) -> Result<PathBuf> {
         .get(&url)
         .send()
         .with_ctx(|| format!("Failed to download {tool} from {url}"))?;
+    tracing::debug!("downloaded {tool} {version} ({size} bytes)", size = response.content_length().unwrap_or(0));
     let bytes = response
         .bytes()
         .with_ctx(|| format!("Failed to read {tool} response"))?;
@@ -127,7 +128,7 @@ fn ensure_tool(tool: &str, version: &str) -> Result<PathBuf> {
                     .ctx("Failed to set permissions")?;
             }
 
-            tracing::info!("Installed {tool} ({} bytes)", data.len());
+            tracing::info!("Installed {tool} ({size} bytes)", size = data.len());
             return Ok(dest);
         }
     }

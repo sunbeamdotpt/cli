@@ -45,7 +45,9 @@ impl Interceptor for BearerAuth {
 
 /// Build a tonic channel for the given server URL, configuring TLS automatically
 /// when the URL scheme is `https`.
+#[tracing::instrument]
 pub async fn connect(server: &str) -> Result<Channel> {
+    tracing::debug!("wfectl client connecting to {server}");
     let mut endpoint = Endpoint::from_shared(server.to_string())
         .with_context(|| format!("invalid server URL: {server}"))?;
 
@@ -62,7 +64,9 @@ pub async fn connect(server: &str) -> Result<Channel> {
 }
 
 /// Build an authenticated wfe client.
+#[tracing::instrument]
 pub async fn build(server: &str, token: &str) -> Result<AuthClient> {
+    tracing::debug!("wfectl client connecting to {server}");
     let channel = connect(server).await?;
     let auth = BearerAuth::new(token)?;
     Ok(GeneratedWfeClient::with_interceptor(channel, auth))

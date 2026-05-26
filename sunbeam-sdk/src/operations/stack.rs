@@ -130,11 +130,13 @@ pub fn save(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Apply.
+#[tracing::instrument]
 pub async fn apply(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
     stack_name: &str,
 ) -> Result<()> {
+    tracing::info!("stack apply");
     let stack = ws.stacks.get(stack_name).with_ctx(|| {
         format!("stack {stack_name:?} not found in workspace")
     })?;

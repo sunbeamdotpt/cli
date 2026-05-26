@@ -623,6 +623,7 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
 }
 
 /// Discover manifests and build catalog from a kustomize overlay.
+#[tracing::instrument]
 pub async fn discover_from_overlay(
     overlay: &std::path::Path,
     domain: &str,

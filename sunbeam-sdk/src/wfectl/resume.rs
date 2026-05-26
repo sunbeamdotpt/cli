@@ -14,7 +14,9 @@ pub struct ResumeArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: ResumeArgs, mut client: AuthClient) -> Result<()> {
+    tracing::info!("wfectl resume workflow {id}", id = args.workflow_id);
     client
         .resume_workflow(ResumeWorkflowRequest {
             workflow_id: args.workflow_id.clone(),

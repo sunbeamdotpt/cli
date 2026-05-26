@@ -33,6 +33,7 @@ fn parse_kv(raw: &str) -> Result<(String, String), String> {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: ValidateArgs, format: OutputFormat) -> Result<()> {
     let yaml = std::fs::read_to_string(&args.file)
         .with_context(|| format!("failed to read {}", args.file.display()))?;

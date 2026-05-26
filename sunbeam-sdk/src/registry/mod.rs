@@ -297,6 +297,7 @@ impl ServiceRegistry {
 // ── Discovery ────────────────────────────────────────────────────────
 
 /// Discover all services from K8s resources with `sunbeam.pt/service` labels.
+#[tracing::instrument(skip(client))]
 pub async fn discover(client: &Client) -> crate::error::Result<ServiceRegistry> {
     let mut services: HashMap<String, ServiceDefinition> = HashMap::new();
 
@@ -347,6 +348,7 @@ where
         .list(&lp)
         .await
         .map_err(|e| crate::error::SunbeamError::kube(format!("discover {kind}: {e}")))?;
+    tracing::debug!("discover_resources {kind}: found {count} items", count = list.items.len());
 
     for resource in &list.items {
         let meta = resource.meta();
@@ -430,6 +432,7 @@ where
             })
             .unwrap_or_default();
 
+        tracing::debug!("discover_resources {kind}: added {service_name} in {ns}");
         services.insert(
             service_name.clone(),
             ServiceDefinition {

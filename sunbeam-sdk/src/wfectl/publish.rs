@@ -26,6 +26,7 @@ pub struct PublishArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: PublishArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
     let data_json = match (args.data_json.as_ref(), args.data.as_ref()) {
         (Some(json), _) => json.clone(),

@@ -133,12 +133,14 @@ pub fn materialize(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<PathBu
 }
 
 /// Run `docker compose up` for the given services (empty slice = all services).
+#[tracing::instrument]
 pub async fn up(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
     services: &[String],
     opts: &ComposeOptions,
 ) -> Result<()> {
+    tracing::info!("compose up");
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
@@ -171,11 +173,13 @@ pub async fn up(
 }
 
 /// Run `docker compose down` (all services).
+#[tracing::instrument]
 pub async fn down(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
     opts: &ComposeOptions,
 ) -> Result<()> {
+    tracing::info!("compose down");
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
@@ -202,11 +206,13 @@ pub async fn down(
 }
 
 /// Run `docker compose ps --format json` and parse the NDJSON output.
+#[tracing::instrument]
 pub async fn ps(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
     opts: &ComposeOptions,
 ) -> Result<Vec<ServiceStatus>> {
+    tracing::info!("compose ps");
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 
@@ -227,6 +233,7 @@ pub async fn ps(
 }
 
 /// Run `docker compose logs <service>`, streaming to stdout/stderr.
+#[tracing::instrument]
 pub async fn logs(
     ws: &WorkspaceConfig,
     workspace_root: &Path,
@@ -234,6 +241,7 @@ pub async fn logs(
     follow: bool,
     opts: &ComposeOptions,
 ) -> Result<()> {
+    tracing::info!("compose logs");
     let compose_path = materialize(ws, workspace_root)?;
     let project = project_name(ws, opts).to_string();
 

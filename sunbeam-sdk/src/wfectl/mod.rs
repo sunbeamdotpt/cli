@@ -84,11 +84,13 @@ fn resolve_token(domain: &str) -> anyhow::Result<String> {
 }
 
 /// Dispatch a workflows subcommand.
+#[tracing::instrument]
 pub async fn dispatch(
     cmd: WorkflowsCommand,
     format: OutputFormat,
     domain: &str,
 ) -> anyhow::Result<()> {
+    tracing::info!("wfectl dispatch: {cmd:?}");
     // Validate doesn't need a server connection.
     if let WorkflowsCommand::Validate(args) = cmd {
         return validate::run(args, format).await;
