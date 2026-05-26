@@ -15,7 +15,7 @@ use tokio::net::TcpListener;
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let private_key = match RsaPrivateKey::new(&mut rng, bits) {
         Ok(k) => k,
         Err(e) => {
-            warn(&format!("RSA key generation failed: {e}"));
+            tracing::warn!("RSA key generation failed: {e}");
             return (String::new(), String::new());
         }
     };
@@ -60,7 +60,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let private_pem = match private_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF) {
         Ok(p) => p.to_string(),
         Err(e) => {
-            warn(&format!("PKCS8 encoding failed: {e}"));
+            tracing::warn!("PKCS8 encoding failed: {e}");
             return (String::new(), String::new());
         }
     };
@@ -69,7 +69,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let public_pem = match public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF) {
         Ok(p) => p.to_string(),
         Err(e) => {
-            warn(&format!("Public key PEM encoding failed: {e}"));
+            tracing::warn!("Public key PEM encoding failed: {e}");
             return (private_pem, String::new());
         }
     };
@@ -261,7 +261,7 @@ pub(crate) async fn get_or_create(
 
 /// Enable OpenBao database secrets engine and create PostgreSQL static roles.
 pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
-    ok("Configuring OpenBao database secrets engine...");
+    tracing::info!("Configuring OpenBao database secrets engine...");
     let pg_rw = "postgres-rw.data.svc.cluster.local:5432";
 
     let _ = bao.enable_secrets_engine("database", "database").await;
@@ -284,10 +284,10 @@ pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
         let mut vault_data = HashMap::new();
         vault_data.insert("pg-password".to_string(), new_pass.clone());
         bao.kv_put("secret", "vault", &vault_data).await?;
-        ok("vault KV entry written.");
+        tracing::info!("vault KV entry written.");
         new_pass
     } else {
-        ok("vault KV entry already present -- skipping write.");
+        tracing::info!("vault KV entry already present -- skipping write.");
         existing_vault_pass
     };
 
@@ -313,7 +313,7 @@ pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
         )
         .await?;
     }
-    ok("vault PG user configured with ADMIN OPTION on all service roles.");
+    tracing::info!("vault PG user configured with ADMIN OPTION on all service roles.");
 
     let conn_url =
         format!("postgresql://{{{{username}}}}:{{{{password}}}}@{pg_rw}/postgres?sslmode=disable");
@@ -327,17 +327,17 @@ pub(crate) async fn configure_db_engine(bao: &BaoClient) -> Result<()> {
         "*",
     )
     .await?;
-    ok("DB engine connection configured (vault user).");
+    tracing::info!("DB engine connection configured (vault user).");
 
     let rotation_stmt = r#"ALTER USER "{{name}}" WITH PASSWORD '{{password}}';"#;
 
     for user in PG_USERS {
         bao.write_db_static_role(user, "cnpg-postgres", user, 86400, &[rotation_stmt])
             .await?;
-        ok(&format!("  static-role/{user}"));
+        tracing::info!("  static-role/{user}");
     }
 
-    ok("Database secrets engine configured.");
+    tracing::info!("Database secrets engine configured.");
     Ok(())
 }
 

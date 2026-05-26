@@ -11,7 +11,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+
 use crate::secrets;
 use crate::vault_keystore::{keystore_exists, load_keystore, save_keystore, VaultKeystore};
 use crate::workflows::StepContext;
@@ -52,11 +52,11 @@ impl StepBody for FindOpenBaoPod {
         let mut result = ExecutionResult::next();
         match ob_pod {
             Some(name) => {
-                ok(&format!("OpenBao ({name})..."));
+                tracing::info!("OpenBao ({name})...");
                 result.output_data = Some(serde_json::json!({ "ob_pod": name }));
             }
             None => {
-                ok("OpenBao pod not found -- skipping.");
+                tracing::info!("OpenBao pod not found -- skipping.");
                 result.output_data = Some(serde_json::json!({ "skip_seed": true }));
             }
         }
@@ -150,10 +150,10 @@ impl StepBody for InitOrUnsealOpenBao {
                 }
                 Err(e) => {
                     if attempt < 9 {
-                        ok(&format!(
+                        tracing::info!(
                             "Waiting for OpenBao to accept connections (attempt {})...",
                             attempt + 1
-                        ));
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     } else {
                         return Err(step_err(format!(
@@ -208,7 +208,7 @@ impl StepBody for InitOrUnsealOpenBao {
         };
 
         if already_initialized {
-            ok("Already initialized.");
+            tracing::info!("Already initialized.");
             if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await
                 && key != "placeholder"
             {
@@ -224,7 +224,7 @@ impl StepBody for InitOrUnsealOpenBao {
             if (root_token.is_empty() || unseal_key.is_empty()) && local_keystore.is_some() {
                 let ks = local_keystore.as_ref().unwrap();
                 if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
-                    ok("Cluster secret missing keys — restoring from local keystore...");
+                    tracing::info!("Cluster secret missing keys — restoring from local keystore...");
                     let mut secret_data = HashMap::new();
                     secret_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
                     secret_data.insert("root-token".to_string(), ks.root_token.clone());
@@ -233,17 +233,17 @@ impl StepBody for InitOrUnsealOpenBao {
                         .map_err(|e| step_err(e.to_string()))?;
                     unseal_key = ks.unseal_keys_b64[0].clone();
                     root_token = ks.root_token.clone();
-                    ok("Cluster secret restored from local keystore.");
+                    tracing::info!("Cluster secret restored from local keystore.");
                 }
             }
 
             // If vault is initialized but we lost the root token, reset storage
             // and wait for the pod to restart so we can re-initialize inline.
             if root_token.is_empty() {
-                ok("Vault is initialized but root token is missing -- resetting storage...");
+                tracing::info!("Vault is initialized but root token is missing -- resetting storage...");
                 let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
                 let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
-                ok("Waiting for OpenBao pod to restart...");
+                tracing::info!("Waiting for OpenBao pod to restart...");
 
                 // Poll for a new openbao pod to reach Running (up to 5 min).
                 let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
@@ -261,7 +261,7 @@ impl StepBody for InitOrUnsealOpenBao {
                                 {
                                     if phase == "Running" {
                                         new_pod = name.to_string();
-                                        ok(&format!("OpenBao restarted ({new_pod})."));
+                                        tracing::info!("OpenBao restarted ({new_pod}).");
                                         break;
                                     }
                                 }
@@ -300,7 +300,7 @@ impl StepBody for InitOrUnsealOpenBao {
                 for attempt in 0..30 {
                     if let Ok(s) = bao.seal_status().await {
                         if !s.initialized {
-                            ok("OpenBao is fresh (uninitialized).");
+                            tracing::info!("OpenBao is fresh (uninitialized).");
                             break;
                         }
                     }
@@ -316,7 +316,7 @@ impl StepBody for InitOrUnsealOpenBao {
         }
 
         if !already_initialized {
-            ok("Initializing OpenBao...");
+            tracing::info!("Initializing OpenBao...");
             let mut init_err = None;
             let mut init_result = None;
             for attempt in 0..5 {
@@ -328,11 +328,11 @@ impl StepBody for InitOrUnsealOpenBao {
                     Err(e) => {
                         init_err = Some(e);
                         if attempt < 4 {
-                            ok(&format!(
+                            tracing::info!(
                                 "OpenBao init attempt {} failed, retrying in {}s...",
                                 attempt + 1,
                                 3 + attempt * 2
-                            ));
+                            );
                             tokio::time::sleep(std::time::Duration::from_secs(
                                 3 + attempt as u64 * 2,
                             ))
@@ -351,7 +351,7 @@ impl StepBody for InitOrUnsealOpenBao {
                     k::create_secret("data", "openbao-keys", secret_data)
                         .await
                         .map_err(|e| step_err(e.to_string()))?;
-                    ok("Initialized -- keys stored in secret/openbao-keys.");
+                    tracing::info!("Initialized -- keys stored in secret/openbao-keys.");
 
                     // Save to local keystore
                     if !domain.is_empty() {
@@ -366,9 +366,9 @@ impl StepBody for InitOrUnsealOpenBao {
                             key_threshold: 1,
                         };
                         if let Err(e) = save_keystore(&ks) {
-                            warn(&format!("Failed to save vault keystore: {e}"));
+                            tracing::warn!("Failed to save vault keystore: {e}");
                         } else {
-                            ok("Keys saved to local keystore.");
+                            tracing::info!("Keys saved to local keystore.");
                         }
                     }
                 }
@@ -390,7 +390,7 @@ impl StepBody for InitOrUnsealOpenBao {
                 sealed: true,
             });
         if status.sealed && !unseal_key.is_empty() {
-            ok("Unsealing...");
+            tracing::info!("Unsealing...");
             bao.unseal(&unseal_key)
                 .await
                 .map_err(|e| step_err(format!("Failed to unseal OpenBao: {e}")))?;
@@ -409,15 +409,15 @@ impl StepBody for InitOrUnsealOpenBao {
                 key_threshold: 1,
             };
             if let Err(e) = save_keystore(&ks) {
-                warn(&format!("Failed to backfill vault keystore: {e}"));
+                tracing::warn!("Failed to backfill vault keystore: {e}");
             } else {
-                ok("Local keystore backfilled from cluster secret.");
+                tracing::info!("Local keystore backfilled from cluster secret.");
             }
         }
 
         // Enable & tune KV engine
         let bao = BaoClient::with_token(&bao_url, &root_token);
-        ok("Enabling KV engine...");
+        tracing::info!("Enabling KV engine...");
         let _ = bao.enable_secrets_engine("secret", "kv").await;
         let _ = bao
             .write(

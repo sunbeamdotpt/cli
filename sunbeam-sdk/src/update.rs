@@ -92,6 +92,7 @@ pub fn cmd_version() {
 }
 
 /// Self-update from the latest mainline commit via Gitea CI artifacts.
+#[tracing::instrument]
 pub async fn cmd_update() -> Result<()> {
     let base = forge_url();
     if base.is_empty() {
@@ -101,7 +102,7 @@ pub async fn cmd_update() -> Result<()> {
         );
     }
 
-    crate::output::step("Checking for updates...");
+    tracing::info!("Checking for updates...");
 
     let client = reqwest::Client::new();
 
@@ -109,18 +110,18 @@ pub async fn cmd_update() -> Result<()> {
     let latest_commit = fetch_latest_commit(&client, &base).await?;
     let short_latest = &latest_commit[..std::cmp::min(8, latest_commit.len())];
 
-    crate::output::ok(&format!("Current: {COMMIT}"));
-    crate::output::ok(&format!("Latest:  {short_latest}"));
+    tracing::info!("Current: {COMMIT}");
+    tracing::info!("Latest:  {short_latest}");
 
     if latest_commit.starts_with(COMMIT)
         || COMMIT.starts_with(&latest_commit[..std::cmp::min(COMMIT.len(), latest_commit.len())])
     {
-        crate::output::ok("Already up to date.");
+        tracing::info!("Already up to date.");
         return Ok(());
     }
 
     // 2. Find the CI artifact for our platform
-    crate::output::step("Downloading update...");
+    tracing::info!("Downloading update...");
     let wanted = artifact_name();
 
     let artifacts = fetch_artifacts(&client, &base).await?;
@@ -147,7 +148,7 @@ pub async fn cmd_update() -> Result<()> {
         .bytes()
         .await?;
 
-    crate::output::ok(&format!("Downloaded {} bytes", binary_bytes.len()));
+    tracing::info!("Downloaded {} bytes", binary_bytes.len());
 
     // 4. Verify SHA256 if checksums artifact exists
     if let Some(checksums) = checksums_artifact {
@@ -165,17 +166,17 @@ pub async fn cmd_update() -> Result<()> {
             .await?;
 
         verify_checksum(&binary_bytes, &wanted, &checksums_text)?;
-        crate::output::ok("SHA256 checksum verified.");
+        tracing::info!("SHA256 checksum verified.");
     } else {
-        crate::output::warn("No checksums artifact found; skipping verification.");
+        tracing::warn!("No checksums artifact found; skipping verification.");
     }
 
     // 5. Atomic self-replace
-    crate::output::step("Installing update...");
+    tracing::info!("Installing update...");
     let current_exe = std::env::current_exe().ctx("Failed to determine current executable path")?;
     atomic_replace(&current_exe, &binary_bytes)?;
 
-    crate::output::ok(&format!("Updated sunbeam {COMMIT} -> {short_latest}"));
+    tracing::info!("Updated sunbeam {COMMIT} -> {short_latest}");
 
     // Update the cache so background check knows we are current
     let _ = write_cache(&UpdateCache {
@@ -192,6 +193,7 @@ pub async fn cmd_update() -> Result<()> {
 ///
 /// This function never blocks for long and never returns errors — it silently
 /// returns None on any failure.
+#[tracing::instrument]
 pub async fn check_update_background() -> Option<String> {
     // Read cache
     let cache_path = update_cache_path();

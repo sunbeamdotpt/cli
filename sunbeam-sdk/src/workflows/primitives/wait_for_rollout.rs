@@ -5,7 +5,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::output::step;
+
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -35,12 +35,13 @@ impl StepBody for WaitForRollout {
             .get("deployment")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WaitForRollout: missing deployment in step_config"))?;
+        tracing::debug!("wait_for_rollout {namespace}/{deployment}");
         let timeout_secs = config
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(120);
 
-        step(&format!("Waiting for {namespace}/{deployment}..."));
+        tracing::info!("Waiting for {namespace}/{deployment}...");
 
         crate::cluster::wait_rollout(namespace, deployment, timeout_secs)
             .await

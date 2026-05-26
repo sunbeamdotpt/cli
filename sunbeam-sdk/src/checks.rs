@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::kube::{get_client, kube_exec, parse_target};
-use crate::output::{ok, step, warn};
+
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -547,8 +547,10 @@ fn check_registry() -> Vec<CheckEntry> {
 // ---------------------------------------------------------------------------
 
 /// Run service-level health checks, optionally scoped to a namespace or service.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_check(target: Option<&str>) -> Result<()> {
-    step("Service health checks...");
+    tracing::info!("Service health checks...");
+    tracing::debug!("check target={target:?}");
 
     let domain = crate::kube::get_domain().await?;
     let http_client = build_http_client()?;
@@ -565,10 +567,10 @@ pub async fn cmd_check(target: Option<&str>) -> Result<()> {
         .collect();
 
     if selected.is_empty() {
-        warn(&format!(
+        tracing::warn!(
             "No checks match target: {}",
             target.unwrap_or("(none)")
-        ));
+        );
         return Ok(());
     }
 
@@ -623,9 +625,9 @@ pub async fn cmd_check(target: Option<&str>) -> Result<()> {
     println!();
     let failed: Vec<&CheckResult> = results.iter().filter(|r| !r.passed).collect();
     if failed.is_empty() {
-        ok(&format!("All {} check(s) passed.", results.len()));
+        tracing::info!("All {} check(s) passed.", results.len());
     } else {
-        warn(&format!("{} check(s) failed.", failed.len()));
+        tracing::warn!("{} check(s) failed.", failed.len());
     }
 
     Ok(())

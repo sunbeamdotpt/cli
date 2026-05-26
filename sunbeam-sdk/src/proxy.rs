@@ -17,6 +17,7 @@ use crate::error::{Result, ResultExt, SunbeamError};
 /// The template file lives at
 /// `<infra_dir>/base/build/image-puller-job.template.yaml` and uses the
 /// literal string `IMAGE_REF` as the substitution target.
+#[tracing::instrument]
 pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()> {
     let infra_dir = crate::config::get_infra_dir();
     let template_path = infra_dir
@@ -34,13 +35,14 @@ pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()>
     // Delete any previous run of this Job so the apply is idempotent.
     delete_puller_job_if_exists().await;
 
-    crate::output::step(&format!("Applying image-puller Job for {image_ref}..."));
+    tracing::info!("Applying image-puller Job for {image_ref}...");
     crate::kube::kube_apply(&manifest).await?;
 
-    crate::output::ok("Job applied — waiting for completion...");
+    tracing::info!("Job applied — waiting for completion...");
     wait_for_job("build", "proxy-image-puller", timeout_secs).await?;
 
-    crate::output::ok(&format!("Node has pulled {image_ref}."));
+    tracing::info!("Node has pulled {image_ref}.");
+    tracing::debug!("preseed_image completed in {timeout_secs}s");
     Ok(())
 }
 

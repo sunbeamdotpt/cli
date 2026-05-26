@@ -29,7 +29,9 @@ pub const APP_NAMESPACES: &[&str] = &[
 ///
 /// * `infra` — also delete cert-manager and longhorn-system.
 /// * `keep_data` — preserve the data namespace (postgres, opensearch, openbao).
+#[tracing::instrument]
 pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
+    tracing::debug!("cmd_down infra={infra} keep_data={keep_data}");
     let mut to_delete: Vec<&str> = APP_NAMESPACES.to_vec();
 
     if infra {
@@ -54,14 +56,14 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     to_delete.retain(|ns| existing_names.contains(*ns));
 
     if to_delete.is_empty() {
-        crate::output::ok("No Sunbeam-managed namespaces found — nothing to delete.");
+        tracing::info!("No Sunbeam-managed namespaces found — nothing to delete.");
         return Ok(());
     }
 
-    crate::output::step(&format!(
+    tracing::info!(
         "The following namespaces will be deleted:\n  {}",
         to_delete.join("\n  ")
-    ));
+    );
 
     if !yes {
         eprint!("\nProceed? [y/N] ");
@@ -79,27 +81,27 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     let dp = kube::api::DeleteParams::background();
 
     for ns in &to_delete {
-        crate::output::step(&format!("Deleting namespace {ns}..."));
+        tracing::info!("Deleting namespace {ns}...");
         match ns_api.delete(*ns, &dp).await {
             Ok(_) => {
-                crate::output::ok(&format!("  {ns} deletion started."));
+                tracing::info!("  {ns} deletion started.");
             }
             Err(kube::Error::Api(ae)) if ae.code == 404 => {
-                crate::output::ok(&format!("  {ns} already gone."));
+                tracing::info!("  {ns} already gone.");
             }
             Err(e) => {
-                crate::output::warn(&format!("  Failed to delete {ns}: {e}"));
+                tracing::warn!("  Failed to delete {ns}: {e}");
             }
         }
     }
 
     // Wait for namespaces to actually terminate
-    crate::output::step("Waiting for namespaces to terminate...");
+    tracing::info!("Waiting for namespaces to terminate...");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     let mut remaining = Vec::new();
     loop {
         if std::time::Instant::now() > deadline {
-            crate::output::warn("Timed out waiting for namespace deletion.");
+            tracing::warn!("Timed out waiting for namespace deletion.");
             break;
         }
         remaining.clear();
@@ -109,7 +111,7 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
             }
         }
         if remaining.is_empty() {
-            crate::output::ok("All namespaces deleted.");
+            tracing::info!("All namespaces deleted.");
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -120,9 +122,9 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     // volumes, etc.) can get stuck in Terminating. Remove finalizers from
     // resources inside the namespace, then from the namespace itself.
     for ns in &remaining {
-        crate::output::step(&format!("Force-deleting stuck namespace {ns}..."));
+        tracing::info!("Force-deleting stuck namespace {ns}...");
         if let Err(e) = force_delete_namespace(client.clone(), ns).await {
-            crate::output::warn(&format!("  Force-delete failed for {ns}: {e}"));
+            tracing::warn!("  Force-delete failed for {ns}: {e}");
         }
     }
 
@@ -136,17 +138,17 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
             }
         }
         if still_stuck.is_empty() {
-            crate::output::ok("All namespaces deleted after force-delete.");
+            tracing::info!("All namespaces deleted after force-delete.");
             return Ok(());
         }
         remaining = still_stuck;
     }
 
     if !remaining.is_empty() {
-        crate::output::warn(&format!(
+        tracing::warn!(
             "Namespaces still stuck after force-delete: {}",
             remaining.join(", ")
-        ));
+        );
     }
 
     Ok(())
@@ -156,6 +158,7 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
 /// remove the namespace's own finalizers.
 /// Remove finalizers from all namespaced resources in `namespace`, then
 /// remove the namespace's own finalizers.
+#[tracing::instrument(skip(client))]
 pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Result<()> {
     use kube::api::{Api, DynamicObject, Patch, PatchParams, ResourceExt};
     use kube::discovery::Scope;
@@ -166,9 +169,9 @@ pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Re
     let disc = match kube::discovery::Discovery::new(client.clone()).run().await {
         Ok(d) => d,
         Err(e) => {
-            crate::output::warn(&format!(
+            tracing::warn!(
                 "  Discovery failed, falling back to namespace finalizer removal only: {e}"
-            ));
+            );
             return remove_namespace_finalizers(client, namespace).await;
         }
     };
@@ -199,18 +202,18 @@ pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Re
                             }
                         });
                         if let Err(e) = api.patch(&name, &pp, &Patch::Merge(&patch)).await {
-                            crate::output::warn(&format!(
+                            tracing::warn!(
                                 "    Could not patch finalizers on {}/{}: {}",
                                 ar.kind, name, e
-                            ));
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    crate::output::warn(&format!(
+                    tracing::warn!(
                         "    Could not list {} in {namespace}: {e}",
                         ar.kind
-                    ));
+                    );
                 }
             }
         }

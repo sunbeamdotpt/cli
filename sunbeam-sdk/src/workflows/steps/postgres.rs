@@ -12,7 +12,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::ok;
+
 use crate::secrets;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -72,11 +72,12 @@ pub struct WaitForPostgres;
 #[async_trait::async_trait]
 impl StepBody for WaitForPostgres {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("wait_for_postgres");
         if json_bool(&ctx.workflow.data, "skip_seed") {
             return Ok(ExecutionResult::next());
         }
 
-        ok("Waiting for postgres cluster...");
+        tracing::info!("Waiting for postgres cluster...");
         let mut pg_pod = String::new();
 
         let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
@@ -107,7 +108,7 @@ impl StepBody for WaitForPostgres {
                             .and_then(|p| p.metadata.name.as_deref())
                     {
                         pg_pod = name.to_string();
-                        ok(&format!("Postgres ready ({pg_pod})."));
+                        tracing::info!("Postgres ready ({pg_pod}).");
                         break;
                     }
                 }
@@ -138,6 +139,7 @@ pub struct ConfigureDatabaseEngine;
 #[async_trait::async_trait]
 impl StepBody for ConfigureDatabaseEngine {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("configure_db_engine");
         let data = &ctx.workflow.data;
 
         if json_bool(data, "skip_seed") {

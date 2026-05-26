@@ -6,7 +6,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::ok;
+
 use crate::workflows::steps::postgres::create_db_sql;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -63,7 +63,7 @@ impl StepBody for CreatePGDatabase {
         )
         .await;
 
-        ok(&format!("PG database: {dbname} (owner: {owner})"));
+        tracing::info!("PG database: {dbname} (owner: {owner})");
         Ok(ExecutionResult::next())
     }
 }

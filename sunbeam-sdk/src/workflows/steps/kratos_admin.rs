@@ -8,7 +8,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 use crate::error::SunbeamError;
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok};
+
 use crate::secrets::{self, ADMIN_USERNAME, KratosIdentity, KratosRecovery};
 use crate::workflows::data::SeedData;
 
@@ -70,9 +70,7 @@ impl StepBody for SeedKratosAdminIdentity {
             }
         };
         let admin_email = admin_email(&domain);
-        ok(&format!(
-            "Ensuring Kratos admin identity ({admin_email})..."
-        ));
+        tracing::info!("Ensuring Kratos admin identity ({admin_email})...");
 
         let pf_bao = secrets::port_forward("data", &ob_pod, 8200)
             .await
@@ -111,10 +109,10 @@ impl StepBody for SeedKratosAdminIdentity {
 
             let identities: Vec<KratosIdentity> = resp.json().await.unwrap_or_default();
             let identity_id = if let Some(existing) = identities.first() {
-                ok(&format!(
+                tracing::info!(
                     "  admin identity exists ({}...)",
                     &existing.id[..8.min(existing.id.len())]
-                ));
+                );
                 existing.id.clone()
             } else {
                 let resp = http
@@ -133,10 +131,10 @@ impl StepBody for SeedKratosAdminIdentity {
                     .json()
                     .await
                     .map_err(|e| SunbeamError::Other(e.to_string()))?;
-                ok(&format!(
+                tracing::info!(
                     "  created admin identity ({}...)",
                     &identity.id[..8.min(identity.id.len())]
-                ));
+                );
                 identity.id
             };
 
@@ -159,7 +157,7 @@ impl StepBody for SeedKratosAdminIdentity {
             let mut patch_data = HashMap::new();
             patch_data.insert("admin-identity-ids".to_string(), admin_email.clone());
             let _ = bao.kv_patch("secret", "kratos-admin", &patch_data).await;
-            ok(&format!("  ADMIN_IDENTITY_IDS set to {admin_email}"));
+            tracing::info!("  ADMIN_IDENTITY_IDS set to {admin_email}");
 
             Ok((recovery.recovery_link, recovery.recovery_code, identity_id))
         }
@@ -198,20 +196,20 @@ impl StepBody for PrintSeedOutputs {
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
         if data.skip_seed {
-            ok("Seed skipped (OpenBao not available).");
+            tracing::info!("Seed skipped (OpenBao not available).");
             return Ok(ExecutionResult::next());
         }
 
         if let Some(ref link) = data.recovery_link
             && !link.is_empty()
         {
-            ok("Admin recovery link (valid 24h):");
+            tracing::info!("Admin recovery link (valid 24h):");
             println!("  {link}");
         }
         if let Some(ref code) = data.recovery_code
             && !code.is_empty()
         {
-            ok("Admin recovery code (enter on the page above):");
+            tracing::info!("Admin recovery code (enter on the page above):");
             println!("  {code}");
         }
 
@@ -224,12 +222,12 @@ impl StepBody for PrintSeedOutputs {
             let b64_key = strip_pem_headers(&dkim_pub);
 
             if let Ok(domain) = k::get_domain().await {
-                ok("DKIM DNS record (add to DNS at your registrar):");
+                tracing::info!("DKIM DNS record (add to DNS at your registrar):");
                 println!("  {}", format_dkim_record(&domain, &b64_key));
             }
         }
 
-        ok("All secrets seeded.");
+        tracing::info!("All secrets seeded.");
         Ok(ExecutionResult::next())
     }
 }

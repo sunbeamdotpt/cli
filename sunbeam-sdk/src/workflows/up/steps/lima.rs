@@ -3,7 +3,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::output::{ok, step, warn};
+
 use crate::workflows::data::UpData;
 
 #[cfg(unix)]
@@ -48,11 +48,11 @@ impl StepBody for EnsureLimaVm {
         };
 
         if !data.use_lima {
-            ok("--use-lima not set — skipping Lima VM management.");
+            tracing::info!("--use-lima not set — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        step("Ensuring Lima VM 'sunbeam'...");
+        tracing::info!("Ensuring Lima VM 'sunbeam'...");
 
         // Verify limactl is available
         let limactl_check = tokio::process::Command::new("limactl")
@@ -69,14 +69,14 @@ impl StepBody for EnsureLimaVm {
 
         match status.as_deref() {
             None | Some("") | Some("None") => {
-                step("Creating Lima VM 'sunbeam'...");
+                tracing::info!("Creating Lima VM 'sunbeam'...");
                 create_lima_vm().await.map_err(step_err)?;
             }
             Some("Running") => {
-                ok("Lima VM 'sunbeam' is already running.");
+                tracing::info!("Lima VM 'sunbeam' is already running.");
             }
             Some(st) => {
-                step(&format!("Lima VM 'sunbeam' is {st} — starting..."));
+                tracing::info!("Lima VM 'sunbeam' is {st} — starting...");
                 start_lima_vm().await.map_err(step_err)?;
             }
         }
@@ -90,7 +90,7 @@ impl StepBody for EnsureLimaVm {
             match lima_vm_status().await.as_deref() {
                 Some("Running") => break,
                 Some(st) => {
-                    step(&format!("Waiting for Lima VM (status: {st})..."));
+                    tracing::info!("Waiting for Lima VM (status: {st})...");
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 None => {
@@ -98,7 +98,7 @@ impl StepBody for EnsureLimaVm {
                 }
             }
         }
-        ok("Lima VM 'sunbeam' is running.");
+        tracing::info!("Lima VM 'sunbeam' is running.");
 
         // Paths for kubeconfig merging (used below).
         let lima_kc = dirs::home_dir()
@@ -110,7 +110,7 @@ impl StepBody for EnsureLimaVm {
 
         // Wait for k3s kubeconfig to be copied out by Lima, then verify the
         // cluster API is reachable using the Rust k8s client (no shelling out).
-        step("Waiting for k3s to be ready...");
+        tracing::info!("Waiting for k3s to be ready...");
         let k3s_deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut k3s_ready = false;
         loop {
@@ -132,35 +132,35 @@ impl StepBody for EnsureLimaVm {
                         // kubeconfig exists but API not yet responding
                     }
                     Err(e) => {
-                        step(&format!("k3s probe error: {e}"));
+                        tracing::info!("k3s probe error: {e}");
                     }
                 }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
-        ok("k3s API is reachable.");
+        tracing::info!("k3s API is reachable.");
 
         if lima_kc.exists() {
-            step("Updating host kubeconfig from Lima VM...");
+            tracing::info!("Updating host kubeconfig from Lima VM...");
             match merge_kubeconfigs(&lima_kc, &host_kc).await {
                 Ok(merged_yaml) => {
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     if let Err(e) = std::fs::write(&host_kc, merged_yaml) {
-                        warn(&format!("Failed to write host kubeconfig: {e}"));
+                        tracing::warn!("Failed to write host kubeconfig: {e}");
                     } else {
                         #[cfg(unix)]
                         let _ = std::fs::set_permissions(
                             &host_kc,
                             std::fs::Permissions::from_mode(0o600),
                         );
-                        ok("Host kubeconfig updated.");
+                        tracing::info!("Host kubeconfig updated.");
                     }
                 }
                 Err(e) => {
-                    warn(&format!("Kubeconfig merge failed: {e}. Using Lima kubeconfig directly."));
+                    tracing::warn!("Kubeconfig merge failed: {e}. Using Lima kubeconfig directly.");
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }

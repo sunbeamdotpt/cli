@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::io::Write;
 
 use crate::error::{Result, ResultExt, SunbeamError};
-use crate::output::{ok, step, table, warn};
+use crate::output::table;
 
 // ---------------------------------------------------------------------------
 // Port-forward helper
@@ -291,8 +291,9 @@ fn identity_id(identity: &Value) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Cmd user list.
+#[tracing::instrument(skip(search))]
 pub async fn cmd_user_list(search: &str) -> Result<()> {
-    step("Listing identities...");
+    tracing::info!("Listing identities...");
 
     let pf = PortForward::kratos().await?;
     let mut path = "/identities?page_size=20".to_string();
@@ -335,8 +336,9 @@ pub async fn cmd_user_list(search: &str) -> Result<()> {
 }
 
 /// Cmd user get.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_get(target: &str) -> Result<()> {
-    step(&format!("Getting identity: {target}"));
+    tracing::info!("Getting identity: {target}");
 
     let pf = PortForward::kratos().await?;
     let identity = find_identity(&pf.base_url, target, true)
@@ -349,8 +351,9 @@ pub async fn cmd_user_get(target: &str) -> Result<()> {
 }
 
 /// Cmd user create.
+#[tracing::instrument]
 pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result<()> {
-    step(&format!("Creating identity: {email}"));
+    tracing::info!("Creating identity: {email}");
 
     let mut traits = serde_json::json!({ "email": email });
     if !name.is_empty() {
@@ -373,28 +376,29 @@ pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result
         .ok_or_else(|| SunbeamError::identity("Failed to create identity"))?;
 
     let iid = identity_id(&identity)?;
-    ok(&format!("Created identity: {iid}"));
+    tracing::info!("Created identity: {iid}");
 
     let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
     drop(pf);
 
-    ok("Recovery link (valid 24h):");
+    tracing::info!("Recovery link (valid 24h):");
     println!("{link}");
-    ok("Recovery code (enter on the page above):");
+    tracing::info!("Recovery code (enter on the page above):");
     println!("{code}");
     Ok(())
 }
 
 /// Cmd user delete.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_delete(target: &str) -> Result<()> {
-    step(&format!("Deleting identity: {target}"));
+    tracing::info!("Deleting identity: {target}");
 
     eprint!("Delete identity '{target}'? This cannot be undone. [y/N] ");
     std::io::stderr().flush()?;
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     if answer.trim().to_lowercase() != "y" {
-        ok("Cancelled.");
+        tracing::info!("Cancelled.");
         return Ok(());
     }
 
@@ -413,13 +417,14 @@ pub async fn cmd_user_delete(target: &str) -> Result<()> {
     .await?;
     drop(pf);
 
-    ok("Deleted.");
+    tracing::info!("Deleted.");
     Ok(())
 }
 
 /// Cmd user recover.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_recover(target: &str) -> Result<()> {
-    step(&format!("Generating recovery link for: {target}"));
+    tracing::info!("Generating recovery link for: {target}");
 
     let pf = PortForward::kratos().await?;
     let identity = find_identity(&pf.base_url, target, true)
@@ -429,16 +434,17 @@ pub async fn cmd_user_recover(target: &str) -> Result<()> {
     let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
     drop(pf);
 
-    ok("Recovery link (valid 24h):");
+    tracing::info!("Recovery link (valid 24h):");
     println!("{link}");
-    ok("Recovery code (enter on the page above):");
+    tracing::info!("Recovery code (enter on the page above):");
     println!("{code}");
     Ok(())
 }
 
 /// Cmd user disable.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_disable(target: &str) -> Result<()> {
-    step(&format!("Disabling identity: {target}"));
+    tracing::info!("Disabling identity: {target}");
 
     let pf = PortForward::kratos().await?;
     let identity = find_identity(&pf.base_url, target, true)
@@ -465,17 +471,18 @@ pub async fn cmd_user_disable(target: &str) -> Result<()> {
     .await?;
     drop(pf);
 
-    ok(&format!(
+    tracing::info!(
         "Identity {}... disabled and all Kratos sessions revoked.",
         &iid[..8.min(iid.len())]
-    ));
-    warn("App sessions (docs/people) expire within SESSION_COOKIE_AGE -- currently 1h.");
+    );
+    tracing::warn!("App sessions (docs/people) expire within SESSION_COOKIE_AGE -- currently 1h.");
     Ok(())
 }
 
 /// Cmd user enable.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_enable(target: &str) -> Result<()> {
-    step(&format!("Enabling identity: {target}"));
+    tracing::info!("Enabling identity: {target}");
 
     let pf = PortForward::kratos().await?;
     let identity = find_identity(&pf.base_url, target, true)
@@ -494,13 +501,14 @@ pub async fn cmd_user_enable(target: &str) -> Result<()> {
     .await?;
     drop(pf);
 
-    ok(&format!("Identity {}... re-enabled.", short_id(&iid)));
+    tracing::info!("Identity {}... re-enabled.", short_id(&iid));
     Ok(())
 }
 
 /// Cmd user set password.
+#[tracing::instrument(skip(target, password))]
 pub async fn cmd_user_set_password(target: &str, password: &str) -> Result<()> {
-    step(&format!("Setting password for: {target}"));
+    tracing::info!("Setting password for: {target}");
 
     let pf = PortForward::kratos().await?;
     let identity = find_identity(&pf.base_url, target, true)
@@ -528,7 +536,7 @@ pub async fn cmd_user_set_password(target: &str, password: &str) -> Result<()> {
     .await?;
     drop(pf);
 
-    ok(&format!("Password set for {}...", short_id(&iid)));
+    tracing::info!("Password set for {}...", short_id(&iid));
     Ok(())
 }
 
@@ -627,12 +635,13 @@ Messages (Matrix):
     .await
     .map_err(|e| SunbeamError::Other(format!("Email send task panicked: {e}")))??;
 
-    ok(&format!("Welcome email sent to {email}"));
+    tracing::info!("Welcome email sent to {email}");
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 /// Cmd user onboard.
+#[tracing::instrument]
 pub async fn cmd_user_onboard(
     email: &str,
     name: &str,
@@ -645,7 +654,7 @@ pub async fn cmd_user_onboard(
     hire_date: &str,
     manager: &str,
 ) -> Result<()> {
-    step(&format!("Onboarding: {email}"));
+    tracing::info!("Onboarding: {email}");
 
     let pf = PortForward::kratos().await?;
 
@@ -654,8 +663,8 @@ pub async fn cmd_user_onboard(
 
         if let Some(existing) = existing {
             let iid = identity_id(&existing)?;
-            warn(&format!("Identity already exists: {}...", short_id(&iid)));
-            step("Generating fresh recovery link...");
+            tracing::warn!("Identity already exists: {}...", short_id(&iid));
+            tracing::info!("Generating fresh recovery link...");
             let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
             (iid, link, code, false)
         } else {
@@ -704,9 +713,9 @@ pub async fn cmd_user_onboard(
                 .ok_or_else(|| SunbeamError::identity("Failed to create identity"))?;
 
             let iid = identity_id(&identity)?;
-            ok(&format!("Created identity: {iid}"));
+            tracing::info!("Created identity: {iid}");
             if !employee_id.is_empty() {
-                ok(&format!("Employee #{employee_id}"));
+                tracing::info!("Employee #{employee_id}");
             }
 
             // Kratos ignores verifiable_addresses on POST -- PATCH to mark verified
@@ -745,10 +754,10 @@ pub async fn cmd_user_onboard(
         .await?;
     }
 
-    ok(&format!("Identity ID: {iid}"));
-    ok("Recovery link (valid 24h):");
+    tracing::info!("Identity ID: {iid}");
+    tracing::info!("Recovery link (valid 24h):");
     println!("{recovery_link}");
-    ok("Recovery code:");
+    tracing::info!("Recovery code:");
     println!("{recovery_code}");
     Ok(())
 }
@@ -758,15 +767,16 @@ pub async fn cmd_user_onboard(
 // ---------------------------------------------------------------------------
 
 /// Cmd user offboard.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_user_offboard(target: &str) -> Result<()> {
-    step(&format!("Offboarding: {target}"));
+    tracing::info!("Offboarding: {target}");
 
     eprint!("Offboard '{target}'? This will disable the account and revoke all sessions. [y/N] ");
     std::io::stderr().flush()?;
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     if answer.trim().to_lowercase() != "y" {
-        ok("Cancelled.");
+        tracing::info!("Cancelled.");
         return Ok(());
     }
 
@@ -776,7 +786,7 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
         .ok_or_else(|| SunbeamError::identity("Identity not found"))?;
     let iid = identity_id(&identity)?;
 
-    step("Disabling identity...");
+    tracing::info!("Disabling identity...");
     let put_body = identity_put_body(&identity, Some("inactive"), None);
     kratos_api(
         &pf.base_url,
@@ -786,9 +796,9 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
         &[],
     )
     .await?;
-    ok(&format!("Identity {}... disabled.", short_id(&iid)));
+    tracing::info!("Identity {}... disabled.", short_id(&iid));
 
-    step("Revoking Kratos sessions...");
+    tracing::info!("Revoking Kratos sessions...");
     kratos_api(
         &pf.base_url,
         &format!("/identities/{iid}/sessions"),
@@ -797,9 +807,9 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
         &[404],
     )
     .await?;
-    ok("Kratos sessions revoked.");
+    tracing::info!("Kratos sessions revoked.");
 
-    step("Revoking Hydra consent sessions...");
+    tracing::info!("Revoking Hydra consent sessions...");
     {
         let hydra_pf = PortForward::hydra_admin().await?;
         api(
@@ -812,13 +822,13 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
         )
         .await?;
     }
-    ok("Hydra consent sessions revoked.");
+    tracing::info!("Hydra consent sessions revoked.");
 
     drop(pf);
 
-    ok(&format!("Offboarding complete for {}...", short_id(&iid)));
-    warn("Existing access tokens expire within ~1h (Hydra TTL).");
-    warn("App sessions (docs/people) expire within SESSION_COOKIE_AGE (~1h).");
+    tracing::info!("Offboarding complete for {}...", short_id(&iid));
+    tracing::warn!("Existing access tokens expire within ~1h (Hydra TTL).");
+    tracing::warn!("App sessions (docs/people) expire within SESSION_COOKIE_AGE (~1h).");
     Ok(())
 }
 

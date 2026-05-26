@@ -5,7 +5,7 @@
 
 use crate::cli::{SecretsAction, ServiceAction, TransitAction};
 use crate::error::{Result, SunbeamError};
-use crate::output::{ok, step, warn};
+use tracing::Instrument;
 use crate::registry::{self, ServiceRegistry};
 
 /// Discover the service registry from the cluster.
@@ -29,7 +29,9 @@ async fn resolve_service(name: &str) -> Result<(String, String)> {
 }
 
 /// Top-level dispatcher for `sunbeam service <action>`.
+#[tracing::instrument]
 pub async fn dispatch(action: ServiceAction) -> Result<()> {
+    tracing::debug!("service dispatch: action={action:?}");
     match action {
         ServiceAction::Status { target } => crate::services::cmd_status(target.as_deref()).await,
         ServiceAction::Logs { target, follow } => crate::services::cmd_logs(&target, follow).await,
@@ -37,7 +39,10 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
         ServiceAction::Restart { target } => crate::services::cmd_restart(target.as_deref()).await,
         ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
         ServiceAction::Deploy { target, all } => match target {
-            Some(t) if !all => cmd_deploy(&t).await,
+            Some(t) if !all => {
+                let span = tracing::info_span!("deploy", target = %t);
+                cmd_deploy(&t).instrument(span).await
+            }
             _ => {
                 let opts = crate::manifests::ApplyOptions::default();
                 crate::manifests::apply_manifests(&opts).await?;
@@ -58,7 +63,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
             let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
             if !dry_run && ns.is_empty() && !apply_all {
-                crate::output::warn("This will apply ALL namespaces.");
+                tracing::warn!("This will apply ALL namespaces.");
                 eprint!("  Continue? [y/N] ");
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
@@ -81,11 +86,11 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
             Ok(())
         }
         ServiceAction::Seed => {
-            crate::output::warn("`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
+            tracing::warn!("`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
             Ok(())
         }
         ServiceAction::Verify => {
-            crate::output::step("Verifying VSO -> OpenBao integration...");
+            tracing::info!("Verifying VSO -> OpenBao integration...");
             run_workflow("verify", 1, 300, |i| {
                 crate::workflows::verify::print_summary(i)
             })
@@ -126,7 +131,7 @@ async fn cmd_delete_job(target: &str) -> Result<()> {
     let jobs: Api<Job> = Api::namespaced(client, ns);
     match jobs.delete(name, &DeleteParams::default()).await {
         Ok(_) => {
-            crate::output::ok(&format!("deleted job {ns}/{name}"));
+            tracing::info!("deleted job {ns}/{name}");
             Ok(())
         }
         Err(kube::Error::Api(e)) if e.code == 404 => {
@@ -157,9 +162,9 @@ async fn cmd_transit(action: TransitAction) -> Result<()> {
     match action {
         TransitAction::Enable { mount } => {
             let path = mount.trim_matches('/');
-            step(&format!("Enabling transit engine at {path}..."));
+            tracing::info!("Enabling transit engine at {path}...");
             bao.enable_secrets_engine(path, "transit").await?;
-            ok(&format!("Transit engine ready at {path}/"));
+            tracing::info!("Transit engine ready at {path}/");
         }
         TransitAction::CreateKey {
             mount,
@@ -170,24 +175,22 @@ async fn cmd_transit(action: TransitAction) -> Result<()> {
             let key_path = format!("{mount}/keys/{name}");
 
             if let Some(existing) = bao.read(&key_path).await? {
-                ok(&format!("Key {key_path} already exists."));
+                tracing::info!("Key {key_path} already exists.");
                 if let Some(t) = existing
                     .get("data")
                     .and_then(|d| d.get("type"))
                     .and_then(|v| v.as_str())
                     && t != key_type
                 {
-                    warn(&format!(
-                        "Existing key type is {t}, requested {key_type} — leaving as-is."
-                    ));
+                    tracing::warn!("Existing key type is {t}, requested {key_type} — leaving as-is.");
                 }
                 return Ok(());
             }
 
-            step(&format!("Creating {key_type} key at {key_path}..."));
+            tracing::info!("Creating {key_type} key at {key_path}...");
             bao.write(&key_path, &serde_json::json!({ "type": key_type }))
                 .await?;
-            ok(&format!("Key {key_path} created."));
+            tracing::info!("Key {key_path} created.");
         }
         TransitAction::ReadKey { mount, name } => {
             let mount = mount.trim_matches('/');
@@ -197,7 +200,7 @@ async fn cmd_transit(action: TransitAction) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&value)?);
                 }
                 None => {
-                    warn(&format!("Key {key_path} not found."));
+                    tracing::warn!("Key {key_path} not found.");
                 }
             }
         }
@@ -227,9 +230,7 @@ async fn run_workflow(
     // Register the workflow definition
     match name {
         "seed" => {
-            crate::output::warn(
-                "The seed workflow has been merged into `up`. Use `sunbeam up` instead.",
-            );
+            tracing::warn!("The seed workflow has been merged into `up`. Use `sunbeam up` instead.");
         }
         "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
@@ -270,7 +271,7 @@ async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
     tracing::info!(count = services.len(), "Found services");
 
     if services.is_empty() {
-        crate::output::warn("No services found in the infrastructure directory.");
+        tracing::warn!("No services found in the infrastructure directory.");
         return Ok(());
     }
 
@@ -302,7 +303,7 @@ async fn cmd_deploy(target: &str) -> Result<()> {
     namespaces.dedup();
 
     for ns in &namespaces {
-        step(&format!("Applying manifests for {ns}..."));
+        tracing::info!("Applying manifests for {ns}...");
         let opts = crate::manifests::ApplyOptions {
             namespace: ns.to_string(),
             ..Default::default()
@@ -312,12 +313,12 @@ async fn cmd_deploy(target: &str) -> Result<()> {
 
     for svc in &resolved {
         for deploy in &svc.deployments {
-            step(&format!("Restarting {}/{}...", svc.namespace, deploy));
+            tracing::info!("Restarting {}/{}...", svc.namespace, deploy);
             crate::kube::kube_rollout_restart(&svc.namespace, deploy).await?;
         }
     }
 
-    ok("Deploy complete.");
+    tracing::info!("Deploy complete.");
     Ok(())
 }
 
@@ -349,7 +350,7 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
     match action {
         None => match bao.kv_get("secret", kv_path).await? {
             Some(data) => {
-                step(&format!("Secrets for {service} (secret/{kv_path}):"));
+                tracing::info!("Secrets for {service} (secret/{kv_path}):");
                 let mut keys: Vec<&String> = data.keys().collect();
                 keys.sort();
                 for key in keys {
@@ -363,13 +364,13 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
                 }
             }
             None => {
-                warn(&format!("No secrets found at secret/{kv_path}"));
+                tracing::warn!("No secrets found at secret/{kv_path}");
             }
         },
         Some(SecretsAction::Get { key }) => {
             let value = bao.kv_get_field("secret", kv_path, &key).await?;
             if value.is_empty() {
-                warn(&format!("Field '{key}' not found in secret/{kv_path}"));
+                tracing::warn!("Field '{key}' not found in secret/{kv_path}");
             } else {
                 println!("{value}");
             }
@@ -416,12 +417,12 @@ async fn cmd_shell(service: &str) -> Result<()> {
         bail!("Service '{service}' has an empty shell-command annotation");
     }
 
-    step(&format!("Connecting to {service} ({pod})..."));
+    tracing::info!("Connecting to {service} ({pod})...");
     let client = crate::kube::get_client().await?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &svc.namespace);
     let code = crate::exec::pod_exec_interactive(&pods, &pod, None, &argv).await?;
     if code != 0 {
-        warn(&format!("shell exited with code {code}"));
+        tracing::warn!("shell exited with code {code}");
     }
     Ok(())
 }
@@ -455,7 +456,7 @@ async fn cmd_exec(service: &str, container: Option<&str>, command: &[String]) ->
     let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
     let code = crate::exec::pod_exec_interactive(&pods, &pod, container, &argv).await?;
     if code != 0 {
-        warn(&format!("exec exited with code {code}"));
+        tracing::warn!("exec exited with code {code}");
     }
     Ok(())
 }
@@ -486,7 +487,7 @@ async fn cmd_port_forward(service: &str, ports: &[String]) -> Result<()> {
         mappings.push((local, remote));
     }
 
-    step(&format!("Port-forwarding to {service} ({pod})..."));
+    tracing::info!("Port-forwarding to {service} ({pod})...");
     crate::port_forward::serve_port_forward(ns, pod, mappings).await
 }
 
@@ -496,7 +497,7 @@ async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
     use kube::api::{Api, Patch, PatchParams};
 
     let (ns, deploy) = resolve_service(service).await?;
-    step(&format!("Scaling {service} to {replicas} replica(s)..."));
+    tracing::info!("Scaling {service} to {replicas} replica(s)...");
 
     let client = crate::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
@@ -505,7 +506,7 @@ async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
         .await
         .map_err(|e| SunbeamError::Other(format!("scale patch failed: {e}")))?;
 
-    ok(&format!("{service} scaled to {replicas}."));
+    tracing::info!("{service} scaled to {replicas}.");
     Ok(())
 }
 
@@ -658,7 +659,7 @@ async fn cmd_edit(service: &str) -> Result<()> {
     let after = std::fs::read_to_string(tmp.path())
         .map_err(|e| SunbeamError::Other(format!("read tempfile failed: {e}")))?;
     if after == before {
-        ok("No changes.");
+        tracing::info!("No changes.");
         return Ok(());
     }
 
@@ -669,6 +670,6 @@ async fn cmd_edit(service: &str) -> Result<()> {
         .await
         .map_err(|e| SunbeamError::Other(format!("failed to replace deployment: {e}")))?;
 
-    ok(&format!("{service} updated."));
+    tracing::info!("{service} updated.");
     Ok(())
 }

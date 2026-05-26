@@ -469,7 +469,7 @@ impl PlankaClient {
             match self.list_cards(board_id).await {
                 Ok(tickets) => all_tickets.extend(tickets),
                 Err(e) => {
-                    crate::output::warn(&format!("Planka board {board_id}: {e}"));
+                    tracing::warn!("Planka board {board_id}: {e}");
                 }
             }
         }
@@ -1122,7 +1122,7 @@ impl GiteaClient {
 /// Format a list of tickets as a table.
 fn display_ticket_list(tickets: &[Ticket]) {
     if tickets.is_empty() {
-        output::ok("No tickets found.");
+        tracing::info!("No tickets found.");
         return;
     }
 
@@ -1175,6 +1175,7 @@ fn display_ticket_detail(t: &Ticket) {
 ///
 /// When `source` is `None`, both Planka and Gitea are queried in parallel.
 #[allow(dead_code)]
+#[tracing::instrument(skip(source, state))]
 pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1210,12 +1211,12 @@ pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
 
     match planka_result {
         Ok(mut t) => tickets.append(&mut t),
-        Err(e) => output::warn(&format!("Planka: {e}")),
+        Err(e) => tracing::warn!("Planka: {e}"),
     }
 
     match gitea_result {
         Ok(mut t) => tickets.append(&mut t),
-        Err(e) => output::warn(&format!("Gitea: {e}")),
+        Err(e) => tracing::warn!("Gitea: {e}"),
     }
 
     // Filter by state if looking at Planka results too.
@@ -1231,6 +1232,7 @@ pub async fn cmd_pm_list(source: Option<&str>, state: &str) -> Result<()> {
 
 /// Show details for a single ticket by ID.
 #[allow(dead_code)]
+#[tracing::instrument(skip(id))]
 pub async fn cmd_pm_show(id: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1261,6 +1263,7 @@ pub async fn cmd_pm_show(id: &str) -> Result<()> {
 /// `target` is source-specific: for Planka it is `"board_id/list_id"`,
 /// for Gitea it is `"org/repo"`.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1349,13 +1352,14 @@ pub async fn cmd_pm_create(title: &str, body: &str, source: &str, target: &str) 
         }
     };
 
-    output::ok(&format!("Created: {} ({})", ticket.title, ticket.id));
+    tracing::info!("Created: {} ({})", ticket.title, ticket.id);
     println!("  {}", ticket.url);
     Ok(())
 }
 
 /// Add a comment to a ticket.
 #[allow(dead_code)]
+#[tracing::instrument(skip(id, text))]
 pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1376,12 +1380,13 @@ pub async fn cmd_pm_comment(id: &str, text: &str) -> Result<()> {
         }
     }
 
-    output::ok(&format!("Comment added to {id}."));
+    tracing::info!("Comment added to {id}.");
     Ok(())
 }
 
 /// Close a ticket.
 #[allow(dead_code)]
+#[tracing::instrument(skip(id))]
 pub async fn cmd_pm_close(id: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1453,20 +1458,20 @@ pub async fn cmd_pm_close(id: &str) -> Result<()> {
                                     },
                                 )
                                 .await?;
-                            output::ok(&format!("Moved p:{card_id} to Done."));
+                            tracing::info!("Moved p:{card_id} to Done.");
                             return Ok(());
                         }
                     }
                 }
             }
-            output::warn(&format!(
+            tracing::warn!(
                 "Could not find a Done list for p:{card_id}. Move it manually."
-            ));
+            );
         }
         TicketRef::Gitea { org, repo, number } => {
             let client = GiteaClient::new(domain).await?;
             client.close_issue(&org, &repo, number).await?;
-            output::ok(&format!("Closed gitea:{org}/{repo}#{number}."));
+            tracing::info!("Closed gitea:{org}/{repo}#{number}.");
         }
     }
 
@@ -1475,6 +1480,7 @@ pub async fn cmd_pm_close(id: &str) -> Result<()> {
 
 /// Assign a user to a ticket.
 #[allow(dead_code)]
+#[tracing::instrument(skip(id, user))]
 pub async fn cmd_pm_assign(id: &str, user: &str) -> Result<()> {
     let domain = crate::config::domain();
     if domain.is_empty() {
@@ -1495,7 +1501,7 @@ pub async fn cmd_pm_assign(id: &str, user: &str) -> Result<()> {
         }
     }
 
-    output::ok(&format!("Assigned {user} to {id}."));
+    tracing::info!("Assigned {user} to {id}.");
     Ok(())
 }
 

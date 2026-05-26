@@ -9,7 +9,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::openbao::BaoClient;
-use crate::output::ok;
+
 use crate::secrets::{
     self, SMTP_URI, gen_dkim_key_pair, gen_fernet_key, rand_string_32, rand_token, rand_token_n,
     scw_config,
@@ -98,6 +98,7 @@ impl StepBody for SeedKVPath {
             .get("service")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("SeedKVPath: missing service"))?;
+        tracing::debug!("seed_kv_path {service}");
         let fields = config
             .get("fields")
             .and_then(|v| v.as_array())
@@ -183,10 +184,10 @@ impl StepBody for SeedKVPath {
         let is_dirty = dirty_paths.contains(service);
         let kv_json = serde_json::to_string(&result_map).map_err(|e| step_err(e.to_string()))?;
 
-        ok(&format!(
+        tracing::info!(
             "KV seed: {service}{}",
             if is_dirty { " (new)" } else { "" }
-        ));
+        );
 
         let mut output = serde_json::Map::new();
         output.insert(

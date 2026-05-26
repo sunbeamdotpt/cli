@@ -48,6 +48,7 @@ pub fn context() -> &'static str {
 /// rewrites `cluster_url` to the daemon's loopback k8s proxy
 /// (`https://127.0.0.1:16579`) and disables TLS verification (the loopback
 /// hop is inside the WireGuard trust boundary — see `sunbeam-net/src/tls.rs`).
+#[tracing::instrument]
 pub async fn get_client() -> Result<Client> {
     let ctx_name = context();
     if ctx_name.is_empty() {
@@ -144,6 +145,7 @@ fn job_spec_hash(doc_json: &serde_json::Value) -> String {
 ///    applying so the new spec takes effect (Jobs are immutable once created).
 /// 4. After a successful apply, patch the annotation onto the Job so future
 ///    runs can detect whether a re-apply is actually needed.
+#[tracing::instrument]
 pub async fn kube_apply(manifest: &str) -> Result<()> {
     let client = get_client().await?;
     let ssapply = PatchParams::apply("sunbeam").force();
@@ -159,10 +161,10 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         .await
         .unwrap_or_default();
     if !broken_groups.is_empty() {
-        crate::output::ok(&format!(
+        tracing::info!(
             "Excluding broken API groups from discovery: {}",
             broken_groups.join(", ")
-        ));
+        );
     }
 
     let mut disc = None;
@@ -217,7 +219,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
     for doc in &crd_docs {
         match apply_one_doc(&client, &ssapply, &disc, doc).await {
             Ok(name) if !name.is_empty() => {
-                crate::output::ok(&format!("  Applied {name}"));
+                tracing::info!("  Applied {name}");
             }
             Err(e) => errors.push(e),
             _ => {}
@@ -226,7 +228,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
     // If we applied any CRDs, refresh discovery so the new APIs are known.
     if !crd_docs.is_empty() {
-        crate::output::ok("CRDs applied — refreshing API discovery...");
+        tracing::info!("CRDs applied — refreshing API discovery...");
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         match discovery::Discovery::new(client.clone())
             .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>())
@@ -289,16 +291,16 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
             match apply_one_doc(&client, &ssapply, &disc, doc).await {
                 Ok(name) => {
                     if !name.is_empty() {
-                        crate::output::ok(&format!("  Applied {name}"));
+                        tracing::info!("  Applied {name}");
                     }
                     last_err = None;
                     break;
                 }
                 Err(e) if is_webhook_error(&e) && attempt < 11 => {
-                    crate::output::ok(&format!(
+                    tracing::info!(
                         "Webhook not ready for doc (attempt {}), retrying in 10s...",
                         attempt + 1
-                    ));
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     last_err = Some(e);
                 }
@@ -346,6 +348,8 @@ async fn apply_one_doc(
         .and_then(|m| m.get("namespace"))
         .and_then(|v| v.as_str());
 
+    tracing::debug!("kube_apply {kind}/{name} namespace={namespace:?}");
+
     if name.is_empty() || kind.is_empty() {
         return Ok(String::new()); // skip incomplete documents
     }
@@ -371,9 +375,9 @@ async fn apply_one_doc(
                 .unwrap_or("");
 
             if live_hash != new_hash {
-                crate::output::ok(&format!(
+                tracing::info!(
                     "Job {job_ns}/{name} spec changed — deleting before re-apply..."
-                ));
+                );
                 let dp = DeleteParams::default();
                 let _ = jobs.delete(name, &dp).await;
             }
@@ -511,8 +515,10 @@ fn resolve_api_resource(
 
 /// Get a Kubernetes Secret object.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn kube_get_secret(ns: &str, name: &str) -> Result<Option<Secret>> {
     let client = get_client().await?;
+    tracing::debug!("kube_get_secret {ns}/{name}");
     let api: Api<Secret> = Api::namespaced(client.clone(), ns);
     match api.get_opt(name).await {
         Ok(secret) => Ok(secret),
@@ -522,6 +528,7 @@ pub async fn kube_get_secret(ns: &str, name: &str) -> Result<Option<Secret>> {
 
 /// Get a specific base64-decoded field from a Kubernetes secret.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn kube_get_secret_field(ns: &str, name: &str, key: &str) -> Result<String> {
     let secret = kube_get_secret(ns, name)
         .await?
@@ -539,7 +546,9 @@ pub async fn kube_get_secret_field(ns: &str, name: &str, key: &str) -> Result<St
 
 /// Check if a namespace exists.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn ns_exists(ns: &str) -> Result<bool> {
+    tracing::debug!("ns_exists {ns}");
     let client = get_client().await?;
     let api: Api<Namespace> = Api::all(client.clone());
     match api.get_opt(ns).await {
@@ -551,7 +560,9 @@ pub async fn ns_exists(ns: &str) -> Result<bool> {
 
 /// Create namespace if it does not exist.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn ensure_ns(ns: &str) -> Result<()> {
+    tracing::debug!("ensure_ns {ns}");
     if ns_exists(ns).await? {
         return Ok(());
     }
@@ -571,7 +582,9 @@ pub async fn ensure_ns(ns: &str) -> Result<()> {
 
 /// Create or update a generic Kubernetes secret via server-side apply.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) -> Result<()> {
+    tracing::debug!("create_secret {ns}/{name}");
     let client = get_client().await?;
     let api: Api<Secret> = Api::namespaced(client.clone(), ns);
 
@@ -601,7 +614,9 @@ pub async fn create_secret(ns: &str, name: &str, data: HashMap<String, String>) 
 }
 
 /// Find the first Running pod matching a label selector in a namespace.
+#[tracing::instrument]
 pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
+    tracing::debug!("find_pod_by_label {ns} label={label}");
     let client = get_client().await.ok()?;
     let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
         kube::Api::namespaced(client.clone(), ns);
@@ -619,7 +634,9 @@ pub async fn find_pod_by_label(ns: &str, label: &str) -> Option<String> {
 ///
 /// Returns `(pod_name, unlabeled)` where `unlabeled` is `true` when the result
 /// came from the namespace-wide fallback rather than the label match.
+#[tracing::instrument]
 pub async fn find_pod_by_label_or_any(ns: &str, label: &str) -> Option<(String, bool)> {
+    tracing::debug!("find_pod_by_label_or_any {ns} label={label}");
     let client = get_client().await.ok()?;
     let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
         kube::Api::namespaced(client.clone(), ns);
@@ -649,12 +666,14 @@ pub async fn find_pod_by_label_or_any(ns: &str, label: &str) -> Option<(String, 
 
 /// Execute a command in a pod and return (exit_code, stdout).
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn kube_exec(
     ns: &str,
     pod: &str,
     cmd: &[&str],
     container: Option<&str>,
 ) -> Result<(i32, String)> {
+    tracing::debug!("kube_exec {ns}/{pod}: {cmd:?}");
     let client = get_client().await?;
     let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), ns);
 
@@ -667,10 +686,13 @@ pub async fn kube_exec(
     };
 
     let cmd_strings: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
-    let mut attached = pods
-        .exec(pod, cmd_strings, &ep)
-        .await
-        .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
+    let mut attached = match pods.exec(pod, cmd_strings, &ep).await {
+        Ok(attached) => attached,
+        Err(e) => {
+            tracing::warn!("kube_exec failed: {e}");
+            return Err(e).with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"));
+        }
+    };
 
     let stdout = {
         let mut stdout_reader = attached.stdout().ctx("No stdout stream from exec")?;
@@ -695,6 +717,7 @@ pub async fn kube_exec(
 }
 
 /// Execute a command in a pod with optional stdin data and return (exit_code, stdout).
+#[tracing::instrument]
 pub async fn kube_exec_with_stdin(
     ns: &str,
     pod: &str,
@@ -702,6 +725,7 @@ pub async fn kube_exec_with_stdin(
     container: Option<&str>,
     stdin_data: Option<&[u8]>,
 ) -> Result<(i32, String)> {
+    tracing::debug!("kube_exec_with_stdin {ns}/{pod}: {cmd:?}");
     let client = get_client().await?;
     let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), ns);
 
@@ -752,7 +776,9 @@ pub async fn kube_exec_with_stdin(
 
 /// Patch a deployment to trigger a rollout restart.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn kube_rollout_restart(ns: &str, deployment: &str) -> Result<()> {
+    tracing::debug!("kube_rollout_restart {ns}/{deployment}");
     let client = get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), ns);
 
@@ -784,6 +810,7 @@ pub async fn kube_rollout_restart(ns: &str, deployment: &str) -> Result<()> {
 /// Tries the gitea-inline-config secret first (DOMAIN=src.<domain>),
 /// then falls back to the Lima VM IP for local development.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn get_domain() -> Result<String> {
     // 1. Gitea inline-config secret
     if let Ok(Some(secret)) = kube_get_secret("devtools", "gitea-inline-config").await
@@ -840,7 +867,9 @@ async fn get_lima_ip() -> String {
 
 /// Run kustomize build --enable-helm and apply domain/email substitution.
 #[allow(dead_code)]
+#[tracing::instrument]
 pub async fn kustomize_build(overlay: &Path, domain: &str, email: &str) -> Result<String> {
+    tracing::debug!("kustomize_build {overlay:?} domain={domain}");
     let kustomize_path = crate::tools::ensure_kustomize()?;
     let helm_path = crate::tools::ensure_helm()?;
 
@@ -908,6 +937,7 @@ async fn resolve_registry_ip(domain: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Run bao CLI inside the OpenBao pod with the root token.
+#[tracing::instrument(skip(bao_args))]
 pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
     // Find the openbao pod
     let client = get_client().await?;

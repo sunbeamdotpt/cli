@@ -5,10 +5,13 @@ use crate::discovery::{find_workspace_root, WORKSPACE_FILE};
 use crate::error::Result;
 use crate::operations::compose::ComposeOptions;
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
-use crate::output::ok;
+
 
 /// Dispatch.
+#[tracing::instrument]
 pub async fn dispatch(action: OperationsAction) -> Result<()> {
+    tracing::debug!("operations dispatch: {action:?}");
+    tracing::info!("operations dispatch: {action:?}");
     match action {
         OperationsAction::Compose { action } => {
             let (ws, ws_root) = load_workspace().await?;
@@ -41,9 +44,9 @@ pub async fn dispatch(action: OperationsAction) -> Result<()> {
                 if entries.is_empty() {
                     continue;
                 }
-                ok(&format!("[{}]", bucket.as_str()));
+                tracing::info!("[{}]", bucket.as_str());
                 for e in entries {
-                    ok(&format!("  {}  {}", e.name, e.repo.path));
+                    tracing::info!("  {}  {}", e.name, e.repo.path);
                 }
             }
             Ok(())
@@ -66,7 +69,7 @@ async fn dispatch_compose(
     match action {
         ComposeAction::Render => {
             let path = crate::operations::compose::materialize(&ws, &ws_root)?;
-            ok(&format!("wrote {}", path.display()));
+            tracing::info!("wrote {}", path.display());
             Ok(())
         }
         ComposeAction::Up { services, wait } => {
@@ -182,12 +185,15 @@ fn print_diff(entries: Vec<crate::operations::stack::StackDiffEntry>) {
     for e in entries {
         let left = e.left.as_deref().unwrap_or("(missing)");
         let right = e.right.as_deref().unwrap_or("(missing)");
-        ok(&format!("  {}  {left} -> {right}", e.project));
+        tracing::info!("  {}  {left} -> {right}", e.project);
     }
 }
 
 /// Dispatch worktree.
+#[tracing::instrument]
 pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
+    tracing::debug!("worktree dispatch: {action:?}");
+    tracing::info!("worktree dispatch: {action:?}");
     match action {
         WorktreeAction::New {
             branch,
@@ -199,7 +205,7 @@ pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
                 from.as_deref(),
                 !no_setup,
             )?;
-            ok(&format!("created worktree at {}", path.display()));
+            tracing::info!("created worktree at {}", path.display());
             Ok(())
         }
         WorktreeAction::List => {
