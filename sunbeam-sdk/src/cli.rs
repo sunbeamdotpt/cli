@@ -980,12 +980,26 @@ pub async fn dispatch() -> Result<()> {
     // for note #3's bug report — keeping an Option here makes the intent
     // explicit.
     let config = crate::config::load_config();
-    let active = crate::config::resolve_context(
+    let mut active = crate::config::resolve_context(
         &config,
         "",
         cli.context.as_deref(),
         cli.domain.as_deref().unwrap_or(""),
     );
+
+    // Resolve domain once at the CLI boundary. If the context has no domain,
+    // discover it from cluster state (gitea-inline-config secret or Lima IP).
+    if active.domain.is_empty() {
+        match crate::kube::get_domain().await {
+            Ok(d) if !d.is_empty() => active.domain = d,
+            _ => {}
+        }
+    }
+
+    // Resolve ACME email once at the CLI boundary.
+    if active.acme_email.is_empty() {
+        active.acme_email = "ops@sunbeam.pt".to_string();
+    }
 
     // Thread the active Sunbeam context's kube-context into the shared kube
     // client. An empty value here means the user picked a context that has
@@ -1110,18 +1124,9 @@ pub async fn dispatch() -> Result<()> {
 
             // Resolve overlay for parameter discovery
             let infra_dir = crate::config::get_infra_dir();
-            let resolved_domain = if let Some(d) = cli.domain.as_deref().filter(|s| !s.is_empty()) {
-                d.to_string()
-            } else {
-                crate::config::domain().to_string()
-            };
+            let resolved_domain = crate::config::domain().to_string();
             let overlay = infra_dir.join("overlays");
-
-            let email = if let Some(e) = cli.email.as_deref().filter(|s| !s.is_empty()) {
-                e.to_string()
-            } else {
-                crate::config::load_config().acme_email
-            };
+            let email = crate::config::active_context().acme_email.clone();
 
             if show_params {
                 crate::output::step("Loading deployment configs...");
@@ -1155,7 +1160,6 @@ pub async fn dispatch() -> Result<()> {
             let step_ctx = crate::workflows::StepContext::from_active();
             let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
-                "domain": "",
                 "skip_cilium": skip_cilium,
                 "use_lima": use_lima,
             });
@@ -1190,12 +1194,7 @@ pub async fn dispatch() -> Result<()> {
         }
 
         Some(Verb::Service { action }) => {
-            crate::service_cmds::dispatch(
-                action,
-                cli.domain.as_deref().unwrap_or(""),
-                cli.email.as_deref().unwrap_or(""),
-            )
-            .await
+            crate::service_cmds::dispatch(action).await
         }
 
         Some(Verb::Config { action }) => match action {

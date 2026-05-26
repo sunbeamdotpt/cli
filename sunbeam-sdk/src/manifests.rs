@@ -51,38 +51,38 @@ pub fn filter_by_namespace(manifests: &str, namespace: &str, skip_patterns: &[St
     format!("---\n{}\n", kept.join("\n---\n"))
 }
 
+/// Options controlling a manifest apply operation.
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOptions {
+    /// Target namespace; empty string means all namespaces.
+    pub namespace: String,
+    /// Print rendered YAML without calling kubectl apply.
+    pub dry_run: bool,
+    /// Patterns whose metadata.name should cause a document to be skipped.
+    pub skip_patterns: Vec<String>,
+    /// Runtime manifest overrides (--set, --disable, --enable).
+    pub overrides: Option<crate::manifest_params::Overrides>,
+}
+
 /// Build the production kustomize overlay, substitute domain/email, apply via kube-rs.
 ///
 /// Runs a second convergence pass if cert-manager is present in the overlay —
 /// cert-manager registers a ValidatingWebhook that must be running before
 /// ClusterIssuer / Certificate resources can be created.
-pub async fn cmd_apply(
-    domain: &str,
-    email: &str,
-    namespace: &str,
-    skip_patterns: &[String],
-    overrides: Option<&crate::manifest_params::Overrides>,
-) -> Result<()> {
-    // Fall back to active context for ACME email if not provided via CLI flag.
-    // (The legacy top-level `acme_email` is migrated into the context on config
-    // load — see config::load_config.)
-    let email = if email.is_empty() {
-        crate::config::active_context().acme_email.clone()
-    } else {
-        email.to_string()
-    };
+///
+/// Domain and email are read from `config::active_context()`, which is
+/// guaranteed to be fully resolved by the time this is called.
+pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
+    let ctx = crate::config::active_context();
+    let resolved_domain = &ctx.domain;
+    let email = &ctx.acme_email;
+    if resolved_domain.is_empty() {
+        bail!("domain not set — run `sunbeam config set --domain <domain>` first");
+    }
 
     let infra_dir = crate::config::get_infra_dir();
-
-    let resolved_domain = if domain.is_empty() {
-        crate::kube::get_domain().await?
-    } else {
-        domain.to_string()
-    };
-    if resolved_domain.is_empty() {
-        bail!("--domain is required for apply on first deploy");
-    }
     let overlay = infra_dir.join("overlays");
+    let namespace = &opts.namespace;
 
     let scope = if namespace.is_empty() {
         String::new()
@@ -93,36 +93,37 @@ pub async fn cmd_apply(
         "Applying manifests (domain: {resolved_domain}){scope}..."
     ));
 
-    let ns_list = if namespace.is_empty() {
-        None
-    } else {
-        Some(vec![namespace.to_string()])
-    };
-    pre_apply_cleanup(ns_list.as_deref()).await;
-
     // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
-    // A previous interrupted `kustomize build --enable-helm` can leave a
-    // `<base>/charts/<chart>-<ver>/` skeleton that blocks later retries with
-    // "file or directory already exists". Detect and remove those so this
-    // apply is idempotent against crashes/Ctrl-C mid-extract.
     clean_partial_chart_extracts(&infra_dir);
 
-    let before = snapshot_configmaps().await;
-    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+    let mut manifests = crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
 
-    if let Some(ov) = overrides {
+    if let Some(ov) = &opts.overrides {
         manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
     }
 
     if !namespace.is_empty() {
-        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
+        manifests = filter_by_namespace(&manifests, namespace, &opts.skip_patterns);
         if manifests.trim().is_empty() {
             crate::output::warn(&format!(
                 "No resources found for namespace '{namespace}' -- check the name and try again."
             ));
-            return Ok(());
+            return Ok(String::new());
         }
     }
+
+    if opts.dry_run {
+        return Ok(manifests);
+    }
+
+    let ns_list = if namespace.is_empty() {
+        None
+    } else {
+        Some(vec![namespace.clone()])
+    };
+    pre_apply_cleanup(ns_list.as_deref()).await;
+
+    let before = snapshot_configmaps().await;
 
     crate::kube::kube_apply(&manifests).await?;
 
@@ -135,8 +136,8 @@ pub async fn cmd_apply(
     {
         crate::output::ok("Running convergence pass for cert-manager resources...");
         let mut manifests2 =
-            crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
-        if let Some(ov) = overrides {
+            crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
+        if let Some(ov) = &opts.overrides {
             manifests2 = crate::manifest_params::apply_overrides(&manifests2, ov)?;
         }
         crate::kube::kube_apply(&manifests2).await?;
@@ -146,58 +147,11 @@ pub async fn cmd_apply(
 
     // Post-apply hooks
     if namespace.is_empty() || namespace == "matrix" {
-        patch_tuwunel_oauth2_redirect(&resolved_domain).await;
+        patch_tuwunel_oauth2_redirect(resolved_domain).await;
     }
 
     crate::output::ok("Applied.");
-    Ok(())
-}
-
-/// Build the kustomize overlay, substitute domain/email, and print the
-/// resulting YAML to stdout without calling kubectl apply.
-pub async fn cmd_apply_dry_run(
-    domain: &str,
-    email: &str,
-    namespace: &str,
-    skip_patterns: &[String],
-    overrides: Option<&crate::manifest_params::Overrides>,
-) -> Result<()> {
-    let email = if email.is_empty() {
-        crate::config::load_config().acme_email
-    } else {
-        email.to_string()
-    };
-
-    let infra_dir = crate::config::get_infra_dir();
-
-    let resolved_domain = if domain.is_empty() {
-        crate::kube::get_domain().await?
-    } else {
-        domain.to_string()
-    };
-    if resolved_domain.is_empty() {
-        bail!("--domain is required for apply on first deploy");
-    }
-    let overlay = infra_dir.join("overlays");
-
-    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
-
-    if let Some(ov) = overrides {
-        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
-    }
-
-    if !namespace.is_empty() {
-        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
-        if manifests.trim().is_empty() {
-            crate::output::warn(&format!(
-                "No resources found for namespace '{namespace}' -- check the name and try again."
-            ));
-            return Ok(());
-        }
-    }
-
-    print!("{manifests}");
-    Ok(())
+    Ok(manifests)
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,5 +1005,38 @@ spec:
         let doc = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: pingora-config\n  namespace: ingress\ndata:\n  config.toml: |\n    tls_secret = \"pingora-tls\"\n";
         let result = filter_by_namespace(doc, "ingress", &["pingora-tls".to_string()]);
         assert!(result.contains("name: pingora-config"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ApplyOptions tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_options_default_is_all_namespaces_no_dry_run() {
+        let opts = ApplyOptions::default();
+        assert!(opts.namespace.is_empty());
+        assert!(!opts.dry_run);
+        assert!(opts.skip_patterns.is_empty());
+        assert!(opts.overrides.is_none());
+    }
+
+    #[test]
+    fn apply_options_with_namespace_and_overrides() {
+        let overrides = crate::manifest_params::Overrides::from_cli(
+            &["Deployment/ory/hydra/spec/replicas=3".to_string()],
+            &["deployment/ory/hydra".to_string()],
+            &[],
+        )
+        .unwrap();
+        let opts = ApplyOptions {
+            namespace: "ory".to_string(),
+            dry_run: true,
+            skip_patterns: vec!["scaleway-certmanager-webhook".to_string()],
+            overrides: Some(overrides),
+        };
+        assert_eq!(opts.namespace, "ory");
+        assert!(opts.dry_run);
+        assert_eq!(opts.skip_patterns.len(), 1);
+        assert!(opts.overrides.is_some());
     }
 }
