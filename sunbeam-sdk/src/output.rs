@@ -1,4 +1,4 @@
-//! CLI output formatting (table, JSON, YAML, step banners).
+//! CLI output formatting (table, JSON, YAML).
 
 use crate::error::{Result, SunbeamError};
 use serde::Serialize;
@@ -72,25 +72,6 @@ pub fn read_json_input(flag: Option<&str>) -> Result<serde_json::Value> {
         Some(v) => v.to_string(),
     };
     serde_json::from_str(&raw).map_err(|e| SunbeamError::Other(format!("invalid JSON input: {e}")))
-}
-
-// ---------------------------------------------------------------------------
-// Existing helpers
-// ---------------------------------------------------------------------------
-
-/// Print a step header.
-pub fn step(msg: &str) {
-    println!("\n==> {msg}");
-}
-
-/// Print a success/info line.
-pub fn ok(msg: &str) {
-    println!("    {msg}");
-}
-
-/// Print a warning to stderr.
-pub fn warn(msg: &str) {
-    eprintln!("    WARN: {msg}");
 }
 
 /// Return an aligned text table. Columns padded to max width.
