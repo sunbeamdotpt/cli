@@ -16,7 +16,7 @@ use kube::api::{Api, DeleteParams, ListParams, PostParams};
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::output::{ok, step, warn};
+
 use crate::workflows::data::UpData;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -44,25 +44,25 @@ impl StepBody for BootstrapCriticalImages {
             &data.domain
         };
 
-        step("Bootstrapping critical images...");
+        tracing::info!("Bootstrapping critical images...");
 
         // 1. Check if proxy image already exists in k3s
         let proxy_tag = "579e975983";
         let proxy_image = format!("oci.{domain}/studio/proxy:{proxy_tag}");
         if image_exists_in_k3s(&proxy_image).await? {
-            ok("Proxy image already present in k3s.");
+            tracing::info!("Proxy image already present in k3s.");
             return Ok(ExecutionResult::next());
         }
 
         // 2. Build proxy image using host Docker
-        step("Building proxy image...");
+        tracing::info!("Building proxy image...");
         let tar_path = build_proxy_image().await?;
 
         // 3. Import into k3s containerd
-        step("Importing proxy image into k3s...");
+        tracing::info!("Importing proxy image into k3s...");
         import_image_into_k3s(&tar_path, &proxy_image).await?;
 
-        ok("Proxy image bootstrapped.");
+        tracing::info!("Proxy image bootstrapped.");
         Ok(ExecutionResult::next())
     }
 }
@@ -211,7 +211,7 @@ async fn image_exists_in_k3s(image_ref: &str) -> wfe_core::Result<bool> {
     // Spawn a temporary pod on the node.
     if let Err(e) = spawn_ctr_pod(&node, pod_name).await {
         // If pod creation fails, assume image doesn't exist.
-        warn(&format!("Could not spawn ctr pod: {e}"));
+        tracing::warn!("Could not spawn ctr pod: {e}");
         return Ok(false);
     }
 

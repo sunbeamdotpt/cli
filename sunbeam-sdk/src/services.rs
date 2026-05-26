@@ -2,7 +2,7 @@
 
 use crate::error::{Result, SunbeamError};
 use crate::kube::{get_client, kube_rollout_restart, parse_target};
-use crate::output::{ok, step, warn};
+
 use crate::registry::{self, Category, ServiceRegistry};
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
@@ -71,7 +71,7 @@ fn pod_ready_str(pod: &Pod) -> String {
 // ---------------------------------------------------------------------------
 
 async fn vso_sync_status() -> Result<()> {
-    step("VSO secret sync status...");
+    tracing::info!("VSO secret sync status...");
 
     let client = get_client().await?;
     let mut all_ok = true;
@@ -163,9 +163,9 @@ async fn vso_sync_status() -> Result<()> {
 
     println!();
     if all_ok {
-        ok("All VSO secrets synced.");
+        tracing::info!("All VSO secrets synced.");
     } else {
-        warn("Some VSO secrets are not synced.");
+        tracing::warn!("Some VSO secrets are not synced.");
     }
     Ok(())
 }
@@ -176,8 +176,9 @@ async fn vso_sync_status() -> Result<()> {
 
 /// Show pod health, optionally filtered by service name, category, namespace,
 /// or legacy namespace/service syntax.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_status(target: Option<&str>) -> Result<()> {
-    step("Pod health across all namespaces...");
+    tracing::info!("Pod health across all namespaces...");
 
     let client = get_client().await?;
     let reg = get_registry().await?;
@@ -321,7 +322,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
     }
 
     if pods.is_empty() {
-        warn("No pods found in managed namespaces.");
+        tracing::warn!("No pods found in managed namespaces.");
         return Ok(());
     }
 
@@ -360,9 +361,9 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
 
     println!();
     if all_ok {
-        ok("All pods healthy.");
+        tracing::info!("All pods healthy.");
     } else {
-        warn("Some pods are not ready.");
+        tracing::warn!("Some pods are not ready.");
     }
 
     vso_sync_status().await?;
@@ -371,6 +372,7 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
 
 /// Stream logs for a service. Accepts a service name (e.g. "hydra") or legacy
 /// namespace/name syntax (e.g. "ory/kratos").
+#[tracing::instrument(skip(target))]
 pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
     // Try registry first for exact service name match
     let reg = get_registry().await?;
@@ -423,7 +425,7 @@ pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
             match line {
                 Ok(line) => println!("{line}"),
                 Err(e) => {
-                    warn(&format!("Log stream error: {e}"));
+                    tracing::warn!("Log stream error: {e}");
                     break;
                 }
             }
@@ -439,7 +441,7 @@ pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
 
             match api.logs(&pod_name, &lp).await {
                 Ok(logs) => print!("{logs}"),
-                Err(e) => warn(&format!("Failed to get logs for {pod_name}: {e}")),
+                Err(e) => tracing::warn!("Failed to get logs for {pod_name}: {e}"),
             }
         }
     }
@@ -448,6 +450,7 @@ pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
 }
 
 /// Print raw pod output in YAML or JSON format.
+#[tracing::instrument(skip(target, output))]
 pub async fn cmd_get(target: &str, output: &str) -> Result<()> {
     let (ns_opt, name_opt) = parse_target(Some(target))?;
     let ns = match ns_opt {
@@ -478,8 +481,9 @@ pub async fn cmd_get(target: &str, output: &str) -> Result<()> {
 /// Restart deployments. Accepts service names, categories, namespaces, or
 /// legacy namespace/name syntax. None restarts all non-infra services with
 /// deployments.
+#[tracing::instrument(skip(target))]
 pub async fn cmd_restart(target: Option<&str>) -> Result<()> {
-    step("Restarting services...");
+    tracing::info!("Restarting services...");
 
     let reg = get_registry().await?;
 
@@ -534,19 +538,19 @@ pub async fn cmd_restart(target: Option<&str>) -> Result<()> {
     };
 
     if pairs.is_empty() {
-        warn(&format!(
+        tracing::warn!(
             "No matching services for target: {}",
             target.unwrap_or("(none)")
-        ));
+        );
         return Ok(());
     }
 
     for (ns, dep) in &pairs {
         if let Err(e) = kube_rollout_restart(ns, dep).await {
-            warn(&format!("Failed to restart {ns}/{dep}: {e}"));
+            tracing::warn!("Failed to restart {ns}/{dep}: {e}");
         }
     }
-    ok("Done.");
+    tracing::info!("Done.");
     Ok(())
 }
 

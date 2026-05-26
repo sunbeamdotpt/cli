@@ -6,7 +6,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::ok;
+
 use crate::workflows::steps::postgres::ensure_user_sql;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -58,7 +58,7 @@ impl StepBody for CreatePGRole {
         )
         .await;
 
-        ok(&format!("PG role: {username}"));
+        tracing::info!("PG role: {username}");
         Ok(ExecutionResult::next())
     }
 }

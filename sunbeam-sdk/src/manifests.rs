@@ -107,6 +107,7 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
 ///
 /// Domain and email are read from `config::active_context()`, which is
 /// guaranteed to be fully resolved by the time this is called.
+#[tracing::instrument(skip(opts))]
 pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     let ctx = crate::config::active_context();
     let resolved_domain = &ctx.domain;
@@ -124,9 +125,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     } else {
         format!(" [{namespace}]")
     };
-    crate::output::step(&format!(
-        "Applying manifests (domain: {resolved_domain}){scope}..."
-    ));
+    tracing::info!("Applying manifests (domain: {resolved_domain}){scope}...");
 
     // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
     clean_partial_chart_extracts(&infra_dir);
@@ -140,9 +139,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     if !namespace.is_empty() {
         manifests = filter_by_namespace(&manifests, namespace, &opts.skip_patterns);
         if manifests.trim().is_empty() {
-            crate::output::warn(&format!(
-                "No resources found for namespace '{namespace}' -- check the name and try again."
-            ));
+            tracing::warn!("No resources found for namespace '{namespace}' -- check the name and try again.");
             return Ok(String::new());
         }
     }
@@ -169,7 +166,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
         && namespace.is_empty()
         && wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await
     {
-        crate::output::ok("Running convergence pass for cert-manager resources...");
+        tracing::info!("Running convergence pass for cert-manager resources...");
         let mut manifests2 =
             crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
         if let Some(ov) = &opts.overrides {
@@ -185,7 +182,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
         patch_tuwunel_oauth2_redirect(resolved_domain).await;
     }
 
-    crate::output::ok("Applied.");
+    tracing::info!("Applied.");
     Ok(manifests)
 }
 
@@ -241,10 +238,10 @@ fn clean_partial_chart_extracts(infra_dir: &std::path::Path) {
                 }
             }
             if !has_chart_yaml {
-                crate::output::warn(&format!(
+                tracing::warn!(
                     "Removing partial helm-chart extract {}",
                     versioned.display()
-                ));
+                );
                 let _ = std::fs::remove_dir_all(&versioned);
             }
         }
@@ -270,7 +267,7 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
         }
     };
 
-    crate::output::ok("Cleaning up immutable Jobs and test Pods...");
+    tracing::info!("Cleaning up immutable Jobs and test Pods...");
 
     // Prune stale VaultStaticSecrets that share a name with VaultDynamicSecrets
     prune_stale_vault_static_secrets(&ns_list).await;
@@ -283,7 +280,7 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
         let client = match crate::kube::get_client().await {
             Ok(c) => c,
             Err(e) => {
-                crate::output::warn(&format!("Failed to get kube client: {e}"));
+                tracing::warn!("Failed to get kube client: {e}");
                 return;
             }
         };
@@ -309,7 +306,7 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
         Err(e) => {
-            crate::output::warn(&format!("Failed to get kube client for VSS pruning: {e}"));
+            tracing::warn!("Failed to get kube client for VSS pruning: {e}");
             return;
         }
     };
@@ -355,9 +352,9 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
             if let Some(name) = &vss.metadata.name
                 && vds_names.contains(name)
             {
-                crate::output::ok(&format!(
+                tracing::info!(
                     "Pruning stale VaultStaticSecret {ns}/{name} (replaced by VaultDynamicSecret)"
-                ));
+                );
                 let dp = kube::api::DeleteParams::default();
                 let _ = vss_api.delete(name, &dp).await;
             }
@@ -439,9 +436,9 @@ async fn restart_for_changed_configmaps(
                         }
                     });
                     if mounts_changed {
-                        crate::output::ok(&format!(
+                        tracing::info!(
                             "Restarting {ns}/{dep_name} (ConfigMap updated)..."
-                        ));
+                        );
                         let _ = crate::kube::kube_rollout_restart(ns, dep_name).await;
                     }
                 }
@@ -452,9 +449,9 @@ async fn restart_for_changed_configmaps(
 
 /// Wait for a webhook endpoint to become ready.
 async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
-    crate::output::ok(&format!(
+    tracing::info!(
         "Waiting for {ns}/{svc} webhook (up to {timeout_secs}s)..."
-    ));
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     let client = match crate::kube::get_client().await {
@@ -466,9 +463,9 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
 
     loop {
         if std::time::Instant::now() > deadline {
-            crate::output::warn(&format!(
+            tracing::warn!(
                 "  {ns}/{svc} not ready after {timeout_secs}s -- continuing anyway."
-            ));
+            );
             return false;
         }
 
@@ -480,7 +477,7 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
                 .and_then(|s| s.addresses.as_ref())
                 .is_some_and(|a| !a.is_empty());
             if has_addr {
-                crate::output::ok(&format!("  {ns}/{svc} ready."));
+                tracing::info!("  {ns}/{svc} ready.");
                 return true;
             }
         }
@@ -495,7 +492,7 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID").await {
             Ok(id) if !id.is_empty() => id,
             _ => {
-                crate::output::warn(
+                tracing::warn!(
                     "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
                 );
                 return;
@@ -533,9 +530,9 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         .patch("tuwunel", &pp, &kube::api::Patch::Merge(patch))
         .await
     {
-        crate::output::warn(&format!("Failed to patch tuwunel OAuth2Client: {e}"));
+        tracing::warn!("Failed to patch tuwunel OAuth2Client: {e}");
     } else {
-        crate::output::ok("Patched tuwunel OAuth2Client redirect URI.");
+        tracing::info!("Patched tuwunel OAuth2Client redirect URI.");
     }
 }
 
@@ -561,7 +558,7 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
     let pod_name = match crate::kube::find_pod_by_label("data", "app=opensearch").await {
         Some(name) => name,
         None => {
-            crate::output::warn("No OpenSearch pod found in data namespace");
+            tracing::warn!("No OpenSearch pod found in data namespace");
             return None;
         }
     };
@@ -573,12 +570,13 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
 }
 
 /// Inject OpenSearch model_id into matrix/opensearch-ml-config ConfigMap.
+#[tracing::instrument]
 pub async fn inject_opensearch_model_id() {
     let pipe_resp = match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await
     {
         Some(r) => r,
         None => {
-            crate::output::warn(
+            tracing::warn!(
                 "OpenSearch ingest pipeline not found -- skipping model_id injection.",
             );
             return;
@@ -601,7 +599,7 @@ pub async fn inject_opensearch_model_id() {
         });
 
     let Some(model_id) = model_id else {
-        crate::output::warn("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
+        tracing::warn!("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
         return;
     };
 
@@ -622,11 +620,11 @@ pub async fn inject_opensearch_model_id() {
 
     let manifest = serde_json::to_string(&cm).unwrap_or_default();
     if let Err(e) = crate::kube::kube_apply(&manifest).await {
-        crate::output::warn(&format!("Failed to inject OpenSearch model_id: {e}"));
+        tracing::warn!("Failed to inject OpenSearch model_id: {e}");
     } else {
-        crate::output::ok(&format!(
+        tracing::info!(
             "Injected OpenSearch model_id ({model_id}) into matrix/opensearch-ml-config."
-        ));
+        );
     }
 }
 
@@ -635,9 +633,10 @@ pub async fn inject_opensearch_model_id() {
 /// 1. Sets cluster settings to allow ML on data nodes.
 /// 2. Registers and deploys all-mpnet-base-v2 (pre-trained, 384-dim).
 /// 3. Creates ingest + search pipelines for hybrid BM25+neural scoring.
+#[tracing::instrument]
 pub async fn ensure_opensearch_ml() {
     if os_api("/_cluster/health", "GET", None).await.is_none() {
-        crate::output::warn("OpenSearch not reachable -- skipping ML setup.");
+        tracing::warn!("OpenSearch not reachable -- skipping ML setup.");
         return;
     }
 
@@ -664,7 +663,7 @@ pub async fn ensure_opensearch_ml() {
     {
         Some(r) => r,
         None => {
-            crate::output::warn("OpenSearch ML search API failed -- skipping ML setup.");
+            tracing::warn!("OpenSearch ML search API failed -- skipping ML setup.");
             return;
         }
     };
@@ -733,10 +732,10 @@ pub async fn ensure_opensearch_ml() {
     }
 
     if !to_clean.is_empty() {
-        crate::output::step(&format!(
+        tracing::info!(
             "Cleaning up {} stale ML model(s)...",
             to_clean.len()
-        ));
+        );
         for stale in &to_clean {
             // Undeploy first (safe to call even if not deployed)
             os_api(
@@ -768,7 +767,7 @@ pub async fn ensure_opensearch_ml() {
                 model_id = Some(id);
             }
             "DEPLOYING" => {
-                crate::output::ok("Model is deploying, waiting...");
+                tracing::info!("Model is deploying, waiting...");
                 model_id = Some(id.clone());
                 for _ in 0..30 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -782,7 +781,7 @@ pub async fn ensure_opensearch_ml() {
             }
             _ => {
                 // REGISTERED or other — deploy it.
-                crate::output::ok("Deploying OpenSearch ML model...");
+                tracing::info!("Deploying OpenSearch ML model...");
                 model_id = Some(id.clone());
                 os_api(&format!("/_plugins/_ml/models/{id}/_deploy"), "POST", None).await;
                 for _ in 0..30 {
@@ -800,7 +799,7 @@ pub async fn ensure_opensearch_ml() {
 
     if model_id.is_none() {
         // No existing model found — register from pre-trained hub
-        crate::output::ok("Registering OpenSearch ML model (all-mpnet-base-v2)...");
+        tracing::info!("Registering OpenSearch ML model (all-mpnet-base-v2)...");
         let reg_body = serde_json::json!({
             "name": "huggingface/sentence-transformers/all-mpnet-base-v2",
             "version": "1.0.1",
@@ -815,7 +814,7 @@ pub async fn ensure_opensearch_ml() {
         {
             Some(r) => r,
             None => {
-                crate::output::warn("Failed to register ML model -- skipping.");
+                tracing::warn!("Failed to register ML model -- skipping.");
                 return;
             }
         };
@@ -826,11 +825,11 @@ pub async fn ensure_opensearch_ml() {
             .unwrap_or_default();
 
         if task_id.is_empty() {
-            crate::output::warn("No task_id from model registration -- skipping.");
+            tracing::warn!("No task_id from model registration -- skipping.");
             return;
         }
 
-        crate::output::ok("Waiting for model registration...");
+        tracing::info!("Waiting for model registration...");
         let mut new_model_id = None;
         for _ in 0..60 {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -847,7 +846,7 @@ pub async fn ensure_opensearch_ml() {
                         break;
                     }
                     "FAILED" => {
-                        crate::output::warn(&format!("ML model registration failed: {task_resp}"));
+                        tracing::warn!("ML model registration failed: {task_resp}");
                         return;
                     }
                     _ => {}
@@ -856,11 +855,11 @@ pub async fn ensure_opensearch_ml() {
         }
 
         let Some(mid) = new_model_id else {
-            crate::output::warn("ML model registration timed out.");
+            tracing::warn!("ML model registration timed out.");
             return;
         };
 
-        crate::output::ok("Deploying ML model...");
+        tracing::info!("Deploying ML model...");
         os_api(&format!("/_plugins/_ml/models/{mid}/_deploy"), "POST", None).await;
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -874,7 +873,7 @@ pub async fn ensure_opensearch_ml() {
     }
 
     let Some(model_id) = model_id else {
-        crate::output::warn("No ML model available -- skipping pipeline setup.");
+        tracing::warn!("No ML model available -- skipping pipeline setup.");
         return;
     };
 
@@ -911,7 +910,7 @@ pub async fn ensure_opensearch_ml() {
     )
     .await;
 
-    crate::output::ok(&format!("OpenSearch ML ready (model: {model_id})."));
+    tracing::info!("OpenSearch ML ready (model: {model_id}).");
 }
 
 #[cfg(test)]

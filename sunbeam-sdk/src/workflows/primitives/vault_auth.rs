@@ -7,7 +7,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::openbao::BaoClient;
-use crate::output::ok;
+
 use crate::secrets;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -71,7 +71,7 @@ impl StepBody for EnableVaultAuth {
 
         let (bao, _pf) = connect_bao(data).await?;
         let _ = bao.auth_enable(mount, auth_type).await;
-        ok(&format!("Vault auth enabled: {mount}"));
+        tracing::info!("Vault auth enabled: {mount}");
         Ok(ExecutionResult::next())
     }
 }
@@ -112,7 +112,7 @@ impl StepBody for WriteVaultAuthConfig {
         bao.write(&format!("auth/{mount}/config"), auth_config)
             .await
             .map_err(|e| step_err(format!("WriteVaultAuthConfig({mount}): {e}")))?;
-        ok(&format!("Vault auth config: {mount}"));
+        tracing::info!("Vault auth config: {mount}");
         Ok(ExecutionResult::next())
     }
 }
@@ -154,7 +154,7 @@ impl StepBody for WriteVaultPolicy {
         bao.write_policy(name, hcl)
             .await
             .map_err(|e| step_err(format!("WriteVaultPolicy({name}): {e}")))?;
-        ok(&format!("Vault policy: {name}"));
+        tracing::info!("Vault policy: {name}");
         Ok(ExecutionResult::next())
     }
 }
@@ -199,7 +199,7 @@ impl StepBody for WriteVaultRole {
         bao.write(&format!("auth/{mount}/role/{role}"), role_config)
             .await
             .map_err(|e| step_err(format!("WriteVaultRole({mount}/{role}): {e}")))?;
-        ok(&format!("Vault role: {mount}/{role}"));
+        tracing::info!("Vault role: {mount}/{role}");
         Ok(ExecutionResult::next())
     }
 }

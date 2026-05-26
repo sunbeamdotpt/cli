@@ -8,7 +8,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::ok;
+
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -92,7 +92,7 @@ impl StepBody for CreateK8sSecret {
             .await
             .map_err(|e| step_err(format!("CreateK8sSecret({namespace}/{name}): {e}")))?;
 
-        ok(&format!("K8s secret: {namespace}/{name}"));
+        tracing::info!("K8s secret: {namespace}/{name}");
         Ok(ExecutionResult::next())
     }
 }
