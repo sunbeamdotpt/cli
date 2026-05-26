@@ -79,7 +79,7 @@ async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
 async fn run_verb(verb: &str, args: ProjectRunArgs) -> Result<()> {
     let opts = RunOptions {
         extra_env: BTreeMap::new(),
-        verbose: args.verbose,
+        verbose: args.echo,
         dry_run: args.dry_run,
     };
 
