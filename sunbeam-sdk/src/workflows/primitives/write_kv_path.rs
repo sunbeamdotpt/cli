@@ -8,7 +8,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::openbao::BaoClient;
-use crate::output::ok;
+
 use crate::secrets;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -46,6 +46,7 @@ impl StepBody for WriteKVPath {
             .get("service")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteKVPath: missing service"))?;
+        tracing::debug!("write_kv_path {service}");
 
         let dirty_key = format!("dirty_{service}");
         let is_dirty = data
@@ -79,7 +80,7 @@ impl StepBody for WriteKVPath {
             .await
             .map_err(|e| step_err(format!("WriteKVPath({service}): {e}")))?;
 
-        ok(&format!("KV write: {service}"));
+        tracing::info!("KV write: {service}");
         Ok(ExecutionResult::next())
     }
 }

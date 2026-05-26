@@ -28,7 +28,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::{ok, step};
+
 use crate::workflows::data::UpData;
 
 const HEADSCALE_NS: &str = "vpn";
@@ -55,7 +55,7 @@ impl StepBody for MintVpnPreAuthKeys {
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
-        step("VPN pre-auth keys...");
+        tracing::info!("VPN pre-auth keys...");
 
         // Both sinks already populated, nothing to do.
         let router_secret_ok = router_secret_has_key()
@@ -64,7 +64,7 @@ impl StepBody for MintVpnPreAuthKeys {
         let user_key_ok = user_config_has_key();
 
         if router_secret_ok && user_key_ok {
-            ok("VPN pre-auth keys already present - skipping.");
+            tracing::info!("VPN pre-auth keys already present - skipping.");
             return Ok(ExecutionResult::next());
         }
 
@@ -93,9 +93,9 @@ impl StepBody for MintVpnPreAuthKeys {
             write_router_secret(&key).await.map_err(|e| {
                 wfe_core::WfeError::StepExecution(format!("write router secret: {e}"))
             })?;
-            ok("Minted router pre-auth key -> Secret vpn/subnet-router-authkey");
+            tracing::info!("Minted router pre-auth key -> Secret vpn/subnet-router-authkey");
         } else {
-            ok("Router Secret already present - skipping mint.");
+            tracing::info!("Router Secret already present - skipping mint.");
         }
 
         // User key -> ~/.sunbeam/config.json.
@@ -108,9 +108,9 @@ impl StepBody for MintVpnPreAuthKeys {
                     "Failed to persist user key to config: {e}"
                 ))
             })?;
-            ok("Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
+            tracing::info!("Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
         } else {
-            ok("User vpn-auth-key already present - skipping mint.");
+            tracing::info!("User vpn-auth-key already present - skipping mint.");
         }
 
         Ok(ExecutionResult::next())

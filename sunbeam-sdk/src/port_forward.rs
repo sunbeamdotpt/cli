@@ -6,13 +6,14 @@
 //! mappings and blocks until Ctrl-C.
 
 use crate::error::{Result, SunbeamError};
-use crate::output::{ok, step};
+
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::Api;
 use tokio::net::TcpListener;
 
 /// Serve one or more `(local, remote)` port mappings for the given pod until
 /// the user presses Ctrl-C. All mappings bind to 127.0.0.1.
+#[tracing::instrument]
 pub async fn serve_port_forward(
     namespace: String,
     pod_name: String,
@@ -28,7 +29,7 @@ pub async fn serve_port_forward(
         let listener = TcpListener::bind(("127.0.0.1", local))
             .await
             .map_err(|e| SunbeamError::Other(format!("failed to bind 127.0.0.1:{local}: {e}")))?;
-        ok(&format!("127.0.0.1:{local} -> pod:{remote}"));
+        tracing::info!("127.0.0.1:{local} -> pod:{remote}");
 
         let handle = tokio::spawn(async move {
             loop {
@@ -60,7 +61,7 @@ pub async fn serve_port_forward(
         tasks.push(handle);
     }
 
-    step("Press Ctrl-C to stop.");
+    tracing::info!("Port-forward active: press Ctrl-C to stop.");
     let _ = tokio::signal::ctrl_c().await;
 
     for h in &tasks {

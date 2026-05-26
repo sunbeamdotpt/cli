@@ -4,7 +4,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::down::{INFRA_NAMESPACES, APP_NAMESPACES};
-use crate::output::{ok, step, warn};
+
 use crate::workflows::data::DownData;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -55,14 +55,14 @@ impl StepBody for DiscoverNamespaces {
         to_delete.retain(|ns| existing_names.contains(ns));
 
         if to_delete.is_empty() {
-            ok("No Sunbeam-managed namespaces found — nothing to delete.");
+            tracing::info!("No Sunbeam-managed namespaces found — nothing to delete.");
             return Ok(ExecutionResult::next());
         }
 
-        step(&format!(
+        tracing::info!(
             "Namespaces to delete:\n  {}",
             to_delete.join("\n  ")
-        ));
+        );
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({
@@ -97,13 +97,13 @@ impl StepBody for DeleteNamespaces {
         let dp = kube::api::DeleteParams::background();
 
         for ns in to_delete {
-            step(&format!("Deleting namespace {ns}..."));
+            tracing::info!("Deleting namespace {ns}...");
             match ns_api.delete(ns, &dp).await {
-                Ok(_) => ok(&format!("  {ns} deletion started.")),
+                Ok(_) => tracing::info!("  {ns} deletion started."),
                 Err(kube::Error::Api(ae)) if ae.code == 404 => {
-                    ok(&format!("  {ns} already gone."))
+                    tracing::info!("  {ns} already gone.")
                 }
-                Err(e) => warn(&format!("  Failed to delete {ns}: {e}")),
+                Err(e) => tracing::warn!("  Failed to delete {ns}: {e}"),
             }
         }
 
@@ -137,12 +137,12 @@ impl StepBody for WaitForTermination {
         let ns_api: kube::api::Api<k8s_openapi::api::core::v1::Namespace> =
             kube::api::Api::all(client);
 
-        step("Waiting for namespaces to terminate...");
+        tracing::info!("Waiting for namespaces to terminate...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
 
         loop {
             if std::time::Instant::now() > deadline {
-                warn("Timed out waiting for namespace deletion.");
+                tracing::warn!("Timed out waiting for namespace deletion.");
                 break;
             }
 
@@ -154,7 +154,7 @@ impl StepBody for WaitForTermination {
             }
 
             if remaining.is_empty() {
-                ok("All namespaces deleted.");
+                tracing::info!("All namespaces deleted.");
                 return Ok(ExecutionResult::next());
             }
 
@@ -170,14 +170,14 @@ impl StepBody for WaitForTermination {
         }
 
         if remaining.is_empty() {
-            ok("All namespaces deleted.");
+            tracing::info!("All namespaces deleted.");
             return Ok(ExecutionResult::next());
         }
 
-        warn(&format!(
+        tracing::warn!(
             "Namespaces still terminating: {}",
             remaining.join(", ")
-        ));
+        );
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({
@@ -211,9 +211,9 @@ impl StepBody for ForceDeleteStuckNamespaces {
             kube::api::Api::all(client.clone());
 
         for ns in remaining {
-            step(&format!("Force-deleting stuck namespace {ns}..."));
+            tracing::info!("Force-deleting stuck namespace {ns}...");
             if let Err(e) = crate::down::force_delete_namespace(client.clone(), ns).await {
-                warn(&format!("  Force-delete failed for {ns}: {e}"));
+                tracing::warn!("  Force-delete failed for {ns}: {e}");
             }
         }
 
@@ -228,17 +228,17 @@ impl StepBody for ForceDeleteStuckNamespaces {
                 }
             }
             if next_stuck.is_empty() {
-                ok("All namespaces deleted after force-delete.");
+                tracing::info!("All namespaces deleted after force-delete.");
                 return Ok(ExecutionResult::next());
             }
             still_stuck = next_stuck;
         }
 
         if !still_stuck.is_empty() {
-            warn(&format!(
+            tracing::warn!(
                 "Namespaces still stuck after force-delete: {}",
                 still_stuck.join(", ")
-            ));
+            );
         }
 
         Ok(ExecutionResult::next())
@@ -254,6 +254,7 @@ impl StepBody for ForceDeleteStuckNamespaces {
 pub struct DeleteLimaVm;
 
 /// Run `limactl delete sunbeam --force` directly.
+#[tracing::instrument]
 pub async fn delete_lima_vm() -> Result<(), String> {
     let status = tokio::process::Command::new("limactl")
         .args(["delete", "sunbeam", "--force"])
@@ -275,14 +276,14 @@ impl StepBody for DeleteLimaVm {
             .map_err(|e| step_err(format!("DownData parse: {e}")))?;
 
         if !data.use_lima {
-            ok("--use-lima not set — skipping Lima VM management.");
+            tracing::info!("--use-lima not set — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        step("Deleting Lima VM 'sunbeam'...");
+        tracing::info!("Deleting Lima VM 'sunbeam'...");
         match delete_lima_vm().await {
-            Ok(()) => ok("Lima VM deleted."),
-            Err(e) => warn(&format!("{e}")),
+            Ok(()) => tracing::info!("Lima VM deleted."),
+            Err(e) => tracing::warn!("{e}"),
         }
 
         Ok(ExecutionResult::next())

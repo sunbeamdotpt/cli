@@ -12,7 +12,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::discovery::{WORKSPACE_FILE, find_workspace_root};
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
-use crate::output::{ok, step};
+
 use crate::project::config::ProjectConfig;
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{Graph, sort};
@@ -45,7 +45,7 @@ impl StepBody for BuildProjectImages {
             .unwrap_or(&step_ctx.domain)
             .to_string();
 
-        step("Building project images...");
+        tracing::info!("Building project images...");
 
         // 1. Discover workspace root from current directory.
         let cwd = std::env::current_dir()
@@ -86,7 +86,7 @@ impl StepBody for BuildProjectImages {
         }
 
         if entries.is_empty() {
-            ok("No projects with package targets — skipping image build.");
+            tracing::info!("No projects with package targets — skipping image build.");
             return Ok(ExecutionResult::next());
         }
 
@@ -126,14 +126,14 @@ impl StepBody for BuildProjectImages {
                 let opts = opts.clone();
                 let project_name = project_name.clone();
 
-                step(&format!("Building {project_name}..."));
+                tracing::info!("Building {project_name}...");
                 match crate::project::runner::run(&cfg, &project_root, "package", &opts).await {
-                    Ok(RunOutcome::Ran) => ok(&format!("Built {project_name}")),
+                    Ok(RunOutcome::Ran) => tracing::info!("Built {project_name}"),
                     Ok(RunOutcome::Skipped) => {
-                        ok(&format!("{project_name}: skipped (no package target)"));
+                        tracing::info!("{project_name}: skipped (no package target)");
                     }
                     Err(e) => {
-                        crate::output::warn(&format!("Image build failed for {project_name}: {e}"));
+                        tracing::warn!("Image build failed for {project_name}: {e}");
                         // With strict failures enabled, we propagate the error so
                         // the workflow terminates. Remove this return if you prefer
                         // best-effort builds.
@@ -145,7 +145,7 @@ impl StepBody for BuildProjectImages {
             }
         }
 
-        ok("Project images build pass complete.");
+        tracing::info!("Project images build pass complete.");
         Ok(ExecutionResult::next())
     }
 }

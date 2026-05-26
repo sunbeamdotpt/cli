@@ -5,7 +5,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::output::{ok, warn};
+
 use crate::secrets;
 use crate::workflows::data::VerifyData;
 
@@ -30,6 +30,7 @@ pub struct FindOpenBaoPod;
 #[async_trait::async_trait]
 impl StepBody for FindOpenBaoPod {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("find_openbao_pod");
         let data = load_data(ctx)?;
         let step_ctx = data
             .ctx
@@ -51,7 +52,7 @@ impl StepBody for FindOpenBaoPod {
             .and_then(|p| p.metadata.name.as_deref())
             .ok_or_else(|| step_err("OpenBao pod not found -- run full bring-up first"))?;
 
-        ok(&format!("OpenBao pod: {ob_pod}"));
+        tracing::info!("OpenBao pod: {ob_pod}");
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({ "ob_pod": ob_pod }));
@@ -68,11 +69,12 @@ pub struct GetRootToken;
 #[async_trait::async_trait]
 impl StepBody for GetRootToken {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("get_root_token");
         let root_token = k::kube_get_secret_field("data", "openbao-keys", "root-token")
             .await
             .map_err(|e| step_err(format!("Could not read openbao-keys secret: {e}")))?;
 
-        ok("Root token retrieved.");
+        tracing::info!("Root token retrieved.");
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({ "root_token": root_token }));
@@ -89,6 +91,7 @@ pub struct WriteSentinel;
 #[async_trait::async_trait]
 impl StepBody for WriteSentinel {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("write_sentinel");
         let data = load_data(ctx)?;
         let ob_pod = data
             .ob_pod
@@ -105,7 +108,7 @@ impl StepBody for WriteSentinel {
         let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
 
         let test_value = secrets::rand_token_n(16);
-        ok("Writing test sentinel to OpenBao secret/vso-test...");
+        tracing::info!("Writing test sentinel to OpenBao secret/vso-test...");
 
         let mut kv_data = std::collections::HashMap::new();
         kv_data.insert("test-key".to_string(), test_value.clone());
@@ -128,7 +131,8 @@ pub struct ApplyVaultAuth;
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultAuth {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        ok(&format!("Creating VaultAuth {TEST_NS}/{TEST_NAME}..."));
+        tracing::debug!("apply_vault_auth");
+        tracing::info!("Creating VaultAuth {TEST_NS}/{TEST_NAME}...");
         k::kube_apply(&format!(
             r#"
 apiVersion: secrets.hashicorp.com/v1beta1
@@ -160,9 +164,8 @@ pub struct ApplyVaultStaticSecret;
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultStaticSecret {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        ok(&format!(
-            "Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}..."
-        ));
+        tracing::debug!("apply_vault_static_secret");
+        tracing::info!("Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}...");
         k::kube_apply(&format!(
             r#"
 apiVersion: secrets.hashicorp.com/v1beta1
@@ -198,7 +201,8 @@ pub struct WaitForSync;
 #[async_trait::async_trait]
 impl StepBody for WaitForSync {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        ok("Waiting for VSO to sync (up to 60s)...");
+        tracing::debug!("wait_for_sync");
+        tracing::info!("Waiting for VSO to sync (up to 60s)...");
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut synced = false;
@@ -256,13 +260,14 @@ pub struct CheckSecretValue;
 #[async_trait::async_trait]
 impl StepBody for CheckSecretValue {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("check_secret_value");
         let data = load_data(ctx)?;
         let test_value = data
             .test_value
             .as_deref()
             .ok_or_else(|| step_err("test_value not set"))?;
 
-        ok("Verifying K8s Secret contents...");
+        tracing::info!("Verifying K8s Secret contents...");
 
         let secret = k::kube_get_secret(TEST_NS, TEST_NAME)
             .await
@@ -286,7 +291,7 @@ impl StepBody for CheckSecretValue {
             )));
         }
 
-        ok("Sentinel value matches -- VSO -> OpenBao integration is working.");
+        tracing::info!("Sentinel value matches -- VSO -> OpenBao integration is working.");
         Ok(ExecutionResult::next())
     }
 }
@@ -300,7 +305,8 @@ pub struct Cleanup;
 #[async_trait::async_trait]
 impl StepBody for Cleanup {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        ok("Cleaning up test resources...");
+        tracing::debug!("cleanup");
+        tracing::info!("Cleaning up test resources...");
 
         let _ = secrets::delete_resource(TEST_NS, "vaultstaticsecret", TEST_NAME).await;
         let _ = secrets::delete_resource(TEST_NS, "vaultauth", TEST_NAME).await;
@@ -338,11 +344,12 @@ pub struct PrintResult;
 #[async_trait::async_trait]
 impl StepBody for PrintResult {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        tracing::debug!("print_result");
         let data = load_data(ctx)?;
         if data.synced {
-            ok("VSO E2E verification passed.");
+            tracing::info!("VSO E2E verification passed.");
         } else {
-            warn("VSO verification did not complete successfully.");
+            tracing::warn!("VSO verification did not complete successfully.");
         }
         Ok(ExecutionResult::next())
     }

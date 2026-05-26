@@ -6,7 +6,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::output::step;
+
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -65,7 +65,7 @@ impl StepBody for ApplyManifest {
         let domain = &crate::config::active_context().domain;
         let skip_patterns = build_skip_patterns(config, domain);
 
-        step(&format!("Applying {namespace}..."));
+        tracing::info!("Applying {namespace}...");
 
         let overrides = data
             .get("manifest_overrides")

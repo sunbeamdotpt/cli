@@ -4,7 +4,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
-use crate::output::{ok, step};
+
 use crate::workflows::data::UpData;
 
 fn secrets_dir(context_name: &str) -> std::path::PathBuf {
@@ -30,7 +30,7 @@ impl StepBody for EnsureTLSCert {
 
         let domain = resolve_domain(&data)?;
 
-        step("TLS certificate...");
+        tracing::info!("TLS certificate...");
 
         let ctx_name = data
             .ctx
@@ -48,14 +48,14 @@ impl StepBody for EnsureTLSCert {
             })?;
             let cert_for_domain = cert_pem.contains(&format!("*.{domain}"));
             if cert_for_domain {
-                ok(&format!("Cert exists. Domain: {domain}"));
+                tracing::info!("Cert exists. Domain: {domain}");
                 return Ok(ExecutionResult::next());
             }
-            ok(&format!(
+            tracing::info!(
                 "Existing cert is for a different domain — regenerating for *.{domain}..."
-            ));
+            );
         } else {
-            ok(&format!("Generating wildcard cert for *.{domain}..."));
+            tracing::info!("Generating wildcard cert for *.{domain}...");
         }
         std::fs::create_dir_all(&dir).map_err(|e| {
             wfe_core::WfeError::StepExecution(format!(
@@ -104,7 +104,7 @@ impl StepBody for EnsureTLSCert {
             )?;
         }
 
-        ok(&format!("Cert generated. Domain: {domain}"));
+        tracing::info!("Cert generated. Domain: {domain}");
 
         // Ensure Docker allows pushing to the local registry without cert
         // validation (self-signed wildcard cert).
@@ -157,15 +157,15 @@ fn configure_docker_insecure_registries(domain: &str) {
             std::fs::rename(&tmp, &daemon_path)?;
             Ok(())
         })() {
-            crate::output::warn(&format!(
+            tracing::warn!(
                 "Failed to update Docker daemon.json for insecure registries: {e}\n\
                  You may need to manually add {registries:?} to ~/.docker/daemon.json -> insecure-registries"
-            ));
+            );
         } else {
-            crate::output::ok(&format!(
+            tracing::info!(
                 "Docker insecure-registries updated: {registries:?}. \
                  Restart Docker Desktop for changes to take effect."
-            ));
+            );
         }
     }
 }
@@ -182,7 +182,7 @@ impl StepBody for EnsureTLSSecret {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
-        step("TLS secret...");
+        tracing::info!("TLS secret...");
 
         k::ensure_ns("ingress")
             .await
@@ -268,7 +268,7 @@ impl StepBody for EnsureTLSSecret {
                 ))
             })?;
 
-        ok("Done.");
+        tracing::info!("Done.");
         Ok(ExecutionResult::next())
     }
 }
@@ -293,7 +293,7 @@ impl StepBody for WaitForCertManagerWebhook {
         use kube::api::{Api, ListParams};
         use std::time::{Duration, Instant};
 
-        step("Waiting for cert-manager webhook...");
+        tracing::info!("Waiting for cert-manager webhook...");
 
         let client = k::get_client()
             .await
@@ -360,7 +360,7 @@ impl StepBody for WaitForCertManagerWebhook {
                                     .any(|c| c.type_ == "Available" && c.status == "True")
                             });
                         if available {
-                            ok("cert-manager webhook is ready.");
+                            tracing::info!("cert-manager webhook is ready.");
                             return Ok(ExecutionResult::next());
                         }
                     }

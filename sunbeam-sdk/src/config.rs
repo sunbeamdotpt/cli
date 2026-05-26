@@ -205,11 +205,11 @@ pub fn load_config() -> SunbeamConfig {
             }
             if std::fs::copy(&legacy, &path).is_ok() {
                 let _ = std::fs::remove_file(&legacy);
-                crate::output::ok(&format!(
+                tracing::info!(
                     "Migrated config: {} → {}",
                     legacy.display(),
                     path.display()
-                ));
+                );
             }
         }
     }
@@ -219,17 +219,17 @@ pub fn load_config() -> SunbeamConfig {
     }
     let mut config: SunbeamConfig = match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-            crate::output::warn(&format!(
+            tracing::warn!(
                 "Failed to parse config from {}: {e}",
                 path.display()
-            ));
+            );
             SunbeamConfig::default()
         }),
         Err(e) => {
-            crate::output::warn(&format!(
+            tracing::warn!(
                 "Failed to read config from {}: {e}",
                 path.display()
-            ));
+            );
             SunbeamConfig::default()
         }
     };
@@ -254,10 +254,10 @@ pub fn load_config() -> SunbeamConfig {
         }
         // Persist the migration silently — next read will be clean.
         let _ = save_config_silent(&config);
-        crate::output::warn(&format!(
+        tracing::warn!(
             "migrated legacy `infra_directory`/`acme_email` into context `{ctx_name}`. \
              Per-context keys are now the only source of truth."
-        ));
+        );
     }
 
     config
@@ -284,7 +284,7 @@ fn save_config_inner(config: &SunbeamConfig, verbose: bool) -> Result<()> {
     std::fs::write(&path, content)
         .with_ctx(|| format!("Failed to save config to {}", path.display()))?;
     if verbose {
-        crate::output::ok(&format!("Configuration saved to {}", path.display()));
+        tracing::info!("Configuration saved to {}", path.display());
     }
     Ok(())
 }
@@ -378,9 +378,9 @@ pub fn clear_config() -> Result<()> {
     let path = config_path();
     if path.exists() {
         std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
-        crate::output::ok(&format!("Configuration cleared from {}", path.display()));
+        tracing::info!("Configuration cleared from {}", path.display());
     } else {
-        crate::output::warn("No configuration file found to clear");
+        tracing::warn!("No configuration file found to clear");
     }
     Ok(())
 }

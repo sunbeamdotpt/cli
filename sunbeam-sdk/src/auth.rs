@@ -163,7 +163,7 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
     if let Ok(tokens) = read_cache()
         && !tokens.domain.is_empty()
     {
-        crate::output::ok(&format!("Using cached domain: {}", tokens.domain));
+        tracing::info!("Using cached domain: {}", tokens.domain);
         return Ok(tokens.domain);
     }
 
@@ -478,6 +478,7 @@ async fn wait_for_callback(
 /// Returns the access token string ready for use in Authorization headers.
 /// If no cached token exists or refresh fails, returns an error prompting
 /// the user to run `sunbeam auth login`.
+#[tracing::instrument]
 pub async fn get_token() -> Result<String> {
     let cached = match read_cache() {
         Ok(tokens) => tokens,
@@ -499,7 +500,7 @@ pub async fn get_token() -> Result<String> {
         match refresh_token(&cached).await {
             Ok(new_tokens) => return Ok(new_tokens.access_token),
             Err(e) => {
-                crate::output::warn(&format!("Token refresh failed: {e}"));
+                tracing::warn!("Token refresh failed: {e}");
             }
         }
     }
@@ -512,6 +513,7 @@ pub async fn get_token() -> Result<String> {
 /// Print the current access token as a JSON headers object.
 /// Designed for use as a Claude Code MCP `headersHelper`.
 /// Output: {"Authorization": "Bearer <token>"}
+#[tracing::instrument]
 pub async fn cmd_auth_token() -> Result<()> {
     let token = get_token().await?;
     println!("{{\"Authorization\": \"Bearer {token}\"}}");
@@ -521,16 +523,17 @@ pub async fn cmd_auth_token() -> Result<()> {
 /// Interactive browser-based OAuth2 login.
 /// SSO login — Hydra OIDC authorization code flow with PKCE.
 /// `gitea_redirect`: if Some, the browser callback page auto-redirects to Gitea token page.
+#[tracing::instrument(skip(domain_override, gitea_redirect))]
 pub async fn cmd_auth_sso_login_with_redirect(
     domain_override: Option<&str>,
     gitea_redirect: Option<&str>,
 ) -> Result<()> {
-    crate::output::step("Authenticating with Hydra");
+    tracing::info!("Authenticating with Hydra");
 
     // Resolve domain: explicit flag > cached token domain > config > cluster discovery
     let domain = resolve_domain(domain_override).await?;
 
-    crate::output::ok(&format!("Domain: {domain}"));
+    tracing::info!("Domain: {domain}");
 
     // OIDC discovery
     let discovery = discover_oidc(&domain).await?;
@@ -559,18 +562,18 @@ pub async fn cmd_auth_sso_login_with_redirect(
         state,
     );
 
-    crate::output::ok("Opening browser for login...");
+    tracing::info!("Opening browser for login...");
     println!("\n    {auth_url}\n");
 
     // Try to open the browser
     let _open_result = open_browser(&auth_url);
 
     // Wait for callback
-    crate::output::ok("Waiting for authentication callback...");
+    tracing::info!("Waiting for authentication callback...");
     let callback = wait_for_callback(listener, &state, gitea_redirect).await?;
 
     // Exchange code for tokens
-    crate::output::ok("Exchanging authorization code for tokens...");
+    tracing::info!("Exchanging authorization code for tokens...");
     let token_resp = exchange_code(
         &discovery.token_endpoint,
         &callback.code,
@@ -594,9 +597,9 @@ pub async fn cmd_auth_sso_login_with_redirect(
     // Print success with email if available
     let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
     if let Some(ref email) = email {
-        crate::output::ok(&format!("Logged in as {email}"));
+        tracing::info!("Logged in as {email}");
     } else {
-        crate::output::ok("Logged in successfully");
+        tracing::info!("Logged in successfully");
     }
 
     write_cache(&tokens)?;
@@ -604,19 +607,21 @@ pub async fn cmd_auth_sso_login_with_redirect(
 }
 
 /// SSO login — standalone (no redirect after callback).
+#[tracing::instrument(skip(domain_override))]
 pub async fn cmd_auth_sso_login(domain_override: Option<&str>) -> Result<()> {
     cmd_auth_sso_login_with_redirect(domain_override, None).await
 }
 
 /// Gitea token login — opens the PAT creation page and prompts for the token.
+#[tracing::instrument(skip(domain_override))]
 pub async fn cmd_auth_git_login(domain_override: Option<&str>) -> Result<()> {
-    crate::output::step("Setting up Gitea API access");
+    tracing::info!("Setting up Gitea API access");
 
     let domain = resolve_domain(domain_override).await?;
     let url = format!("https://src.{domain}/user/settings/applications");
 
-    crate::output::ok("Opening Gitea token page in your browser...");
-    crate::output::ok("Create a token with all scopes selected, then paste it below.");
+    tracing::info!("Opening Gitea token page in your browser...");
+    tracing::info!("Create a token with all scopes selected, then paste it below.");
     println!("\n    {url}\n");
 
     let _ = open_browser(&url);
@@ -670,11 +675,12 @@ pub async fn cmd_auth_git_login(domain_override: Option<&str>) -> Result<()> {
     }
     write_cache(&tokens)?;
 
-    crate::output::ok(&format!("Gitea authenticated as {login}"));
+    tracing::info!("Gitea authenticated as {login}");
     Ok(())
 }
 
 /// Combined login — SSO first, then Gitea.
+#[tracing::instrument(skip(domain_override))]
 pub async fn cmd_auth_login_all(domain_override: Option<&str>) -> Result<()> {
     // Resolve domain early so we can build the Gitea redirect URL
     let domain = resolve_domain(domain_override).await?;
@@ -696,18 +702,20 @@ pub fn get_gitea_token() -> Result<String> {
 }
 
 /// Remove cached auth tokens.
+#[tracing::instrument]
 pub async fn cmd_auth_logout() -> Result<()> {
     let path = cache_path();
     if path.exists() {
         std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
-        crate::output::ok("Logged out (cached tokens removed)");
+        tracing::info!("Logged out (cached tokens removed)");
     } else {
-        crate::output::ok("Not logged in (no cached tokens to remove)");
+        tracing::info!("Not logged in (no cached tokens to remove)");
     }
     Ok(())
 }
 
 /// Print current auth status.
+#[tracing::instrument]
 pub async fn cmd_auth_status() -> Result<()> {
     match read_cache() {
         Ok(tokens) => {
@@ -722,23 +730,23 @@ pub async fn cmd_auth_status() -> Result<()> {
                 .unwrap_or_else(|| "unknown".to_string());
 
             if expired {
-                crate::output::ok(&format!(
+                tracing::info!(
                     "Logged in as {identity} (token expired at {})",
                     tokens.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
-                ));
+                );
                 if !tokens.refresh_token.is_empty() {
-                    crate::output::ok("Token can be refreshed automatically on next use");
+                    tracing::info!("Token can be refreshed automatically on next use");
                 }
             } else {
-                crate::output::ok(&format!(
+                tracing::info!(
                     "Logged in as {identity} (token valid until {})",
                     tokens.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
-                ));
+                );
             }
-            crate::output::ok(&format!("Domain: {}", tokens.domain));
+            tracing::info!("Domain: {}", tokens.domain);
         }
         Err(_) => {
-            crate::output::ok("Not logged in. Run `sunbeam auth login` to authenticate.");
+            tracing::info!("Not logged in. Run `sunbeam auth login` to authenticate.");
         }
     }
     Ok(())

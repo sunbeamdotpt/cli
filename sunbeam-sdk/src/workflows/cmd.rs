@@ -40,6 +40,7 @@ pub enum WorkflowAction {
 }
 
 /// Dispatch a `sunbeam workflow <action>` command.
+#[tracing::instrument]
 pub async fn dispatch(context_name: &str, action: WorkflowAction) -> Result<()> {
     if let WorkflowAction::Run { file } = action {
         return run_workflow(&file).await;
@@ -52,6 +53,7 @@ pub async fn dispatch(context_name: &str, action: WorkflowAction) -> Result<()> 
 }
 
 /// Inner dispatch that operates on an already-created host. Testable.
+#[tracing::instrument(skip(h))]
 pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
     match action {
         WorkflowAction::List { status } => list_workflows(h, &status).await,
@@ -63,6 +65,7 @@ pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -
 }
 
 /// List workflow instances.
+#[tracing::instrument(skip(h))]
 pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Result<()> {
     let now = chrono::Utc::now();
     let ids = h
@@ -72,7 +75,7 @@ pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Resu
         .map_err(|e| SunbeamError::Other(format!("query workflows: {e}")))?;
 
     if ids.is_empty() {
-        output::ok("No workflow instances found.");
+        tracing::info!("No workflow instances found.");
         return Ok(());
     }
 
@@ -98,18 +101,19 @@ pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Resu
 }
 
 /// Show status of a single workflow instance.
+#[tracing::instrument(skip(h))]
 pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     match h.get_workflow(id).await {
         Ok(wf) => {
-            output::ok(&format!("Workflow: {}", wf.workflow_definition_id));
-            output::ok(&format!("Status:   {:?}", wf.status));
-            output::ok(&format!("Created:  {}", wf.create_time));
+            tracing::info!("Workflow: {}", wf.workflow_definition_id);
+            tracing::info!("Status:   {:?}", wf.status);
+            tracing::info!("Created:  {}", wf.create_time);
             if let Some(ct) = wf.complete_time {
-                output::ok(&format!("Completed: {ct}"));
+                tracing::info!("Completed: {ct}");
             }
 
             println!();
-            output::step("Execution pointers:");
+            tracing::info!("Execution pointers:");
             let rows: Vec<Vec<String>> = wf
                 .execution_pointers
                 .iter()
@@ -132,7 +136,7 @@ pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()>
             );
         }
         Err(e) => {
-            output::warn(&format!("Workflow instance '{id}' not found: {e}"));
+            tracing::warn!("Workflow instance '{id}' not found: {e}");
         }
     }
 
@@ -140,20 +144,22 @@ pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()>
 }
 
 /// Resume a suspended/failed workflow.
+#[tracing::instrument(skip(h))]
 pub async fn retry_workflow(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     h.resume_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("resume workflow: {e}")))?;
-    output::ok(&format!("Workflow '{id}' resumed."));
+    tracing::info!("Workflow '{id}' resumed.");
     Ok(())
 }
 
 /// Terminate a running workflow.
+#[tracing::instrument(skip(h))]
 pub async fn cancel_workflow(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     h.terminate_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("terminate workflow: {e}")))?;
-    output::ok(&format!("Workflow '{id}' cancelled."));
+    tracing::info!("Workflow '{id}' cancelled.");
     Ok(())
 }
 
