@@ -29,7 +29,7 @@ async fn resolve_service(name: &str) -> Result<(String, String)> {
 }
 
 /// Top-level dispatcher for `sunbeam service <action>`.
-pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Result<()> {
+pub async fn dispatch(action: ServiceAction) -> Result<()> {
     match action {
         ServiceAction::Status { target } => crate::services::cmd_status(target.as_deref()).await,
         ServiceAction::Logs { target, follow } => crate::services::cmd_logs(&target, follow).await,
@@ -37,29 +37,22 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
         ServiceAction::Restart { target } => crate::services::cmd_restart(target.as_deref()).await,
         ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
         ServiceAction::Deploy { target, all } => match target {
-            Some(t) if !all => cmd_deploy(&t, domain, email).await,
-            _ => crate::manifests::cmd_apply(domain, email, "", &[], None).await,
+            Some(t) if !all => cmd_deploy(&t).await,
+            _ => {
+                let opts = crate::manifests::ApplyOptions::default();
+                crate::manifests::apply_manifests(&opts).await?;
+                Ok(())
+            }
         },
         ServiceAction::Apply {
             namespace,
             apply_all,
-            domain: apply_domain,
-            email: apply_email,
             dry_run,
             set,
             disable,
             enable,
+            ..
         } => {
-            let d = if apply_domain.is_empty() {
-                domain.to_string()
-            } else {
-                apply_domain
-            };
-            let e = if apply_email.is_empty() {
-                email.to_string()
-            } else {
-                apply_email
-            };
             let ns = namespace.unwrap_or_default();
             let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
@@ -74,11 +67,17 @@ pub async fn dispatch(action: ServiceAction, domain: &str, email: &str) -> Resul
                 }
             }
 
+            let opts = crate::manifests::ApplyOptions {
+                namespace: ns,
+                dry_run,
+                skip_patterns: Vec::new(),
+                overrides: Some(overrides),
+            };
+            let rendered = crate::manifests::apply_manifests(&opts).await?;
             if dry_run {
-                crate::manifests::cmd_apply_dry_run(&d, &e, &ns, &[], Some(&overrides)).await
-            } else {
-                crate::manifests::cmd_apply(&d, &e, &ns, &[], Some(&overrides)).await
+                print!("{rendered}");
             }
+            Ok(())
         }
         ServiceAction::Seed => {
             crate::output::warn("`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
@@ -262,7 +261,7 @@ async fn run_workflow(
 }
 
 /// Deploy service(s) by name, category, or namespace.
-async fn cmd_deploy(target: &str, domain: &str, email: &str) -> Result<()> {
+async fn cmd_deploy(target: &str) -> Result<()> {
     let reg = get_registry().await?;
     let resolved = reg.resolve(target);
     if resolved.is_empty() {
@@ -277,7 +276,11 @@ async fn cmd_deploy(target: &str, domain: &str, email: &str) -> Result<()> {
 
     for ns in &namespaces {
         step(&format!("Applying manifests for {ns}..."));
-        crate::manifests::cmd_apply(domain, email, ns, &[], None).await?;
+        let opts = crate::manifests::ApplyOptions {
+            namespace: ns.to_string(),
+            ..Default::default()
+        };
+        crate::manifests::apply_manifests(&opts).await?;
     }
 
     for svc in &resolved {
