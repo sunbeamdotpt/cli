@@ -56,6 +56,7 @@ pub struct UpData {
     #[serde(default, rename = "__ctx")]
     /// Ctx.
     pub ctx: Option<StepContext>,
+    #[serde(default)]
     /// Domain.
     pub domain: String,
 

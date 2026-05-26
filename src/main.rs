@@ -12,6 +12,8 @@ async fn main() {
         std::process::exit(1);
     }
 
+    tracing::debug!("sunbeam starting, log_mode = {:?}", cli.log_mode);
+
     match sunbeam_sdk::cli::dispatch(cli).await {
         Ok(()) => {}
         Err(e) => {

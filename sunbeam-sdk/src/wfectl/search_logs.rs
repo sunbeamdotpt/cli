@@ -49,6 +49,7 @@ impl From<StreamFilter> for LogStream {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: SearchLogsArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
     let stream_filter: LogStream = args
         .stream

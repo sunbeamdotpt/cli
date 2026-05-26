@@ -32,7 +32,9 @@ pub struct RunArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: RunArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+    tracing::info!("wfectl run workflow {def_id}", def_id = args.definition_id);
     let data_json = match (args.data_json.as_ref(), args.data.as_ref()) {
         (Some(json), _) => json.clone(),
         (None, Some(path)) => std::fs::read_to_string(path)
