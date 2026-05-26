@@ -72,6 +72,7 @@ impl StepContext {
     }
 
     /// Reconstruct a Kubernetes client from the stored context.
+    #[tracing::instrument]
     pub async fn kube_client(&self) -> Result<kube::Client> {
         crate::kube::get_client().await
     }

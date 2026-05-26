@@ -14,7 +14,9 @@ pub struct CancelArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: CancelArgs, mut client: AuthClient) -> Result<()> {
+    tracing::info!("wfectl cancel workflow {id}", id = args.workflow_id);
     client
         .cancel_workflow(CancelWorkflowRequest {
             workflow_id: args.workflow_id.clone(),

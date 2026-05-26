@@ -12,6 +12,7 @@ use kube::api::{Api, ListParams};
 use std::fmt::Write as _;
 
 /// Fetch a Deployment and render a describe-style summary.
+#[tracing::instrument(skip(client))]
 pub async fn describe_deployment(client: Client, ns: &str, name: &str) -> Result<String> {
     let deploys: Api<Deployment> = Api::namespaced(client.clone(), ns);
     let rss: Api<ReplicaSet> = Api::namespaced(client.clone(), ns);

@@ -16,6 +16,7 @@ pub struct WatchArgs {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: WatchArgs, mut client: AuthClient) -> Result<()> {
     let mut stream = client
         .watch_lifecycle(WatchLifecycleRequest {

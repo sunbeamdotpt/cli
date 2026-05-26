@@ -50,7 +50,9 @@ impl From<StatusFilter> for WorkflowStatus {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(args: ListArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+    tracing::info!("wfectl list workflows");
     let status: WorkflowStatus = args
         .status
         .map(Into::into)

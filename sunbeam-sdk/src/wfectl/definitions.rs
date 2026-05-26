@@ -23,6 +23,7 @@ pub enum DefinitionsCmd {
 }
 
 /// Run.
+#[tracing::instrument]
 pub async fn run(
     args: DefinitionsArgs,
     mut client: AuthClient,

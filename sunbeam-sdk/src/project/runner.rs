@@ -40,12 +40,14 @@ pub struct RunOptions {
 }
 
 /// Run `verb` for the project rooted at `project_root`.
+#[tracing::instrument]
 pub async fn run(
     cfg: &ProjectConfig,
     project_root: &Path,
     verb: &str,
     opts: &RunOptions,
 ) -> Result<RunOutcome> {
+    tracing::info!("project run {verb} {}", cfg.project.name);
     match cfg.target(verb) {
         Target::Skip(_) => Ok(RunOutcome::Skipped),
         Target::Exec(t) => run_exec(verb, project_root, &t, opts).await,
