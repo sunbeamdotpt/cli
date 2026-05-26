@@ -15,4 +15,5 @@ sunbeam-sdk.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+clap.workspace = true
 rustls.workspace = true

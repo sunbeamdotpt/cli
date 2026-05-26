@@ -20,6 +20,10 @@ pub struct Cli {
     #[arg(long)]
     pub email: Option<String>,
 
+    /// Log output mode.
+    #[arg(short, long, value_enum, default_value_t = crate::logging::LogMode::Line, global = true)]
+    pub log_mode: crate::logging::LogMode,
+
     #[command(subcommand)]
     /// Verb.
     pub verb: Option<Verb>,
@@ -977,8 +981,7 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
-pub async fn dispatch() -> Result<()> {
-    let cli = Cli::parse();
+pub async fn dispatch(cli: Cli) -> Result<()> {
 
     // Resolve the active context from config + CLI flags (like kubectl).
     // `--domain` / `--email` are Option<String>: `None` means "don't override",
