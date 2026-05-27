@@ -40,7 +40,7 @@ pub enum WorkflowAction {
 }
 
 /// Dispatch a `sunbeam workflow <action>` command.
-#[tracing::instrument]
+#[tracing::instrument(skip(action), fields(context = context_name))]
 pub async fn dispatch(context_name: &str, action: WorkflowAction) -> Result<()> {
     if let WorkflowAction::Run { file } = action {
         return run_workflow(&file).await;
