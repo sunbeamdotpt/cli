@@ -1,4 +1,9 @@
 //! Awk-friendly per-line log formatter.
+//!
+//! Output format (logrus-style):
+//! ```text
+//! time="2026-05-26T15:42:29.123+01:00" level=INFO msg="message" group=span_name field1=value field2=value
+//! ```
 
 use std::fmt;
 use tracing::{Event, Subscriber};
@@ -31,11 +36,6 @@ where
 }
 
 /// Awk-friendly event formatter.
-///
-/// Output format:
-/// ```text
-/// LEVEL group=span_name field1=value field2=value "message"
-/// ```
 pub struct LineFormat;
 
 impl<S, N> FormatEvent<S, N> for LineFormat
@@ -49,10 +49,29 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let meta = event.metadata();
-        write!(writer, "{} ", meta.level())?;
+        // ── Timestamp ──────────────────────────────────────────────────────────
+        let now = chrono::Local::now();
+        write!(
+            writer,
+            "time=\"{}\" ",
+            now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        )?;
 
-        // Print span context: group=NAME and any span fields.
+        // ── Level ──────────────────────────────────────────────────────────────
+        let meta = event.metadata();
+        write!(writer, "level={} ", meta.level())?;
+
+        // ── Event fields (extract message + other fields) ──────────────────────
+        let mut visitor = crate::logging::event_fmt::FieldVisitor::new();
+        event.record(&mut visitor);
+
+        // Write message as msg="..."
+        if !visitor.message.is_empty() {
+            let sanitized = crate::logging::event_fmt::sanitize_message(&visitor.message);
+            write!(writer, "msg=\"{}\" ", sanitized)?;
+        }
+
+        // ── Span context: group=NAME and span fields ───────────────────────────
         if let Some(scope) = ctx.event_scope() {
             for span in scope {
                 write!(writer, "group={} ", span.name())?;
@@ -67,19 +86,9 @@ where
             }
         }
 
-        // Print event fields explicitly as key=value pairs.
-        let mut visitor = crate::logging::event_fmt::FieldVisitor::new();
-        event.record(&mut visitor);
-
-        // Write non-message fields first.
+        // ── Remaining event fields (excluding message which was already emitted) ─
         for (k, v) in &visitor.fields {
             write!(writer, "{}={} ", k, v)?;
-        }
-
-        // Write message last, always quoted and sanitized.
-        if !visitor.message.is_empty() {
-            let sanitized = crate::logging::event_fmt::sanitize_message(&visitor.message);
-            write!(writer, "\"{}\"", sanitized)?;
         }
 
         writeln!(writer)
