@@ -230,6 +230,42 @@ pub enum Verb {
     },
 }
 
+impl Verb {
+    /// Return a short string identifier for the verb variant (e.g. "up", "version").
+    pub fn as_ref_str(&self) -> &'static str {
+        match self {
+            Verb::Up { .. } => "up",
+            Verb::Down { .. } => "down",
+            Verb::Config { .. } => "config",
+            Verb::User { .. } => "user",
+            Verb::Auth { .. } => "auth",
+            Verb::Pm { .. } => "pm",
+            Verb::Workflow { .. } => "workflow",
+            Verb::Workflows { .. } => "workflows",
+            Verb::Service { .. } => "service",
+            Verb::Vpn { .. } => "vpn",
+            Verb::Bao { .. } => "bao",
+            Verb::Completions { .. } => "completions",
+            Verb::Doctor => "doctor",
+            Verb::VpnDaemon => "vpn-daemon",
+            Verb::Update => "update",
+            Verb::Version => "version",
+            Verb::Project { .. } => "project",
+            Verb::Operations { .. } => "operations",
+            Verb::Wt { .. } => "wt",
+            Verb::Build { .. } => "build",
+            Verb::Test { .. } => "test",
+            Verb::Lint { .. } => "lint",
+            Verb::Fmt { .. } => "fmt",
+            Verb::Package { .. } => "package",
+            Verb::Deploy { .. } => "deploy",
+            Verb::Dev { .. } => "dev",
+            Verb::Clean { .. } => "clean",
+            Verb::Doc { .. } => "doc",
+        }
+    }
+}
+
 /// VPN management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum VpnAction {
@@ -992,9 +1028,11 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
-#[tracing::instrument]
+#[tracing::instrument(skip(cli), fields(verb = tracing::field::Empty))]
 pub async fn dispatch(cli: Cli) -> Result<()> {
-    tracing::debug!("cli dispatch: verb={:?}", cli.verb);
+    let verb_name = cli.verb.as_ref().map(|v| v.as_ref_str());
+    tracing::Span::current().record("verb", &verb_name.unwrap_or("none"));
+    tracing::debug!(msg = "cli dispatch", verb = ?cli.verb);
 
     // Resolve the active context from config + CLI flags (like kubectl).
     // `--domain` / `--email` are Option<String>: `None` means "don't override",
