@@ -12,9 +12,8 @@ use crate::error::{Result, SunbeamError};
 /// Build and start a WorkflowHost with a SQLite database at the given path.
 ///
 /// Lock and queue providers are in-memory (single-process, non-distributed).
-#[tracing::instrument]
 pub async fn create_host_at(db_path: &std::path::Path) -> Result<wfe::WorkflowHost> {
-    tracing::info!("create_host_at");
+    tracing::info!(msg = "Opening workflow database...", path = %db_path.display());
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SunbeamError::Io {
             context: format!("create workflow db dir: {}", parent.display()),
@@ -44,17 +43,15 @@ pub async fn create_host_at(db_path: &std::path::Path) -> Result<wfe::WorkflowHo
 /// Build and start a WorkflowHost configured for the given context.
 ///
 /// The host uses a per-context SQLite database at `~/.sunbeam/{context}/workflows.db`.
-#[tracing::instrument]
 pub async fn create_host(context_name: &str) -> Result<wfe::WorkflowHost> {
-    tracing::info!("create_host");
+    tracing::info!(msg = "Creating workflow host...", context = context_name);
     let db_path = workflow_db_path(context_name);
     create_host_at(&db_path).await
 }
 
 /// Gracefully shut down the host.
-#[tracing::instrument(skip(host))]
 pub async fn shutdown_host(host: wfe::WorkflowHost) {
-    tracing::info!("shutdown_host");
+    tracing::info!(msg = "Shutting down workflow host...");
     host.stop().await;
 }
 

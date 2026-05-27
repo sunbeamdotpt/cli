@@ -1,5 +1,3 @@
-use tracing::Instrument;
-
 #[tokio::main]
 async fn main() {
     rustls::crypto::ring::default_provider()
@@ -9,38 +7,38 @@ async fn main() {
     // Parse CLI early so we can initialize the subscriber with the right mode.
     let cli = <sunbeam_sdk::cli::Cli as clap::Parser>::parse();
 
+    let base_filter = "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,kube_client::client::builder=off,warn";
     let level_override = if cli.quiet {
-        Some("sunbeam=warn,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,warn")
+        Some(format!("sunbeam=warn,{}", &base_filter["sunbeam=info,".len()..]))
     } else {
         match cli.verbose {
             0 => None,
-            1 => Some("sunbeam=debug,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,warn"),
-            _ => Some("sunbeam=trace,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,warn"),
+            1 => Some(format!("sunbeam=debug,{}", &base_filter["sunbeam=info,".len()..])),
+            _ => Some(format!("sunbeam=trace,{}", &base_filter["sunbeam=info,".len()..])),
         }
     };
 
-    if let Err(e) = sunbeam_sdk::logging::init_subscriber(cli.log_mode, level_override) {
+    if let Err(e) = sunbeam_sdk::logging::init_subscriber(cli.log_mode, level_override.as_deref()) {
         eprintln!("Failed to initialize logger: {e}");
         std::process::exit(1);
     }
 
     // Log panics through tracing so they appear in all output modes.
     std::panic::set_hook(Box::new(|info| {
-        tracing::error!("panic: {info}");
+        tracing::error!(msg = "panic", info = %info);
     }));
 
-    tracing::debug!("sunbeam starting, log_mode = {:?}", cli.log_mode);
+    tracing::debug!(msg = "sunbeam starting", log_mode = ?cli.log_mode);
 
-    let root = tracing::info_span!("sunbeam");
-    match sunbeam_sdk::cli::dispatch(cli).instrument(root).await {
+    match sunbeam_sdk::cli::dispatch(cli).await {
         Ok(()) => {}
         Err(e) => {
             let code = e.exit_code();
-            tracing::error!("{e}");
+            tracing::error!(msg = "command failed", err = %e);
 
             let mut source = std::error::Error::source(&e);
             while let Some(cause) = source {
-                tracing::debug!("caused by: {cause}");
+                tracing::debug!(msg = "caused by", err = %cause);
                 source = std::error::Error::source(cause);
             }
 
