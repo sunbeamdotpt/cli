@@ -19,6 +19,16 @@ const SPEC_HASH_ANNOTATION: &str = "sunbeam.pt/spec-hash";
 
 static CONTEXT: OnceLock<String> = OnceLock::new();
 
+/// Global semaphore that limits the number of concurrent manifest applications.
+/// Single-node k3s (especially SQLite-backed) becomes unresponsive when too
+/// many namespaces are applied in parallel. Two permits is conservative but
+/// safe for Lima VMs; production clusters are not harmed by the limit.
+static APPLY_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+fn apply_semaphore() -> &'static tokio::sync::Semaphore {
+    APPLY_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(2))
+}
+
 /// Set the active kubectl context.
 pub fn set_context(ctx: &str) {
     let _ = CONTEXT.set(ctx.to_string());
@@ -145,8 +155,15 @@ fn job_spec_hash(doc_json: &serde_json::Value) -> String {
 ///    applying so the new spec takes effect (Jobs are immutable once created).
 /// 4. After a successful apply, patch the annotation onto the Job so future
 ///    runs can detect whether a re-apply is actually needed.
-#[tracing::instrument]
+#[tracing::instrument(skip(manifest))]
 pub async fn kube_apply(manifest: &str) -> Result<()> {
+    // Throttle concurrent manifest applications to protect single-node
+    // k3s from being overwhelmed (especially SQLite-backed control planes).
+    let _permit = apply_semaphore()
+        .acquire()
+        .await
+        .expect("apply semaphore never closed");
+
     let client = get_client().await?;
     let ssapply = PatchParams::apply("sunbeam").force();
 
@@ -169,7 +186,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
     let mut disc = None;
     let mut last_err = None;
-    for attempt in 1..=5 {
+    for attempt in 1..=20 {
         let d = discovery::Discovery::new(client.clone())
             .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>());
         match d.run().await {
@@ -178,9 +195,12 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
                 break;
             }
             Err(e) => {
+                tracing::warn!("API discovery attempt {attempt} failed: {e}");
                 last_err = Some(e);
-                if attempt < 5 {
-                    tokio::time::sleep(std::time::Duration::from_millis(200 * attempt)).await;
+                if attempt < 20 {
+                    // Exponential backoff capped at 10 s — total wait ~130 s.
+                    let backoff = std::cmp::min(1u64 << (attempt - 1), 10);
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                 }
             }
         }
@@ -189,7 +209,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         Some(d) => d,
         None => {
             return Err(SunbeamError::kube(format!(
-                "API discovery failed after 5 attempts: {}",
+                "API discovery failed after 20 attempts: {}",
                 last_err.unwrap()
             )));
         }
@@ -743,11 +763,17 @@ pub async fn kube_exec_with_stdin(
         .await
         .with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"))?;
 
-    // Write stdin data if provided
+    // Write stdin data if provided.  Chunked writes avoid websocket frame
+    // size limits that can trigger "broken pipe" on large stdin payloads.
     if let Some(data) = stdin_data {
         if let Some(mut stdin_writer) = attached.stdin() {
             use tokio::io::AsyncWriteExt;
-            stdin_writer.write_all(data).await?;
+            const CHUNK_SIZE: usize = 64 * 1024;
+            for chunk in data.chunks(CHUNK_SIZE) {
+                stdin_writer.write_all(chunk).await?;
+                stdin_writer.flush().await?;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
             stdin_writer.shutdown().await.ok();
         }
     }

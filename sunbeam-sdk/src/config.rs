@@ -317,7 +317,7 @@ pub fn resolve_context(
             // Synthesize defaults for well-known names
             match context_name.as_str() {
                 "local" => Context {
-                    kube_context: "sunbeam".to_string(),
+                    kube_context: crate::constants::LIMA_KUBE_CONTEXT.to_string(),
                     ..Default::default()
                 },
                 _ => Default::default(),

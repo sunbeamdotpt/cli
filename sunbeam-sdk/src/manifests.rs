@@ -62,6 +62,11 @@ pub struct ApplyOptions {
     pub skip_patterns: Vec<String>,
     /// Runtime manifest overrides (--set, --disable, --enable).
     pub overrides: Option<crate::manifest_params::Overrides>,
+    /// Domain override. When present, this replaces the active context's
+    /// domain for manifest generation. Used when a workflow step (e.g.
+    /// EnsureCilium) has discovered a live domain that differs from the
+    /// statically-configured one.
+    pub domain: Option<String>,
 }
 
 /// Discover available service namespaces by scanning `<infra_dir>/base/`
@@ -110,7 +115,11 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
 #[tracing::instrument(skip(opts))]
 pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     let ctx = crate::config::active_context();
-    let resolved_domain = &ctx.domain;
+    let resolved_domain = opts
+        .domain
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&ctx.domain);
     let email = &ctx.acme_email;
     if resolved_domain.is_empty() {
         bail!("domain not set — run `sunbeam config set --domain <domain>` first");
@@ -1052,6 +1061,7 @@ spec:
         assert!(!opts.dry_run);
         assert!(opts.skip_patterns.is_empty());
         assert!(opts.overrides.is_none());
+        assert!(opts.domain.is_none());
     }
 
     #[test]
@@ -1067,6 +1077,7 @@ spec:
             dry_run: true,
             skip_patterns: vec!["scaleway-certmanager-webhook".to_string()],
             overrides: Some(overrides),
+            domain: None,
         };
         assert_eq!(opts.namespace, "ory");
         assert!(opts.dry_run);

@@ -78,6 +78,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
                 dry_run,
                 skip_patterns: Vec::new(),
                 overrides: Some(overrides),
+                domain: None,
             };
             let rendered = crate::manifests::apply_manifests(&opts).await?;
             if dry_run {
