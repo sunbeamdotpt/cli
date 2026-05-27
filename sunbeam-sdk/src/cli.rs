@@ -66,6 +66,10 @@ pub enum Verb {
         /// Use Lima VM for the cluster (local k3s via limactl).
         #[arg(long)]
         use_lima: bool,
+        /// Run in serial mode: longer delays between namespace applies and
+        /// more conservative resource usage for tiny single-node clusters.
+        #[arg(long)]
+        serial: bool,
     },
 
     /// Full cluster tear-down.
@@ -1176,6 +1180,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             show_params,
             graph,
             use_lima,
+            serial,
         }) => {
             if graph {
                 let def = crate::workflows::up::definition::build();
@@ -1202,7 +1207,34 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 return Ok(());
             }
 
-            let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+            let mut overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+
+            if use_lima {
+                tracing::info!("Applying local-dev resource overrides for Lima VM...");
+                let local_dev_patches = [
+                    // PVC size overrides
+                    ("Cluster/data/postgres", "spec/storage/size", "10Gi"),
+                    ("PersistentVolumeClaim/data/opensearch-data", "spec/resources/requests/storage", "10Gi"),
+                    ("StatefulSet/storage/seaweedfs-volume", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
+                    ("PersistentVolumeClaim/matrix/tuwunel-data", "spec/resources/requests/storage", "10Gi"),
+                    ("StatefulSet/monitoring/loki", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
+                    ("StatefulSet/monitoring/tempo", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
+                    ("Prometheus/monitoring/kube-prometheus-stack-prometheus", "spec/storage/volumeClaimTemplate/spec/resources/requests/storage", "10Gi"),
+                    // CPU request overrides — Lima VM has 6 cores, reduce heavy hitters
+                    ("Deployment/build/buildkitd", "spec/template/spec/containers/0/resources/requests/cpu", "100m"),
+                    ("Deployment/data/opensearch", "spec/template/spec/containers/0/resources/requests/cpu", "250m"),
+                    ("Deployment/media/livekit-server", "spec/template/spec/containers/0/resources/requests/cpu", "250m"),
+                    ("Deployment/ingress/pingora", "spec/template/spec/containers/0/resources/requests/cpu", "100m"),
+                    ("Deployment/data/searxng", "spec/template/spec/containers/0/resources/requests/cpu", "50m"),
+                ];
+                for (resource, field_path, value) in local_dev_patches {
+                    overrides.items.push(crate::manifest_params::Override::Set {
+                        resource: resource.to_string(),
+                        field_path: field_path.to_string(),
+                        value: value.to_string(),
+                    });
+                }
+            }
 
             tracing::info!("Bringing up cluster (workflow engine)...");
 
@@ -1223,6 +1255,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 "__ctx": step_ctx,
                 "skip_cilium": skip_cilium,
                 "use_lima": use_lima,
+                "serial_mode": serial,
+                "skip_ory": use_lima,
+                "lima_skip_namespaces": if use_lima {
+                    vec!["ory".to_string(), "monitoring".to_string(), "media".to_string(), "devtools".to_string(), "storage".to_string(), "stalwart".to_string(), "vpn".to_string(), "matrix".to_string(), "press".to_string(), "wfe".to_string(), "oci".to_string(), "ingress".to_string()]
+                } else {
+                    Vec::<String>::new()
+                },
             });
             if !overrides.items.is_empty() {
                 initial_data["manifest_overrides"] =
@@ -1588,6 +1627,15 @@ mod tests {
         match cli.verb {
             Some(Verb::Up { use_lima, .. }) => assert!(use_lima),
             _ => panic!("expected Up with --use-lima"),
+        }
+    }
+
+    #[test]
+    fn test_up_serial_flag() {
+        let cli = parse(&["sunbeam", "up", "--serial"]);
+        match cli.verb {
+            Some(Verb::Up { serial, .. }) => assert!(serial),
+            _ => panic!("expected Up with --serial"),
         }
     }
 

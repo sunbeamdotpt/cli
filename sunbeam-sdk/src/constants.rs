@@ -1,5 +1,8 @@
 //! Shared constants used across multiple modules.
 
+/// kubectl context name used for the Sunbeam Lima VM.
+pub const LIMA_KUBE_CONTEXT: &str = "lima-sunbeam";
+
 /// Deprecated: prefer `registry::discover()` → `ServiceRegistry::namespaces()`.
 pub const MANAGED_NS: &[&str] = &[
     "data",

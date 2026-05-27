@@ -7,10 +7,8 @@ pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) 
     use k8s_openapi::api::apps::v1::Deployment;
     use std::time::{Duration, Instant};
 
-    let client = crate::kube::get_client().await?;
-    let api: kube::api::Api<Deployment> = kube::api::Api::namespaced(client.clone(), ns);
-
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut consecutive_transient_errors = 0;
 
     loop {
         if Instant::now() > deadline {
@@ -19,20 +17,55 @@ pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) 
             )));
         }
 
-        if let Some(dep) = api.get_opt(deployment).await?
-            && let Some(status) = &dep.status
-            && let Some(conditions) = &status.conditions
-        {
-            let available = conditions
-                .iter()
-                .any(|c| c.type_ == "Available" && c.status == "True");
-            if available {
-                return Ok(());
+        match try_rollout_check(ns, deployment).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                consecutive_transient_errors = 0;
+            }
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                let is_transient = msg.contains("sendrequest")
+                    || msg.contains("connection refused")
+                    || msg.contains("connect")
+                    || msg.contains("timeout")
+                    || msg.contains("reset by peer")
+                    || msg.contains("broken pipe");
+                if !is_transient {
+                    return Err(e);
+                }
+                consecutive_transient_errors += 1;
+                if consecutive_transient_errors >= 10 {
+                    return Err(SunbeamError::kube(format!(
+                        "Too many consecutive transient errors waiting for {ns}/{deployment}: {e}"
+                    )));
+                }
+                tracing::warn!(
+                    "Transient error waiting for {ns}/{deployment} ({consecutive_transient_errors}/10): {e}, retrying in 3s..."
+                );
             }
         }
 
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+}
+
+async fn try_rollout_check(ns: &str, deployment: &str) -> Result<bool> {
+    use k8s_openapi::api::apps::v1::Deployment;
+
+    let client = crate::kube::get_client().await?;
+    let api: kube::api::Api<Deployment> = kube::api::Api::namespaced(client.clone(), ns);
+
+    if let Some(dep) = api.get_opt(deployment).await?
+        && let Some(status) = &dep.status
+        && let Some(conditions) = &status.conditions
+    {
+        let available = conditions
+            .iter()
+            .any(|c| c.type_ == "Available" && c.status == "True");
+        return Ok(available);
+    }
+
+    Ok(false)
 }
 
 
