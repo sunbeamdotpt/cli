@@ -1,6 +1,5 @@
 //! Shared event formatting utilities.
 
-use std::fmt::Write;
 use tracing::field::{Field, Visit};
 
 /// Visitor that extracts the message and remaining fields into strings.

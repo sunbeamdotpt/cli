@@ -48,11 +48,11 @@ impl StepBody for EnsureLimaVm {
         };
 
         if !data.use_lima {
-            tracing::info!("--use-lima not set — skipping Lima VM management.");
+            tracing::info!(msg = "--use-lima not set — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!("Ensuring Lima VM 'sunbeam'...");
+        tracing::info!(msg = "Ensuring Lima VM 'sunbeam'...");
 
         // Verify limactl is available
         let limactl_check = tokio::process::Command::new("limactl")
@@ -69,36 +69,54 @@ impl StepBody for EnsureLimaVm {
 
         match status.as_deref() {
             None | Some("") | Some("None") => {
-                tracing::info!("Creating Lima VM 'sunbeam'...");
+                tracing::info!(msg = "Creating Lima VM 'sunbeam'...");
                 create_lima_vm().await.map_err(step_err)?;
             }
             Some("Running") => {
-                tracing::info!("Lima VM 'sunbeam' is already running.");
+                tracing::info!(msg = "Lima VM 'sunbeam' is already running.");
             }
             Some(st) => {
-                tracing::info!("Lima VM 'sunbeam' is {st} — starting...");
+                tracing::info!(msg = "Lima VM 'sunbeam' is stopped — starting...", status = st);
                 start_lima_vm().await.map_err(step_err)?;
             }
         }
 
         // Wait for VM to report Running
         let vm_deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut attempt = 0;
         loop {
+            attempt += 1;
             if std::time::Instant::now() > vm_deadline {
-                return Err(step_err("Timed out waiting for Lima VM to start"));
+                return Err(step_err("Timed out waiting for Lima VM 'sunbeam' to reach Running status (5 min). Try: limactl list sunbeam"));
             }
             match lima_vm_status().await.as_deref() {
-                Some("Running") => break,
+                Some("Running") => {
+                    tracing::info!(msg = "Lima VM 'sunbeam' is running.", attempt = attempt);
+                    break;
+                }
                 Some(st) => {
-                    tracing::info!("Waiting for Lima VM (status: {st})...");
+                    if attempt % 6 == 0 {
+                        tracing::info!(
+                            msg = "Still waiting for Lima VM...",
+                            status = st,
+                            attempt = attempt,
+                            elapsed_secs = attempt * 5,
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 None => {
+                    if attempt % 6 == 0 {
+                        tracing::info!(
+                            msg = "Still waiting for Lima VM (no status yet)...",
+                            attempt = attempt,
+                            elapsed_secs = attempt * 5,
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
         }
-        tracing::info!("Lima VM 'sunbeam' is running.");
 
         // Paths for kubeconfig merging (used below).
         let lima_kc = dirs::home_dir()
@@ -110,13 +128,16 @@ impl StepBody for EnsureLimaVm {
 
         // Wait for k3s kubeconfig to be copied out by Lima, then verify the
         // cluster API is reachable using the Rust k8s client (no shelling out).
-        tracing::info!("Waiting for k3s to be ready...");
+        tracing::info!(msg = "Waiting for k3s API to be reachable...");
         let k3s_deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut k3s_ready = false;
+        let mut k3s_attempt = 0;
         loop {
+            k3s_attempt += 1;
             if std::time::Instant::now() > k3s_deadline {
                 return Err(step_err(
-                    "Timed out waiting for k3s API to become reachable",
+                    "Timed out waiting for k3s API to become reachable (5 min).\n\
+                     Try: limactl shell sunbeam -- sudo systemctl status k3s",
                 ));
             }
 
@@ -126,41 +147,69 @@ impl StepBody for EnsureLimaVm {
                 match load_kubeconfig_and_probe(&lima_kc).await {
                     Ok(true) => {
                         k3s_ready = true;
+                        tracing::info!(
+                            msg = "k3s API is reachable.",
+                            attempt = k3s_attempt,
+                        );
                         break;
                     }
                     Ok(false) => {
                         // kubeconfig exists but API not yet responding
+                        if k3s_attempt % 6 == 0 {
+                            tracing::info!(
+                                msg = "k3s kubeconfig present but API not responding yet...",
+                                attempt = k3s_attempt,
+                                elapsed_secs = k3s_attempt * 5,
+                            );
+                        }
                     }
                     Err(e) => {
-                        tracing::info!("k3s probe error: {e}");
+                        tracing::info!(
+                            msg = "k3s probe error (retrying)...",
+                            attempt = k3s_attempt,
+                            err = %e,
+                        );
                     }
                 }
+            } else if k3s_attempt % 6 == 0 {
+                tracing::info!(
+                    msg = "Waiting for Lima to copy k3s kubeconfig...",
+                    attempt = k3s_attempt,
+                    elapsed_secs = k3s_attempt * 5,
+                    path = %lima_kc.display(),
+                );
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
-        tracing::info!("k3s API is reachable.");
 
         if lima_kc.exists() {
-            tracing::info!("Updating host kubeconfig from Lima VM...");
+            tracing::info!(msg = "Updating host kubeconfig from Lima VM...");
             match merge_kubeconfigs(&lima_kc, &host_kc).await {
                 Ok(merged_yaml) => {
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     if let Err(e) = std::fs::write(&host_kc, merged_yaml) {
-                        tracing::warn!("Failed to write host kubeconfig: {e}");
+                        tracing::warn!(
+                            msg = "Failed to write host kubeconfig.",
+                            path = %host_kc.display(),
+                            err = %e,
+                        );
                     } else {
                         #[cfg(unix)]
                         let _ = std::fs::set_permissions(
                             &host_kc,
                             std::fs::Permissions::from_mode(0o600),
                         );
-                        tracing::info!("Host kubeconfig updated.");
+                        tracing::info!(msg = "Host kubeconfig updated.", path = %host_kc.display());
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Kubeconfig merge failed: {e}. Using Lima kubeconfig directly.");
+                    tracing::warn!(
+                        msg = "Kubeconfig merge failed — using Lima kubeconfig directly.",
+                        err = %e,
+                    );
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -246,7 +295,7 @@ async fn load_kubeconfig_and_probe(path: &std::path::Path) -> Result<bool, Strin
     let nodes: kube::Api<k8s_openapi::api::core::v1::Node> = kube::Api::all(client);
     match nodes.list(&kube::api::ListParams::default()).await {
         Ok(list) => Ok(!list.items.is_empty()),
-        Err(_) => Ok(false),
+        Err(e) => Err(format!("k3s API node list failed: {e}")),
     }
 }
 

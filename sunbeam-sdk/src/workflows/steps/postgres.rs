@@ -90,7 +90,7 @@ impl StepBody for WaitForPostgres {
         };
         let cnpg_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), "data", &ar);
 
-        for _ in 0..60 {
+        for attempt in 0..60 {
             if let Ok(cluster) = cnpg_api.get("postgres").await {
                 let phase = cluster
                     .data
@@ -108,10 +108,21 @@ impl StepBody for WaitForPostgres {
                             .and_then(|p| p.metadata.name.as_deref())
                     {
                         pg_pod = name.to_string();
-                        tracing::info!("Postgres ready ({pg_pod}).");
+                        tracing::info!(
+                            msg = "Postgres cluster ready.",
+                            pod = %pg_pod,
+                            attempt = attempt + 1,
+                        );
                         break;
                     }
                 }
+            }
+            if attempt % 6 == 0 && attempt > 0 {
+                tracing::info!(
+                    msg = "Still waiting for Postgres cluster...",
+                    attempt = attempt + 1,
+                    elapsed_secs = (attempt + 1) * 5,
+                );
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }

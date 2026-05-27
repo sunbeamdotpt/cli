@@ -8,7 +8,6 @@
 use crate::error::Result;
 use clap::ValueEnum;
 use std::io::IsTerminal;
-use tracing::Subscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -30,6 +29,15 @@ pub enum LogMode {
     Threaded,
 }
 
+/// Default EnvFilter directive string.
+///
+/// - `sunbeam=info` — our code at INFO and above.
+/// - `tonic=off,hyper=off,h2=off,tower=off,reqwest=off` — silence noisy HTTP libs.
+/// - `kube_client::client::tls=off` — silence TLS noise.
+/// - `kube_client::client::builder=off` — silence tower_http TraceLayer retry spam.
+/// - `warn` at the end — everything else at WARN and above.
+const DEFAULT_FILTER: &str = "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,kube_client::client::builder=off,warn";
+
 /// Initialize the global tracing subscriber for the given mode.
 ///
 /// Must be called once before any spans or events are emitted.
@@ -39,10 +47,7 @@ pub enum LogMode {
 pub fn init_subscriber(mode: LogMode, level_override: Option<&str>) -> Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
-            let filter = level_override.unwrap_or(
-                "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,warn",
-            );
-            tracing_subscriber::EnvFilter::new(filter)
+            tracing_subscriber::EnvFilter::new(level_override.unwrap_or(DEFAULT_FILTER))
         });
 
     match mode {
@@ -119,6 +124,22 @@ mod tests {
     }
 
     #[test]
+    fn line_format_includes_timestamp() {
+        let writer = TestWriter::default();
+        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("hello world");
+        });
+        let output = writer.get_string();
+        assert!(
+            output.starts_with("time=\""),
+            "expected time= prefix, got: {output}"
+        );
+        // Should contain RFC3339-ish timestamp with timezone offset.
+        assert!(output.contains("T"), "expected ISO8601 date, got: {output}");
+    }
+
+    #[test]
     fn line_format_includes_level() {
         let writer = TestWriter::default();
         let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
@@ -126,7 +147,7 @@ mod tests {
             tracing::info!("hello world");
         });
         let output = writer.get_string();
-        assert!(output.starts_with("INFO "), "expected INFO level, got: {output}");
+        assert!(output.contains("level=INFO"), "expected level=INFO, got: {output}");
     }
 
     #[test]
@@ -137,7 +158,7 @@ mod tests {
             tracing::info!("hello world");
         });
         let output = writer.get_string();
-        assert!(output.contains("\"hello world\""), "expected quoted message, got: {output}");
+        assert!(output.contains("msg=\"hello world\""), "expected msg=\"hello world\", got: {output}");
     }
 
     #[test]
@@ -162,12 +183,12 @@ mod tests {
             tracing::info!(count = 17, "Found services");
         });
         let output = writer.get_string();
-        // Event fields should appear before the quoted message.
-        let msg_idx = output.find("\"Found services\"").expect("message not found");
+        // Event fields should appear after the message in the new format.
+        let msg_idx = output.find("msg=\"Found services\"").expect("message not found");
         let count_idx = output.find("count=17").expect("count field not found");
         assert!(
-            count_idx < msg_idx,
-            "event fields should precede message, got: {output}"
+            count_idx > msg_idx,
+            "event fields should follow message, got: {output}"
         );
     }
 
@@ -214,6 +235,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(line).expect("invalid JSON");
         assert_eq!(parsed["level"], "INFO");
         assert_eq!(parsed["fields"]["message"], "Applying manifests...");
+        assert!(parsed.get("timestamp").is_some() || parsed.get("time").is_some(), "expected timestamp in JSON output");
     }
 
     #[test]
