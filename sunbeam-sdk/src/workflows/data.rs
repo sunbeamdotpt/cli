@@ -26,6 +26,10 @@ pub struct SeedData {
     /// Skip seed.
     #[serde(default)]
     pub skip_seed: bool,
+    /// Skip Ory (Hydra/Kratos/Keto) namespace — used on Lima VMs where
+    /// the full identity stack overwhelms single-node k3s.
+    #[serde(default)]
+    pub skip_ory: bool,
 
     // -- Phase 2: KV seeding --
     /// Accumulated credential values keyed by "path/field".
@@ -88,6 +92,17 @@ pub struct UpData {
     /// Use Lima VM for the cluster (local k3s via limactl).
     #[serde(default)]
     pub use_lima: bool,
+    /// Skip Ory (Hydra/Kratos/Keto) namespace — used on Lima VMs where
+    /// the full identity stack overwhelms single-node k3s.
+    #[serde(default)]
+    pub skip_ory: bool,
+    /// Namespaces to skip when running on Lima (to reduce resource pressure).
+    #[serde(default)]
+    pub lima_skip_namespaces: Vec<String>,
+    /// Run in serial mode: longer delays and more conservative resource usage
+    /// for tiny single-node clusters.
+    #[serde(default)]
+    pub serial_mode: bool,
 }
 
 /// Workflow data for the `verify` workflow.
@@ -182,6 +197,7 @@ mod tests {
             initialized: Some(true),
             sealed: Some(false),
             skip_seed: false,
+            skip_ory: false,
             creds,
             dirty_paths: vec!["hydra".to_string()],
             pg_pod: Some("postgres-1".to_string()),
@@ -267,6 +283,9 @@ mod tests {
             pg_pod: Some("postgres-1".to_string()),
             skip_cilium: false,
             use_lima: false,
+            skip_ory: false,
+            lima_skip_namespaces: vec![],
+            serial_mode: false,
         };
         let json = serde_json::to_value(&d).unwrap();
         let back: UpData = serde_json::from_value(json).unwrap();

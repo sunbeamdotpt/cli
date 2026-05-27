@@ -161,7 +161,18 @@ pub struct EnsureSeaweedFSBuckets;
 
 #[async_trait::async_trait]
 impl StepBody for EnsureSeaweedFSBuckets {
-    async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+    async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let lima_skip: Vec<String> = ctx
+            .workflow
+            .data
+            .get("lima_skip_namespaces")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if lima_skip.contains(&"storage".to_string()) {
+            tracing::info!("Skipping SeaweedFS bucket setup (Lima VM)");
+            return Ok(ExecutionResult::next());
+        }
+
         tracing::info!(msg = "Checking SeaweedFS buckets...");
 
         // Wait for the seaweedfs master pod (up to 3 min)

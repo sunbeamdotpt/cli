@@ -55,6 +55,17 @@ impl StepBody for MintVpnPreAuthKeys {
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
+        let lima_skip: Vec<String> = ctx
+            .workflow
+            .data
+            .get("lima_skip_namespaces")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if lima_skip.contains(&HEADSCALE_NS.to_string()) {
+            tracing::info!("Skipping VPN pre-auth keys (Lima VM)");
+            return Ok(ExecutionResult::next());
+        }
+
         tracing::info!("VPN pre-auth keys...");
 
         // Both sinks already populated, nothing to do.
