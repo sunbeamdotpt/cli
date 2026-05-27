@@ -290,10 +290,10 @@ impl StepBody for WaitForCertManagerWebhook {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         use k8s_openapi::api::apps::v1::Deployment;
         use k8s_openapi::kube_aggregator::pkg::apis::apiregistration::v1::APIService;
-        use kube::api::{Api, ListParams};
+        use kube::api::Api;
         use std::time::{Duration, Instant};
 
-        tracing::info!("Waiting for cert-manager webhook...");
+        tracing::info!(msg = "Waiting for cert-manager webhook...");
 
         let client = k::get_client()
             .await
@@ -308,14 +308,17 @@ impl StepBody for WaitForCertManagerWebhook {
             "cert-manager-cainjector",
         ];
 
+        let mut attempt = 0;
         loop {
+            attempt += 1;
             if Instant::now() > deadline {
                 return Err(wfe_core::WfeError::StepExecution(
-                    "Timed out waiting for cert-manager webhook to be ready".into(),
+                    "Timed out waiting for cert-manager webhook (2 min). Check: kubectl get pods -n cert-manager".into(),
                 ));
             }
 
             let mut all_ready = true;
+            let mut not_ready = Vec::new();
 
             for name in deployments {
                 match deploy_api.get_opt(name).await {
@@ -331,12 +334,12 @@ impl StepBody for WaitForCertManagerWebhook {
                             });
                         if !ready {
                             all_ready = false;
-                            break;
+                            not_ready.push(*name);
                         }
                     }
                     Ok(None) => {
                         all_ready = false;
-                        break;
+                        not_ready.push(*name);
                     }
                     Err(e) => {
                         return Err(wfe_core::WfeError::StepExecution(format!(
@@ -360,7 +363,7 @@ impl StepBody for WaitForCertManagerWebhook {
                                     .any(|c| c.type_ == "Available" && c.status == "True")
                             });
                         if available {
-                            tracing::info!("cert-manager webhook is ready.");
+                            tracing::info!(msg = "cert-manager webhook is ready.");
                             return Ok(ExecutionResult::next());
                         }
                     }
@@ -371,6 +374,14 @@ impl StepBody for WaitForCertManagerWebhook {
                         )));
                     }
                 }
+            }
+
+            if attempt % 10 == 0 {
+                tracing::info!(
+                    msg = "Still waiting for cert-manager webhook...",
+                    attempt = attempt,
+                    not_ready = ?not_ready,
+                );
             }
 
             tokio::time::sleep(Duration::from_secs(3)).await;

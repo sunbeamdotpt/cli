@@ -175,10 +175,22 @@ impl StepBody for InitOrUnsealOpenBao {
                     status = Some(s);
                     break;
                 }
-                Err(_) if attempt < 29 => {
+                Err(e) if attempt < 29 => {
+                    if attempt % 5 == 0 {
+                        tracing::info!(
+                            msg = "Waiting for OpenBao API to respond...",
+                            attempt = attempt + 1,
+                            err = %e,
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
-                Err(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        msg = "OpenBao API did not respond after 30 attempts.",
+                        err = %e,
+                    );
+                }
             }
         }
 
@@ -252,7 +264,7 @@ impl StepBody for InitOrUnsealOpenBao {
                 let lp = kube::api::ListParams::default()
                     .labels("app.kubernetes.io/name=openbao,component=server");
                 let mut new_pod = String::new();
-                for _ in 0..60 {
+                for attempt in 0..60 {
                     if let Ok(pod_list) = pods.list(&lp).await {
                         if let Some(pod) = pod_list.items.first() {
                             if let Some(name) = pod.metadata.name.as_deref() {
@@ -261,12 +273,23 @@ impl StepBody for InitOrUnsealOpenBao {
                                 {
                                     if phase == "Running" {
                                         new_pod = name.to_string();
-                                        tracing::info!("OpenBao restarted ({new_pod}).");
+                                        tracing::info!(
+                                            msg = "OpenBao restarted.",
+                                            pod = %new_pod,
+                                            attempt = attempt + 1,
+                                        );
                                         break;
                                     }
                                 }
                             }
                         }
+                    }
+                    if attempt % 6 == 0 && attempt > 0 {
+                        tracing::info!(
+                            msg = "Still waiting for OpenBao pod to restart...",
+                            attempt = attempt + 1,
+                            elapsed_secs = (attempt + 1) * 5,
+                        );
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }

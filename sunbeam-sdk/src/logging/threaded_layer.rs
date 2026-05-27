@@ -40,6 +40,12 @@ impl ThreadedLayer {
     }
 }
 
+/// Format a timestamp prefix for threaded-mode event lines.
+fn fmt_time() -> String {
+    let now = chrono::Local::now();
+    now.format("%H:%M:%S%.3f").to_string()
+}
+
 impl<S> Layer<S> for ThreadedLayer
 where
     S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -76,19 +82,20 @@ where
             return;
         };
 
-        // Format the event into a short line.
+        // Format the event into a short line with a timestamp prefix.
         let mut visitor = crate::logging::event_fmt::FieldVisitor::new();
         event.record(&mut visitor);
 
+        let ts = fmt_time();
         let line = if visitor.fields.is_empty() {
-            visitor.message
+            format!("{ts}  {}", visitor.message)
         } else {
             let fields: Vec<String> = visitor
                 .fields
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect();
-            format!("{}  {}", visitor.message, fields.join(" "))
+            format!("{ts}  {}  {}", visitor.message, fields.join(" "))
         };
 
         if !line.is_empty() {
