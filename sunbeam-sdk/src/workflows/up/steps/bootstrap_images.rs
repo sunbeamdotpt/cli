@@ -167,7 +167,7 @@ async fn spawn_ctr_pod(node_name: &str, pod_name: &str) -> wfe_core::Result<()> 
         .map_err(|e| step_err(format!("Failed to create ctr pod: {e}")))?;
 
     // Wait for Running (up to 60s).
-    for _ in 0..60 {
+    for attempt in 0..60 {
         tokio::time::sleep(Duration::from_secs(1)).await;
         match pods.get(pod_name).await {
             Ok(p) => {
@@ -175,23 +175,37 @@ async fn spawn_ctr_pod(node_name: &str, pod_name: &str) -> wfe_core::Result<()> 
                     && let Some(phase) = status.phase
                 {
                     if phase == "Running" {
+                        tracing::info!(
+                            msg = "ctr pod is running.",
+                            pod = %pod_name,
+                            attempt = attempt + 1,
+                        );
                         return Ok(());
                     }
                     if phase == "Failed" || phase == "Error" {
                         let _ = pods.delete(pod_name, &DeleteParams::default()).await;
                         return Err(step_err(format!(
-                            "Ctr pod {pod_name} entered {phase} state"
+                            "Ctr pod {pod_name} entered {phase} state after {attempt} attempts"
                         )));
                     }
                 }
             }
-            Err(_) => {}
+            Err(e) => {
+                if attempt % 10 == 0 {
+                    tracing::info!(
+                        msg = "Waiting for ctr pod to appear...",
+                        pod = %pod_name,
+                        attempt = attempt + 1,
+                        err = %e,
+                    );
+                }
+            }
         }
     }
 
     let _ = pods.delete(pod_name, &DeleteParams::default()).await;
     Err(step_err(format!(
-        "Timed out waiting for ctr pod {pod_name} to start"
+        "Timed out waiting for ctr pod {pod_name} to start (60s)"
     )))
 }
 

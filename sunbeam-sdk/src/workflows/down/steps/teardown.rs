@@ -137,12 +137,17 @@ impl StepBody for WaitForTermination {
         let ns_api: kube::api::Api<k8s_openapi::api::core::v1::Namespace> =
             kube::api::Api::all(client);
 
-        tracing::info!("Waiting for namespaces to terminate...");
+        tracing::info!(msg = "Waiting for namespaces to terminate...", namespaces = ?to_delete);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
 
+        let mut attempt = 0;
         loop {
+            attempt += 1;
             if std::time::Instant::now() > deadline {
-                tracing::warn!("Timed out waiting for namespace deletion.");
+                tracing::warn!(
+                    msg = "Timed out waiting for namespace deletion (5 min). Will try force-delete.",
+                    remaining = ?to_delete,
+                );
                 break;
             }
 
@@ -154,8 +159,17 @@ impl StepBody for WaitForTermination {
             }
 
             if remaining.is_empty() {
-                tracing::info!("All namespaces deleted.");
+                tracing::info!(msg = "All namespaces deleted.");
                 return Ok(ExecutionResult::next());
+            }
+
+            if attempt % 10 == 0 {
+                tracing::info!(
+                    msg = "Still waiting for namespaces to terminate...",
+                    remaining = ?remaining,
+                    attempt = attempt,
+                    elapsed_secs = attempt * 3,
+                );
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -219,7 +233,7 @@ impl StepBody for ForceDeleteStuckNamespaces {
 
         // Brief wait after force-delete
         let mut still_stuck: Vec<String> = remaining.clone();
-        for _ in 0..10 {
+        for attempt in 0..10 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             let mut next_stuck = Vec::new();
             for ns in &still_stuck {
@@ -228,16 +242,23 @@ impl StepBody for ForceDeleteStuckNamespaces {
                 }
             }
             if next_stuck.is_empty() {
-                tracing::info!("All namespaces deleted after force-delete.");
+                tracing::info!(msg = "All namespaces deleted after force-delete.");
                 return Ok(ExecutionResult::next());
             }
             still_stuck = next_stuck;
+            if attempt % 3 == 0 && attempt > 0 {
+                tracing::info!(
+                    msg = "Still waiting for force-deleted namespaces to clear...",
+                    remaining = ?still_stuck,
+                    attempt = attempt + 1,
+                );
+            }
         }
 
         if !still_stuck.is_empty() {
             tracing::warn!(
-                "Namespaces still stuck after force-delete: {}",
-                still_stuck.join(", ")
+                msg = "Namespaces still stuck after force-delete — manual cleanup may be required.",
+                namespaces = %still_stuck.join(", "),
             );
         }
 
