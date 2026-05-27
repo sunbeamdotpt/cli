@@ -30,6 +30,17 @@ pub struct BootstrapCriticalImages;
 #[async_trait::async_trait]
 impl StepBody for BootstrapCriticalImages {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let lima_skip: Vec<String> = ctx
+            .workflow
+            .data
+            .get("lima_skip_namespaces")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if lima_skip.contains(&"ingress".to_string()) {
+            tracing::info!("Skipping proxy image bootstrap (Lima VM — ingress skipped)");
+            return Ok(ExecutionResult::next());
+        }
+
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| step_err(e.to_string()))?;
 
@@ -253,25 +264,77 @@ async fn image_exists_in_k3s(image_ref: &str) -> wfe_core::Result<bool> {
     }
 }
 
+/// BuildKit endpoint for the Lima VM's host-level BuildKit daemon.
+const BUILDKIT_ENDPOINT: &str = "tcp://127.0.0.1:1234";
+
 async fn build_proxy_image() -> wfe_core::Result<PathBuf> {
     let ws_root = std::env::current_dir()
         .map_err(|e| step_err(format!("Failed to get cwd: {e}")))?;
 
     let tar_path = std::env::temp_dir().join("sunbeam-proxy-bootstrap.tar");
 
-    // Build the proxy image from the workspace root (the Dockerfile references
-    // workspace-level dependencies).
+    // Try buildctl first (works without Docker daemon).
+    let buildctl_result = tokio::process::Command::new("buildctl")
+        .args([
+            "--addr",
+            BUILDKIT_ENDPOINT,
+            "build",
+            "--frontend",
+            "dockerfile.v0",
+            "--local",
+            "context=.",
+            "--local",
+            "dockerfile=platform/proxy",
+            "--opt",
+            "filename=Dockerfile",
+            "--output",
+            &format!("type=docker,name=sunbeam-proxy:bootstrap,dest={}", tar_path.display()),
+        ])
+        .current_dir(&ws_root)
+        .output()
+        .await;
+
+    match buildctl_result {
+        Ok(output) if output.status.success() => return Ok(tar_path),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("buildctl failed, falling back to docker buildx: {stderr}");
+        }
+        Err(e) => {
+            tracing::warn!("buildctl not available, falling back to docker buildx: {e}");
+        }
+    }
+
+    // Fallback: docker buildx with remote BuildKit builder.
+    let _ = tokio::process::Command::new("docker")
+        .args([
+            "buildx",
+            "create",
+            "--name",
+            "sunbeam-buildkit",
+            "--driver",
+            "remote",
+            BUILDKIT_ENDPOINT,
+        ])
+        .env("DOCKER_HOST", "")
+        .output()
+        .await;
+
     let build_output = tokio::process::Command::new("docker")
         .args([
             "buildx",
             "build",
+            "--builder",
+            "sunbeam-buildkit",
             "-f",
             "platform/proxy/Dockerfile",
             "-t",
             "sunbeam-proxy:bootstrap",
-            "--load",
+            "--output",
+            &format!("type=docker,dest={}", tar_path.display()),
             ".",
         ])
+        .env("DOCKER_HOST", "")
         .current_dir(&ws_root)
         .output()
         .await
@@ -282,19 +345,6 @@ async fn build_proxy_image() -> wfe_core::Result<PathBuf> {
         return Err(step_err(format!("docker buildx failed: {stderr}")));
     }
 
-    // Save the built image to a tar
-    let save_output = tokio::process::Command::new("docker")
-        .args(["save", "sunbeam-proxy:bootstrap", "-o"])
-        .arg(&tar_path)
-        .output()
-        .await
-        .map_err(|e| step_err(format!("Failed to run docker save: {e}")))?;
-
-    if !save_output.status.success() {
-        let stderr = String::from_utf8_lossy(&save_output.stderr);
-        return Err(step_err(format!("docker save failed: {stderr}")));
-    }
-
     Ok(tar_path)
 }
 
@@ -303,39 +353,26 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
     let pod_name = "sunbeam-ctr-import";
     let host_tar = "/host-tmp/sunbeam-proxy-bootstrap.tar";
 
+    // Copy the tar directly to the Lima VM's /tmp via limactl copy.
+    // The ctr pod mounts the node's /tmp as /host-tmp, so it can read
+    // the file without streaming it through the exec websocket.
+    tracing::info!("Copying tar to Lima VM...");
+    let copy_output = tokio::process::Command::new("limactl")
+        .args([
+            "copy",
+            &tar_path.display().to_string(),
+            "sunbeam:/tmp/sunbeam-proxy-bootstrap.tar",
+        ])
+        .output()
+        .await
+        .map_err(|e| step_err(format!("Failed to run limactl copy: {e}")))?;
+
+    if !copy_output.status.success() {
+        let stderr = String::from_utf8_lossy(&copy_output.stderr);
+        return Err(step_err(format!("limactl copy failed: {stderr}")));
+    }
+
     spawn_ctr_pod(&node, pod_name).await?;
-
-    // Read the tar file into memory.
-    let tar_data = match std::fs::read(tar_path) {
-        Ok(data) => data,
-        Err(e) => {
-            delete_ctr_pod(pod_name).await;
-            return Err(step_err(format!("Failed to read tar file: {e}")));
-        }
-    };
-
-    // Copy tar into the pod by writing to stdin of a `cat` command.
-    let copy_result = crate::kube::kube_exec_with_stdin(
-        "default",
-        pod_name,
-        &["sh", "-c", &format!("cat > {host_tar}")],
-        None,
-        Some(&tar_data),
-    )
-    .await;
-
-    if let Err(e) = copy_result {
-        delete_ctr_pod(pod_name).await;
-        return Err(step_err(format!("Failed to copy tar to ctr pod: {e}")));
-    }
-    if let Ok((code, _)) = copy_result {
-        if code != 0 {
-            delete_ctr_pod(pod_name).await;
-            return Err(step_err(format!(
-                "Copy tar to ctr pod exited with code {code}"
-            )));
-        }
-    }
 
     // Import the image.
     let import_result = crate::kube::kube_exec(

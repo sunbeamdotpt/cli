@@ -30,6 +30,17 @@ pub struct BuildProjectImages;
 #[async_trait::async_trait]
 impl StepBody for BuildProjectImages {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let lima_skip: Vec<String> = ctx
+            .workflow
+            .data
+            .get("lima_skip_namespaces")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if lima_skip.contains(&"oci".to_string()) {
+            tracing::info!("Skipping project image builds (Lima VM — no OCI registry)");
+            return Ok(ExecutionResult::next());
+        }
+
         let step_ctx: StepContext =
             serde_json::from_value(ctx.workflow.data.get("__ctx").cloned().unwrap_or_default())
                 .map_err(|e| step_err(e.to_string()))?;

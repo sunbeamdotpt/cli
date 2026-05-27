@@ -51,6 +51,20 @@ impl StepBody for SeedKratosAdminIdentity {
         if data.skip_seed {
             return Ok(ExecutionResult::next());
         }
+        if data.skip_ory {
+            tracing::info!("Skipping Kratos admin identity seed (Lima VM — skip_ory=true)");
+            return Ok(ExecutionResult::next());
+        }
+        let lima_skip: Vec<String> = ctx
+            .workflow
+            .data
+            .get("lima_skip_namespaces")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if lima_skip.contains(&"ory".to_string()) {
+            tracing::info!("Skipping Kratos admin identity seed (Lima VM)");
+            return Ok(ExecutionResult::next());
+        }
 
         let ob_pod = match &data.ob_pod {
             Some(p) => p.clone(),

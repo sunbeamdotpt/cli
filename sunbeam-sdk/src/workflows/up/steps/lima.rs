@@ -301,15 +301,16 @@ async fn load_kubeconfig_and_probe(path: &std::path::Path) -> Result<bool, Strin
 
 /// Merge two kubeconfigs in pure Rust.
 ///
-/// Concatenates clusters, auth_infos (users), and contexts from both files.
-/// Preserves the host file's current-context unless it's empty.
+/// Lima entries are renamed to `lima-sunbeam` so they never clash with the
+/// user's existing `default` (or any other) context/cluster/user, and it's
+/// obvious which context belongs to the Sunbeam Lima VM.
 async fn merge_kubeconfigs(
     lima_path: &std::path::Path,
     host_path: &std::path::Path,
 ) -> Result<String, String> {
     use kube::config::Kubeconfig;
 
-    let lima_kc = Kubeconfig::read_from(lima_path)
+    let mut lima_kc = Kubeconfig::read_from(lima_path)
         .map_err(|e| format!("Failed to read Lima kubeconfig: {e}"))?;
 
     let mut merged = if host_path.exists() {
@@ -319,32 +320,55 @@ async fn merge_kubeconfigs(
         Kubeconfig::default()
     };
 
-    // Append Lima entries, avoiding duplicates by name.
+    // Rename Lima clusters, auth_infos, and contexts so they never clash
+    // with the user's existing contexts.
+    let ctx_name = crate::constants::LIMA_KUBE_CONTEXT;
+
+    for cluster in &mut lima_kc.clusters {
+        cluster.name = ctx_name.to_string();
+    }
+
+    for auth in &mut lima_kc.auth_infos {
+        auth.name = ctx_name.to_string();
+    }
+
+    for ctx in &mut lima_kc.contexts {
+        if let Some(ref mut c) = ctx.context {
+            c.cluster = ctx_name.to_string();
+            c.user = Some(ctx_name.to_string());
+        }
+        ctx.name = ctx_name.to_string();
+    }
+
+    // Merge Lima entries, replacing any existing `lima-sunbeam` host entries
+    // so recreated VMs (new certificates) always take precedence.
     for cluster in lima_kc.clusters {
-        let name = cluster.name.clone();
-        if !merged.clusters.iter().any(|c| c.name == name) {
-            merged.clusters.push(cluster);
+        let pos = merged.clusters.iter().position(|c| c.name == cluster.name);
+        match pos {
+            Some(i) => merged.clusters[i] = cluster,
+            None => merged.clusters.push(cluster),
         }
     }
 
     for auth in lima_kc.auth_infos {
-        let name = auth.name.clone();
-        if !merged.auth_infos.iter().any(|a| a.name == name) {
-            merged.auth_infos.push(auth);
+        let pos = merged.auth_infos.iter().position(|a| a.name == auth.name);
+        match pos {
+            Some(i) => merged.auth_infos[i] = auth,
+            None => merged.auth_infos.push(auth),
         }
     }
 
     for ctx in lima_kc.contexts {
-        let name = ctx.name.clone();
-        if !merged.contexts.iter().any(|c| c.name == name) {
-            merged.contexts.push(ctx);
+        let pos = merged.contexts.iter().position(|c| c.name == ctx.name);
+        match pos {
+            Some(i) => merged.contexts[i] = ctx,
+            None => merged.contexts.push(ctx),
         }
     }
 
-    // Prefer Lima's current-context if the host doesn't have one.
-    if merged.current_context.is_none() && lima_kc.current_context.is_some() {
-        merged.current_context = lima_kc.current_context;
-    }
+    // Always set current-context to the Lima context after an up run so
+    // kubectl works out of the box.
+    merged.current_context = Some(crate::constants::LIMA_KUBE_CONTEXT.to_string());
 
     serde_yaml::to_string(&merged)
         .map_err(|e| format!("Failed to serialize merged kubeconfig: {e}"))
