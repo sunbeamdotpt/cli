@@ -1,6 +1,6 @@
 //! Kustomize build, apply, and namespace filtering.
 
-use crate::error::{Result, ResultExt};
+use crate::error::Result;
 
 /// Return only the YAML documents that belong to the given namespace.
 ///
@@ -51,157 +51,85 @@ pub fn filter_by_namespace(manifests: &str, namespace: &str, skip_patterns: &[St
     format!("---\n{}\n", kept.join("\n---\n"))
 }
 
-/// Remove YAML documents that belong to skipped namespaces.
-///
-/// Keeps cluster-scoped resources and kube-system resources, but drops
-/// namespace-scoped resources and Namespace resources for skipped namespaces.
-pub fn filter_skip_namespaces(manifests: &str, skip_namespaces: &[String]) -> String {
-    let mut kept = Vec::new();
-    for doc in manifests.split("\n---") {
-        let doc = doc.trim();
-        if doc.is_empty() {
-            continue;
-        }
-        let in_skip_ns = skip_namespaces
-            .iter()
-            .any(|ns| doc.contains(&format!("namespace: {ns}")));
-        let is_skip_ns = skip_namespaces.iter().any(|ns| {
-            doc.contains("kind: Namespace") && doc.contains(&format!("name: {ns}"))
-        });
-        let is_cluster_scoped =
-            !doc.contains("namespace: ") && !doc.contains("kind: Namespace");
-        let is_system_ns = doc.contains("namespace: kube-system");
-
-        if is_cluster_scoped || is_system_ns || (!in_skip_ns && !is_skip_ns) {
-            kept.push(doc);
-        }
-    }
-    if kept.is_empty() {
-        return String::new();
-    }
-    format!("---\n{}\n", kept.join("\n---\n"))
-}
-
-/// Options controlling a manifest apply operation.
-#[derive(Debug, Clone, Default)]
-pub struct ApplyOptions {
-    /// Target namespace; empty string means all namespaces.
-    pub namespace: String,
-    /// Print rendered YAML without calling kubectl apply.
-    pub dry_run: bool,
-    /// Patterns whose metadata.name should cause a document to be skipped.
-    pub skip_patterns: Vec<String>,
-    /// Runtime manifest overrides (--set, --disable, --enable).
-    pub overrides: Option<crate::manifest_params::Overrides>,
-    /// Domain override. When present, this replaces the active context's
-    /// domain for manifest generation. Used when a workflow step (e.g.
-    /// EnsureCilium) has discovered a live domain that differs from the
-    /// statically-configured one.
-    pub domain: Option<String>,
-    /// Namespaces to skip when applying all namespaces.
-    pub skip_namespaces: Vec<String>,
-}
-
-/// Discover available service namespaces by scanning `<infra_dir>/base/`
-/// for directories that contain a `kustomization.yaml` (or `.yml`).
-///
-/// Returns a sorted list of directory names. Each name corresponds to a
-/// namespace/service that can be passed to `sunbeam service apply <name>`.
-pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
-    let base = infra_dir.join("base");
-    if !base.exists() {
-        bail!(
-            "Infrastructure base directory not found: {}",
-            base.display()
-        );
-    }
-
-    let mut services = Vec::new();
-    let entries = std::fs::read_dir(&base)
-        .with_ctx(|| format!("Failed to read base directory: {}", base.display()))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let has_kustomization =
-                path.join("kustomization.yaml").is_file() || path.join("kustomization.yml").is_file();
-            if has_kustomization {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    services.push(name.to_string());
-                }
-            }
-        }
-    }
-
-    services.sort_unstable();
-    Ok(services)
-}
-
 /// Build the production kustomize overlay, substitute domain/email, apply via kube-rs.
 ///
 /// Runs a second convergence pass if cert-manager is present in the overlay —
 /// cert-manager registers a ValidatingWebhook that must be running before
 /// ClusterIssuer / Certificate resources can be created.
-///
-/// Domain and email are read from `config::active_context()`, which is
-/// guaranteed to be fully resolved by the time this is called.
-#[tracing::instrument(skip(opts))]
-pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
-    let ctx = crate::config::active_context();
-    let resolved_domain = opts
-        .domain
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&ctx.domain);
-    let email = &ctx.acme_email;
-    if resolved_domain.is_empty() {
-        bail!("domain not set — run `sunbeam config set --domain <domain>` first");
-    }
+pub async fn cmd_apply(
+    domain: &str,
+    email: &str,
+    namespace: &str,
+    skip_patterns: &[String],
+    overrides: Option<&crate::manifest_params::Overrides>,
+) -> Result<()> {
+    // Fall back to active context for ACME email if not provided via CLI flag.
+    // (The legacy top-level `acme_email` is migrated into the context on config
+    // load — see config::load_config.)
+    let email = if email.is_empty() {
+        crate::config::active_context().acme_email.clone()
+    } else {
+        email.to_string()
+    };
 
     let infra_dir = crate::config::get_infra_dir();
-    let overlay = infra_dir.join("overlays");
-    let namespace = &opts.namespace;
+
+    let resolved_domain = if domain.is_empty() {
+        crate::kube::get_domain().await?
+    } else {
+        domain.to_string()
+    };
+    if resolved_domain.is_empty() {
+        bail!("--domain is required for apply on first deploy");
+    }
+    let is_local_dev = resolved_domain.ends_with("sslip.io")
+        || resolved_domain.ends_with("nip.io")
+        || resolved_domain == "localhost"
+        || resolved_domain.starts_with("192.168.")
+        || resolved_domain.starts_with("10.")
+        || resolved_domain.starts_with("172.");
+    let overlay_name = if is_local_dev { "local" } else { "production" };
+    let overlay = infra_dir.join("overlays").join(overlay_name);
 
     let scope = if namespace.is_empty() {
         String::new()
     } else {
         format!(" [{namespace}]")
     };
-    tracing::info!("Applying manifests (domain: {resolved_domain}){scope}...");
-
-    // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
-    clean_partial_chart_extracts(&infra_dir);
-
-    let mut manifests = crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
-
-    if let Some(ov) = &opts.overrides {
-        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
-    }
-
-    if !opts.skip_namespaces.is_empty() {
-        manifests = filter_skip_namespaces(&manifests, &opts.skip_namespaces);
-    }
-
-    if !namespace.is_empty() {
-        manifests = filter_by_namespace(&manifests, namespace, &opts.skip_patterns);
-        if manifests.trim().is_empty() {
-            tracing::warn!("No resources found for namespace '{namespace}' -- check the name and try again.");
-            return Ok(String::new());
-        }
-    }
-
-    if opts.dry_run {
-        return Ok(manifests);
-    }
+    crate::output::step(&format!(
+        "Applying manifests (domain: {resolved_domain}){scope}..."
+    ));
 
     let ns_list = if namespace.is_empty() {
         None
     } else {
-        Some(vec![namespace.clone()])
+        Some(vec![namespace.to_string()])
     };
     pre_apply_cleanup(ns_list.as_deref()).await;
 
+    // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
+    // A previous interrupted `kustomize build --enable-helm` can leave a
+    // `<base>/charts/<chart>-<ver>/` skeleton that blocks later retries with
+    // "file or directory already exists". Detect and remove those so this
+    // apply is idempotent against crashes/Ctrl-C mid-extract.
+    clean_partial_chart_extracts(&infra_dir);
+
     let before = snapshot_configmaps().await;
+    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+
+    if let Some(ov) = overrides {
+        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
+    }
+
+    if !namespace.is_empty() {
+        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
+        if manifests.trim().is_empty() {
+            crate::output::warn(&format!(
+                "No resources found for namespace '{namespace}' -- check the name and try again."
+            ));
+            return Ok(());
+        }
+    }
 
     crate::kube::kube_apply(&manifests).await?;
 
@@ -212,10 +140,10 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
         && namespace.is_empty()
         && wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await
     {
-        tracing::info!("Running convergence pass for cert-manager resources...");
+        crate::output::ok("Running convergence pass for cert-manager resources...");
         let mut manifests2 =
-            crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
-        if let Some(ov) = &opts.overrides {
+            crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+        if let Some(ov) = overrides {
             manifests2 = crate::manifest_params::apply_overrides(&manifests2, ov)?;
         }
         crate::kube::kube_apply(&manifests2).await?;
@@ -225,11 +153,65 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
 
     // Post-apply hooks
     if namespace.is_empty() || namespace == "matrix" {
-        patch_tuwunel_oauth2_redirect(resolved_domain).await;
+        patch_tuwunel_oauth2_redirect(&resolved_domain).await;
     }
 
-    tracing::info!("Applied.");
-    Ok(manifests)
+    crate::output::ok("Applied.");
+    Ok(())
+}
+
+/// Build the kustomize overlay, substitute domain/email, and print the
+/// resulting YAML to stdout without calling kubectl apply.
+pub async fn cmd_apply_dry_run(
+    domain: &str,
+    email: &str,
+    namespace: &str,
+    skip_patterns: &[String],
+    overrides: Option<&crate::manifest_params::Overrides>,
+) -> Result<()> {
+    let email = if email.is_empty() {
+        crate::config::load_config().acme_email
+    } else {
+        email.to_string()
+    };
+
+    let infra_dir = crate::config::get_infra_dir();
+
+    let resolved_domain = if domain.is_empty() {
+        crate::kube::get_domain().await?
+    } else {
+        domain.to_string()
+    };
+    if resolved_domain.is_empty() {
+        bail!("--domain is required for apply on first deploy");
+    }
+    let is_local_dev = resolved_domain.ends_with("sslip.io")
+        || resolved_domain.ends_with("nip.io")
+        || resolved_domain == "localhost"
+        || resolved_domain.starts_with("192.168.")
+        || resolved_domain.starts_with("10.")
+        || resolved_domain.starts_with("172.");
+    let overlay_name = if is_local_dev { "local" } else { "production" };
+    let overlay = infra_dir.join("overlays").join(overlay_name);
+
+    let mut manifests = crate::kube::kustomize_build(&overlay, &resolved_domain, &email).await?;
+
+    if let Some(ov) = overrides {
+        manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
+    }
+
+    if !namespace.is_empty() {
+        manifests = filter_by_namespace(&manifests, namespace, skip_patterns);
+        if manifests.trim().is_empty() {
+            crate::output::warn(&format!(
+                "No resources found for namespace '{namespace}' -- check the name and try again."
+            ));
+            return Ok(());
+        }
+    }
+
+    print!("{manifests}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -284,10 +266,10 @@ fn clean_partial_chart_extracts(infra_dir: &std::path::Path) {
                 }
             }
             if !has_chart_yaml {
-                tracing::warn!(
+                crate::output::warn(&format!(
                     "Removing partial helm-chart extract {}",
                     versioned.display()
-                );
+                ));
                 let _ = std::fs::remove_dir_all(&versioned);
             }
         }
@@ -313,7 +295,7 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
         }
     };
 
-    tracing::info!("Cleaning up immutable Jobs and test Pods...");
+    crate::output::ok("Cleaning up immutable Jobs and test Pods...");
 
     // Prune stale VaultStaticSecrets that share a name with VaultDynamicSecrets
     prune_stale_vault_static_secrets(&ns_list).await;
@@ -326,7 +308,7 @@ async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
         let client = match crate::kube::get_client().await {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Failed to get kube client: {e}");
+                crate::output::warn(&format!("Failed to get kube client: {e}"));
                 return;
             }
         };
@@ -352,7 +334,7 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("Failed to get kube client for VSS pruning: {e}");
+            crate::output::warn(&format!("Failed to get kube client for VSS pruning: {e}"));
             return;
         }
     };
@@ -398,9 +380,9 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
             if let Some(name) = &vss.metadata.name
                 && vds_names.contains(name)
             {
-                tracing::info!(
+                crate::output::ok(&format!(
                     "Pruning stale VaultStaticSecret {ns}/{name} (replaced by VaultDynamicSecret)"
-                );
+                ));
                 let dp = kube::api::DeleteParams::default();
                 let _ = vss_api.delete(name, &dp).await;
             }
@@ -482,9 +464,9 @@ async fn restart_for_changed_configmaps(
                         }
                     });
                     if mounts_changed {
-                        tracing::info!(
+                        crate::output::ok(&format!(
                             "Restarting {ns}/{dep_name} (ConfigMap updated)..."
-                        );
+                        ));
                         let _ = crate::kube::kube_rollout_restart(ns, dep_name).await;
                     }
                 }
@@ -495,9 +477,9 @@ async fn restart_for_changed_configmaps(
 
 /// Wait for a webhook endpoint to become ready.
 async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
-    tracing::info!(
+    crate::output::ok(&format!(
         "Waiting for {ns}/{svc} webhook (up to {timeout_secs}s)..."
-    );
+    ));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     let client = match crate::kube::get_client().await {
@@ -509,9 +491,9 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
 
     loop {
         if std::time::Instant::now() > deadline {
-            tracing::warn!(
+            crate::output::warn(&format!(
                 "  {ns}/{svc} not ready after {timeout_secs}s -- continuing anyway."
-            );
+            ));
             return false;
         }
 
@@ -523,7 +505,7 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
                 .and_then(|s| s.addresses.as_ref())
                 .is_some_and(|a| !a.is_empty());
             if has_addr {
-                tracing::info!("  {ns}/{svc} ready.");
+                crate::output::ok(&format!("  {ns}/{svc} ready."));
                 return true;
             }
         }
@@ -538,7 +520,7 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID").await {
             Ok(id) if !id.is_empty() => id,
             _ => {
-                tracing::warn!(
+                crate::output::warn(
                     "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
                 );
                 return;
@@ -576,9 +558,9 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         .patch("tuwunel", &pp, &kube::api::Patch::Merge(patch))
         .await
     {
-        tracing::warn!("Failed to patch tuwunel OAuth2Client: {e}");
+        crate::output::warn(&format!("Failed to patch tuwunel OAuth2Client: {e}"));
     } else {
-        tracing::info!("Patched tuwunel OAuth2Client redirect URI.");
+        crate::output::ok("Patched tuwunel OAuth2Client redirect URI.");
     }
 }
 
@@ -604,7 +586,7 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
     let pod_name = match crate::kube::find_pod_by_label("data", "app=opensearch").await {
         Some(name) => name,
         None => {
-            tracing::warn!("No OpenSearch pod found in data namespace");
+            crate::output::warn("No OpenSearch pod found in data namespace");
             return None;
         }
     };
@@ -616,13 +598,12 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
 }
 
 /// Inject OpenSearch model_id into matrix/opensearch-ml-config ConfigMap.
-#[tracing::instrument]
 pub async fn inject_opensearch_model_id() {
     let pipe_resp = match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await
     {
         Some(r) => r,
         None => {
-            tracing::warn!(
+            crate::output::warn(
                 "OpenSearch ingest pipeline not found -- skipping model_id injection.",
             );
             return;
@@ -645,7 +626,7 @@ pub async fn inject_opensearch_model_id() {
         });
 
     let Some(model_id) = model_id else {
-        tracing::warn!("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
+        crate::output::warn("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
         return;
     };
 
@@ -666,11 +647,11 @@ pub async fn inject_opensearch_model_id() {
 
     let manifest = serde_json::to_string(&cm).unwrap_or_default();
     if let Err(e) = crate::kube::kube_apply(&manifest).await {
-        tracing::warn!("Failed to inject OpenSearch model_id: {e}");
+        crate::output::warn(&format!("Failed to inject OpenSearch model_id: {e}"));
     } else {
-        tracing::info!(
+        crate::output::ok(&format!(
             "Injected OpenSearch model_id ({model_id}) into matrix/opensearch-ml-config."
-        );
+        ));
     }
 }
 
@@ -679,10 +660,9 @@ pub async fn inject_opensearch_model_id() {
 /// 1. Sets cluster settings to allow ML on data nodes.
 /// 2. Registers and deploys all-mpnet-base-v2 (pre-trained, 384-dim).
 /// 3. Creates ingest + search pipelines for hybrid BM25+neural scoring.
-#[tracing::instrument]
 pub async fn ensure_opensearch_ml() {
     if os_api("/_cluster/health", "GET", None).await.is_none() {
-        tracing::warn!("OpenSearch not reachable -- skipping ML setup.");
+        crate::output::warn("OpenSearch not reachable -- skipping ML setup.");
         return;
     }
 
@@ -709,7 +689,7 @@ pub async fn ensure_opensearch_ml() {
     {
         Some(r) => r,
         None => {
-            tracing::warn!("OpenSearch ML search API failed -- skipping ML setup.");
+            crate::output::warn("OpenSearch ML search API failed -- skipping ML setup.");
             return;
         }
     };
@@ -778,10 +758,10 @@ pub async fn ensure_opensearch_ml() {
     }
 
     if !to_clean.is_empty() {
-        tracing::info!(
+        crate::output::step(&format!(
             "Cleaning up {} stale ML model(s)...",
             to_clean.len()
-        );
+        ));
         for stale in &to_clean {
             // Undeploy first (safe to call even if not deployed)
             os_api(
@@ -813,7 +793,7 @@ pub async fn ensure_opensearch_ml() {
                 model_id = Some(id);
             }
             "DEPLOYING" => {
-                tracing::info!("Model is deploying, waiting...");
+                crate::output::ok("Model is deploying, waiting...");
                 model_id = Some(id.clone());
                 for _ in 0..30 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -827,7 +807,7 @@ pub async fn ensure_opensearch_ml() {
             }
             _ => {
                 // REGISTERED or other — deploy it.
-                tracing::info!("Deploying OpenSearch ML model...");
+                crate::output::ok("Deploying OpenSearch ML model...");
                 model_id = Some(id.clone());
                 os_api(&format!("/_plugins/_ml/models/{id}/_deploy"), "POST", None).await;
                 for _ in 0..30 {
@@ -845,7 +825,7 @@ pub async fn ensure_opensearch_ml() {
 
     if model_id.is_none() {
         // No existing model found — register from pre-trained hub
-        tracing::info!("Registering OpenSearch ML model (all-mpnet-base-v2)...");
+        crate::output::ok("Registering OpenSearch ML model (all-mpnet-base-v2)...");
         let reg_body = serde_json::json!({
             "name": "huggingface/sentence-transformers/all-mpnet-base-v2",
             "version": "1.0.1",
@@ -860,7 +840,7 @@ pub async fn ensure_opensearch_ml() {
         {
             Some(r) => r,
             None => {
-                tracing::warn!("Failed to register ML model -- skipping.");
+                crate::output::warn("Failed to register ML model -- skipping.");
                 return;
             }
         };
@@ -871,11 +851,11 @@ pub async fn ensure_opensearch_ml() {
             .unwrap_or_default();
 
         if task_id.is_empty() {
-            tracing::warn!("No task_id from model registration -- skipping.");
+            crate::output::warn("No task_id from model registration -- skipping.");
             return;
         }
 
-        tracing::info!("Waiting for model registration...");
+        crate::output::ok("Waiting for model registration...");
         let mut new_model_id = None;
         for _ in 0..60 {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -892,7 +872,7 @@ pub async fn ensure_opensearch_ml() {
                         break;
                     }
                     "FAILED" => {
-                        tracing::warn!("ML model registration failed: {task_resp}");
+                        crate::output::warn(&format!("ML model registration failed: {task_resp}"));
                         return;
                     }
                     _ => {}
@@ -901,11 +881,11 @@ pub async fn ensure_opensearch_ml() {
         }
 
         let Some(mid) = new_model_id else {
-            tracing::warn!("ML model registration timed out.");
+            crate::output::warn("ML model registration timed out.");
             return;
         };
 
-        tracing::info!("Deploying ML model...");
+        crate::output::ok("Deploying ML model...");
         os_api(&format!("/_plugins/_ml/models/{mid}/_deploy"), "POST", None).await;
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -919,7 +899,7 @@ pub async fn ensure_opensearch_ml() {
     }
 
     let Some(model_id) = model_id else {
-        tracing::warn!("No ML model available -- skipping pipeline setup.");
+        crate::output::warn("No ML model available -- skipping pipeline setup.");
         return;
     };
 
@@ -956,7 +936,7 @@ pub async fn ensure_opensearch_ml() {
     )
     .await;
 
-    tracing::info!("OpenSearch ML ready (model: {model_id}).");
+    crate::output::ok(&format!("OpenSearch ML ready (model: {model_id})."));
 }
 
 #[cfg(test)]
@@ -1085,236 +1065,5 @@ spec:
         let doc = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: pingora-config\n  namespace: ingress\ndata:\n  config.toml: |\n    tls_secret = \"pingora-tls\"\n";
         let result = filter_by_namespace(doc, "ingress", &["pingora-tls".to_string()]);
         assert!(result.contains("name: pingora-config"));
-    }
-
-    // -----------------------------------------------------------------------
-    // ApplyOptions tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn apply_options_default_is_all_namespaces_no_dry_run() {
-        let opts = ApplyOptions::default();
-        assert!(opts.namespace.is_empty());
-        assert!(!opts.dry_run);
-        assert!(opts.skip_patterns.is_empty());
-        assert!(opts.overrides.is_none());
-        assert!(opts.domain.is_none());
-    }
-
-    #[test]
-    fn apply_options_with_namespace_and_overrides() {
-        let overrides = crate::manifest_params::Overrides::from_cli(
-            &["Deployment/ory/hydra/spec/replicas=3".to_string()],
-            &["deployment/ory/hydra".to_string()],
-            &[],
-        )
-        .unwrap();
-        let opts = ApplyOptions {
-            namespace: "ory".to_string(),
-            dry_run: true,
-            skip_patterns: vec!["scaleway-certmanager-webhook".to_string()],
-            overrides: Some(overrides),
-            domain: None,
-            skip_namespaces: Vec::new(),
-        };
-        assert_eq!(opts.namespace, "ory");
-        assert!(opts.dry_run);
-        assert_eq!(opts.skip_patterns.len(), 1);
-        assert!(opts.overrides.is_some());
-    }
-
-    // -----------------------------------------------------------------------
-    // discover_services tests
-    // -----------------------------------------------------------------------
-
-    use std::fs;
-
-    fn make_dir_with_kustomization(base: &std::path::Path, name: &str, ext: &str) {
-        let dir = base.join(name);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("kustomization.{ext}")), "resources: []\n").unwrap();
-    }
-
-    #[test]
-    fn discover_services_empty_base_returns_empty() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        let found = discover_services(tmp.path()).unwrap();
-        assert!(found.is_empty());
-    }
-
-    #[test]
-    fn discover_services_missing_base_errors() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let err = discover_services(tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("base directory not found"));
-    }
-
-    #[test]
-    fn discover_services_finds_yaml() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "ory", "yaml");
-        make_dir_with_kustomization(&base, "data", "yaml");
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["data", "ory"]);
-    }
-
-    #[test]
-    fn discover_services_finds_yml() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "matrix", "yml");
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["matrix"]);
-    }
-
-    #[test]
-    fn discover_services_ignores_dirs_without_kustomization() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "ory", "yaml");
-        fs::create_dir(base.join("not-a-service")).unwrap();
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["ory"]);
-    }
-
-    #[test]
-    fn discover_services_ignores_files_in_base() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "monitoring", "yaml");
-        fs::write(base.join("README.md"), "# base\n").unwrap();
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["monitoring"]);
-    }
-
-    #[test]
-    fn discover_services_sorts_alphabetically() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "wfe", "yaml");
-        make_dir_with_kustomization(&base, "ory", "yaml");
-        make_dir_with_kustomization(&base, "data", "yaml");
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["data", "ory", "wfe"]);
-    }
-
-    #[test]
-    fn discover_services_ignores_nested_dirs() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "stalwart", "yaml");
-        // Nested directory inside a service dir — should not be listed
-        fs::create_dir_all(base.join("stalwart").join("sub-component")).unwrap();
-        fs::write(
-            base.join("stalwart").join("sub-component").join("kustomization.yaml"),
-            "resources: []\n",
-        )
-        .unwrap();
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["stalwart"]);
-    }
-
-    #[test]
-    fn discover_services_yaml_takes_precedence_over_yml() {
-        // A directory with BOTH files should still only be listed once.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        let dir = base.join("press");
-        fs::create_dir(&dir).unwrap();
-        fs::write(dir.join("kustomization.yaml"), "resources: []\n").unwrap();
-        fs::write(dir.join("kustomization.yml"), "resources: []\n").unwrap();
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["press"]);
-    }
-
-    #[test]
-    fn discover_services_empty_dir_name_skipped() {
-        // Directories are created normally; impossible to have an empty OS dir name.
-        // This test verifies the file_name parsing branch is safe.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        make_dir_with_kustomization(&base, "vpn", "yaml");
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["vpn"]);
-    }
-
-    #[test]
-    fn discover_services_symlink_to_dir_followed() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = tmp.path().join("base");
-        fs::create_dir(&base).unwrap();
-        let real_dir = tmp.path().join("real-ingress");
-        fs::create_dir(&real_dir).unwrap();
-        fs::write(real_dir.join("kustomization.yaml"), "resources: []\n").unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&real_dir, base.join("ingress")).unwrap();
-        }
-        #[cfg(windows)]
-        {
-            std::os::windows::fs::symlink_dir(&real_dir, base.join("ingress")).unwrap();
-        }
-        let found = discover_services(tmp.path()).unwrap();
-        assert_eq!(found, vec!["ingress"]);
-    }
-
-    #[test]
-    fn discover_services_real_infra_sbbb_has_expected_services() {
-        // Sanity-check against the actual on-disk infrastructure directory.
-        let infra = std::path::PathBuf::from("../../../infra/sbbb");
-        if !infra.exists() {
-            // Skip when running outside the monorepo (e.g. published crate tests).
-            return;
-        }
-        let found = discover_services(&infra).unwrap();
-        assert!(
-            found.contains(&"ory".to_string()),
-            "expected 'ory' in discovered services"
-        );
-        assert!(
-            found.contains(&"data".to_string()),
-            "expected 'data' in discovered services"
-        );
-        assert!(
-            found.contains(&"matrix".to_string()),
-            "expected 'matrix' in discovered services"
-        );
-        // Should NOT contain arbitrary non-service directories
-        assert!(!found.contains(&"not-a-service".to_string()));
-    }
-
-    #[test]
-    fn test_filter_skip_namespaces_drops_skipped() {
-        let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\ndata:\n  key: val\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm2\n  namespace: matrix\ndata:\n  key: val\n---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: ory\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: reader\n";
-        let result = filter_skip_namespaces(input, &["ory".to_string()]);
-        assert!(!result.contains("namespace: ory"), "should drop ory namespace resources");
-        assert!(!result.contains("name: ory\n"), "should drop ory Namespace resource");
-        assert!(result.contains("namespace: matrix"), "should keep matrix");
-        assert!(result.contains("kind: ClusterRole"), "should keep cluster-scoped");
-    }
-
-    #[test]
-    fn test_filter_skip_namespaces_keeps_all_when_empty() {
-        let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\n";
-        let result = filter_skip_namespaces(input, &[]);
-        assert!(result.contains("namespace: ory"));
-    }
-
-    #[test]
-    fn test_filter_skip_namespaces_keeps_kube_system() {
-        let input = "---\napiVersion: v1\nkind: Role\nmetadata:\n  name: leader\n  namespace: kube-system\n";
-        let result = filter_skip_namespaces(input, &["kube-system".to_string()]);
-        assert!(result.contains("namespace: kube-system"));
     }
 }

@@ -50,6 +50,7 @@ async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
     // 2. Extract the tag from the image ref and bump the kustomization.
     let tag = image_ref.rsplit(':').next().unwrap_or(image_ref);
     let kustomization_path = get_infra_dir()
+        .join("sbbb")
         .join("base")
         .join("ingress")
         .join("kustomization.yaml");

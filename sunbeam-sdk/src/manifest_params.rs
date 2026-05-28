@@ -33,7 +33,7 @@ pub struct FieldEntry {
 }
 
 /// Parsed user override.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Override {
     /// Set a field to a new value.
     Set {
@@ -413,6 +413,28 @@ pub fn build_catalog(manifests: &str) -> Vec<ResourceEntry> {
     resources
 }
 
+/// Print a table of all discoverable parameters.
+pub fn print_catalog(resources: &[ResourceEntry]) {
+    println!("Available manifest parameters:");
+    println!();
+    for r in resources {
+        println!("  {}  ({} fields)", r.address, r.fields.len());
+        for f in &r.fields {
+            let current_str = match &f.current {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let display = if current_str.len() > 40 {
+                format!("{}...", &current_str[..37])
+            } else {
+                current_str
+            };
+            println!("    {:50} {:10}  = {}", f.path, f.type_hint, display);
+        }
+        println!();
+    }
+}
+
 /// Apply overrides to rendered manifest YAML and return the modified YAML.
 pub fn apply_overrides(manifests: &str, overrides: &Overrides) -> Result<String> {
     let mut docs: Vec<Value> = Vec::new();
@@ -459,55 +481,27 @@ pub fn apply_overrides(manifests: &str, overrides: &Overrides) -> Result<String>
             if disabled[i] {
                 continue;
             }
-            let kind = doc.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let kind = doc.get("kind").and_then(|v| v.as_str()).unwrap_or("");
             let ns = doc
                 .get("metadata")
                 .and_then(|v| v.get("namespace"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .unwrap_or("");
             let name = doc
                 .get("metadata")
                 .and_then(|v| v.get("name"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .unwrap_or("");
             let addr = format!("{}/{}/{}", kind.to_lowercase(), ns, name);
             if addr != *resource {
                 continue;
             }
 
             // Convert value string to appropriate JSON value
-            let mut parsed_value = parse_value(value);
-
-            // Kubernetes env var values MUST be strings. Detect env value paths
-            // (e.g. spec/template/spec/containers/0/env/3/value) and force string.
-            let parts: Vec<&str> = field_path.split('/').collect();
-            if parts.len() >= 3
-                && parts[parts.len() - 1] == "value"
-                && parts[parts.len() - 3] == "env"
-            {
-                parsed_value = Value::String(value.clone());
-            }
-
-            // CRD parameter values (e.g. spec/postgresql/parameters/max_connections)
-            // are typically strings in Kubernetes CRDs even when they look like numbers.
-            // Force string if the path contains "parameters" AND we're setting a specific
-            // key (path ends with the key name, not "parameters" itself).
-            // When replacing the entire parameters object (path ends with "parameters"),
-            // let parse_value handle it normally so the object structure is preserved.
-            if parts.iter().any(|p| *p == "parameters") && parts.last() != Some(&"parameters") {
-                // Always force string for CRD parameters - CRD schemas usually
-                // define these as strings even for numeric-looking values.
-                parsed_value = Value::String(value.clone());
-            }
+            let parsed_value = parse_value(value);
 
             // Apply the field path
-            if let Err(e) = set_field(doc, field_path, parsed_value) {
-                return Err(crate::error::SunbeamError::Other(format!(
-                    "Failed to set field on {addr} at {field_path}: {e}"
-                )));
-            }
+            set_field(doc, field_path, parsed_value)?;
         }
     }
 
@@ -529,15 +523,14 @@ pub fn apply_overrides(manifests: &str, overrides: &Overrides) -> Result<String>
 }
 
 /// Parse a user-provided value string into a JSON Value.
-///
-/// Booleans are NOT auto-parsed — `"true"` stays a string. This is required
-/// because Kubernetes env vars must be strings, and profile shortcuts like
-/// `env.FOO: "true"` must not become YAML booleans.
-///
-/// Numbers ARE parsed so that fields like `replicas` get proper JSON numbers.
-/// Env var values are forced back to strings in `apply_overrides` by path
-/// detection.
 fn parse_value(s: &str) -> Value {
+    // Try bool
+    if s.eq_ignore_ascii_case("true") {
+        return Value::Bool(true);
+    }
+    if s.eq_ignore_ascii_case("false") {
+        return Value::Bool(false);
+    }
     // Try null
     if s.eq_ignore_ascii_case("null") {
         return Value::Null;
@@ -563,11 +556,6 @@ fn parse_value(s: &str) -> Value {
 }
 
 /// Set a field in a JSON document by slash-separated path.
-///
-/// Creates missing intermediate objects automatically. Arrays are only
-/// created when the next part is a numeric index; otherwise objects are
-/// used. This allows shortcuts like `memory` to work on manifests that
-/// don't yet have `spec.template.spec.containers[0].resources`.
 fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
     let parts: Vec<&str> = path.split('/').collect();
     if parts.is_empty() {
@@ -602,40 +590,45 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
                 }
                 _ => {
                     return Err(crate::error::SunbeamError::Other(format!(
-                        "Cannot set field '{part}' on non-object/non-array (path: {path})"
+                        "Cannot set field on non-object/non-array"
                     )));
                 }
             }
             return Ok(());
         }
 
-        // Navigate deeper — create missing intermediates
+        // Navigate deeper
         current = match current {
-            Value::Object(map) => {
-                let next_is_index = parts.get(i + 1).map_or(false, |p| p.parse::<usize>().is_ok());
-                map.entry(part.to_string())
-                    .or_insert_with(|| if next_is_index { Value::Array(vec![]) } else { Value::Object(serde_json::Map::new()) })
-            }
+            Value::Object(map) => map.get_mut(*part).ok_or_else(|| {
+                crate::error::SunbeamError::Other(format!("Missing field: {part}"))
+            })?,
             Value::Array(arr) => {
                 let idx = part.parse::<usize>().map_err(|_| {
                     crate::error::SunbeamError::Other(format!("Expected array index: {part}"))
                 })?;
-                // Extend array if needed
-                while arr.len() <= idx {
-                    let next_is_index = parts.get(i + 1).map_or(false, |p| p.parse::<usize>().is_ok());
-                    arr.push(if next_is_index { Value::Array(vec![]) } else { Value::Object(serde_json::Map::new()) });
-                }
-                &mut arr[idx]
+                arr.get_mut(idx).ok_or_else(|| {
+                    crate::error::SunbeamError::Other(format!("Index out of bounds: {idx}"))
+                })?
             }
             _ => {
                 return Err(crate::error::SunbeamError::Other(format!(
-                    "Cannot navigate into non-object/non-array at '{part}' (path: {path})"
+                    "Cannot navigate into non-object/non-array at: {part}"
                 )));
             }
         };
     }
 
     Ok(())
+}
+
+/// Discover manifests and build catalog from a kustomize overlay.
+pub async fn discover_from_overlay(
+    overlay: &std::path::Path,
+    domain: &str,
+    email: &str,
+) -> Result<Vec<ResourceEntry>> {
+    let manifests = crate::kube::kustomize_build(overlay, domain, email).await?;
+    Ok(build_catalog(&manifests))
 }
 
 #[cfg(test)]
@@ -770,14 +763,9 @@ spec:
 
     #[test]
     fn test_parse_value() {
-        // Booleans are kept as strings (required for Kubernetes env vars)
-        assert_eq!(parse_value("true"), Value::String("true".into()));
-        assert_eq!(parse_value("false"), Value::String("false".into()));
-        // Numbers are parsed for fields like replicas
+        assert_eq!(parse_value("true"), Value::Bool(true));
         assert_eq!(parse_value("42"), Value::Number(42i64.into()));
-        // Plain strings stay strings
         assert_eq!(parse_value("hello"), Value::String("hello".into()));
-        // JSON objects/arrays are parsed
         assert_eq!(parse_value("{\"a\":1}"), serde_json::json!({"a": 1}));
     }
 
@@ -793,154 +781,5 @@ spec:
         let mut doc = serde_json::json!({"spec": {"ports": [{"port": 80}]}});
         set_field(&mut doc, "spec/ports/0/port", Value::Number(8080i64.into())).unwrap();
         assert_eq!(doc["spec"]["ports"][0]["port"], 8080);
-    }
-
-    #[test]
-    fn test_apply_env_overrides_preserve_names() {
-        let manifest = r#"
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: opensearch
-  namespace: data
-spec:
-  template:
-    spec:
-      containers:
-        - name: opensearch
-          env:
-            - name: discovery.type
-              value: single-node
-            - name: OPENSEARCH_JAVA_OPTS
-              value: "-Xms1g -Xmx1536m"
-            - name: DISABLE_SECURITY_PLUGIN
-              value: "true"
-"#;
-        let overrides = Overrides {
-            items: vec![
-                Override::Set {
-                    resource: "deployment/data/opensearch".into(),
-                    field_path: "spec/template/spec/containers/0/env/0/value".into(),
-                    value: "single-node".into(),
-                },
-                Override::Set {
-                    resource: "deployment/data/opensearch".into(),
-                    field_path: "spec/template/spec/containers/0/env/1/value".into(),
-                    value: "-Xms256m -Xmx512m".into(),
-                },
-                Override::Set {
-                    resource: "deployment/data/opensearch".into(),
-                    field_path: "spec/template/spec/containers/0/env/2/value".into(),
-                    value: "true".into(),
-                },
-            ],
-        };
-        let result = apply_overrides(manifest, &overrides).unwrap();
-        // Verify env var names are preserved and values are correct
-        assert!(result.contains("name: discovery.type"), "missing discovery.type name");
-        assert!(result.contains("value: single-node"), "missing single-node value");
-        assert!(result.contains("name: OPENSEARCH_JAVA_OPTS"), "missing OPENSEARCH_JAVA_OPTS name");
-        assert!(result.contains("value: -Xms256m -Xmx512m"), "missing OPENSEARCH_JAVA_OPTS value");
-        assert!(result.contains("name: DISABLE_SECURITY_PLUGIN"), "missing DISABLE_SECURITY_PLUGIN name");
-        assert!(result.contains("value: 'true'"), "missing DISABLE_SECURITY_PLUGIN value");
-    }
-
-    #[test]
-    fn test_env_value_forced_to_string() {
-        let manifest = r#"
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test
-  namespace: default
-spec:
-  template:
-    spec:
-      containers:
-        - name: main
-          env:
-            - name: COUNT
-              value: "0"
-"#;
-        let overrides = Overrides {
-            items: vec![Override::Set {
-                resource: "deployment/default/test".into(),
-                field_path: "spec/template/spec/containers/0/env/0/value".into(),
-                value: "90".into(),
-            }],
-        };
-        let result = apply_overrides(manifest, &overrides).unwrap();
-        // 90 must be quoted (string), not a bare number
-        assert!(result.contains("value: '90'"), "env value should be string, got: {result}");
-    }
-
-    #[test]
-    fn test_crd_parameters_forced_to_string() {
-        let manifest = r#"
-apiVersion: postgresql.cnpg.io/v1
-kind: Cluster
-metadata:
-  name: postgres
-  namespace: data
-spec:
-  instances: 1
-  postgresql:
-    parameters:
-      max_connections: "100"
-      shared_buffers: "128MB"
-  storage:
-    size: 10Gi
-"#;
-        let overrides = Overrides {
-            items: vec![
-                Override::Set {
-                    resource: "cluster/data/postgres".into(),
-                    field_path: "spec/postgresql/parameters/max_connections".into(),
-                    value: "50".into(),
-                },
-                Override::Set {
-                    resource: "cluster/data/postgres".into(),
-                    field_path: "spec/postgresql/parameters/shared_buffers".into(),
-                    value: "64MB".into(),
-                },
-            ],
-        };
-        let result = apply_overrides(manifest, &overrides).unwrap();
-        // max_connections must be quoted because "50" looks like a number
-        assert!(result.contains("max_connections: '50'"), "max_connections should be quoted string, got: {result}");
-        // shared_buffers is already unambiguously a string (contains letters)
-        assert!(result.contains("shared_buffers: 64MB"), "shared_buffers should be present, got: {result}");
-    }
-
-    #[test]
-    fn test_crd_parameters_unquoted_yaml() {
-        // This matches the actual kustomize output where 128MB is NOT quoted
-        let manifest = r#"
-apiVersion: postgresql.cnpg.io/v1
-kind: Cluster
-metadata:
-  name: postgres
-  namespace: data
-spec:
-  instances: 1
-  postgresql:
-    parameters:
-      max_connections: "100"
-      shared_buffers: 128MB
-      work_mem: 4MB
-  storage:
-    size: 10Gi
-"#;
-        let overrides = Overrides {
-            items: vec![
-                Override::Set {
-                    resource: "cluster/data/postgres".into(),
-                    field_path: "spec/postgresql/parameters/max_connections".into(),
-                    value: "50".into(),
-                },
-            ],
-        };
-        let result = apply_overrides(manifest, &overrides).unwrap();
-        assert!(result.contains("max_connections: '50'"), "max_connections should be quoted string, got: {result}");
     }
 }

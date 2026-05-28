@@ -19,6 +19,8 @@ pub fn build() -> WorkflowDefinition {
         .name("wait-for-termination")
         .then::<steps::ForceDeleteStuckNamespaces>()
         .name("force-delete-stuck")
+        .then::<steps::StopLimaVm>()
+        .name("stop-lima-vm")
         .end_workflow()
         .build("down", 1)
 }
@@ -55,9 +57,9 @@ mod tests {
     }
 
     #[test]
-    fn test_last_step_is_force_delete() {
+    fn test_last_step_is_stop_lima() {
         let def = build();
         let last = def.steps.last().unwrap();
-        assert_eq!(last.name, Some("force-delete-stuck".into()));
+        assert_eq!(last.name, Some("stop-lima-vm".into()));
     }
 }

@@ -20,21 +20,6 @@ pub struct Cli {
     #[arg(long)]
     pub email: Option<String>,
 
-    /// Log output mode.
-    ///
-    /// The `RUST_LOG` environment variable overrides the default level filter
-    /// (e.g. `RUST_LOG=sunbeam=debug` or `RUST_LOG=trace`).
-    #[arg(short, long, value_enum, default_value_t = crate::logging::LogMode::Line, global = true)]
-    pub log_mode: crate::logging::LogMode,
-
-    /// Increase logging verbosity. Use once for debug, twice for trace.
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
-    pub verbose: u8,
-
-    /// Suppress non-error output (sets log level to warn).
-    #[arg(short, long, global = true, conflicts_with = "verbose")]
-    pub quiet: bool,
-
     #[command(subcommand)]
     /// Verb.
     pub verb: Option<Verb>,
@@ -54,22 +39,12 @@ pub enum Verb {
         /// Re-enable a resource or pattern.
         #[arg(long)]
         enable: Vec<String>,
-        /// Skip the Cilium CNI check.
+        /// Show all discoverable manifest parameters and exit.
         #[arg(long)]
-        skip_cilium: bool,
+        show_params: bool,
         /// Output a Graphviz DOT graph of the workflow and exit.
         #[arg(long)]
         graph: bool,
-        /// Use Lima VM for local k3s (shorthand for --profile lima).
-        #[arg(long)]
-        use_lima: bool,
-        /// Profile to load (from infra/profiles/<name>.yaml).
-        #[arg(long)]
-        profile: Option<String>,
-        /// Run in serial mode: longer delays between namespace applies and
-        /// more conservative resource usage for tiny single-node clusters.
-        #[arg(long)]
-        serial: bool,
     },
 
     /// Full cluster tear-down.
@@ -83,12 +58,6 @@ pub enum Verb {
         /// Preserve data namespace (postgres, opensearch, openbao).
         #[arg(long)]
         keep_data: bool,
-        /// Use Lima VM for local k3s (shorthand for --profile lima).
-        #[arg(long)]
-        use_lima: bool,
-        /// Profile to load (from infra/profiles/<name>.yaml).
-        #[arg(long)]
-        profile: Option<String>,
     },
 
     /// Manage sunbeam configuration.
@@ -237,42 +206,6 @@ pub enum Verb {
     },
 }
 
-impl Verb {
-    /// Return a short string identifier for the verb variant (e.g. "up", "version").
-    pub fn as_ref_str(&self) -> &'static str {
-        match self {
-            Verb::Up { .. } => "up",
-            Verb::Down { .. } => "down",
-            Verb::Config { .. } => "config",
-            Verb::User { .. } => "user",
-            Verb::Auth { .. } => "auth",
-            Verb::Pm { .. } => "pm",
-            Verb::Workflow { .. } => "workflow",
-            Verb::Workflows { .. } => "workflows",
-            Verb::Service { .. } => "service",
-            Verb::Vpn { .. } => "vpn",
-            Verb::Bao { .. } => "bao",
-            Verb::Completions { .. } => "completions",
-            Verb::Doctor => "doctor",
-            Verb::VpnDaemon => "vpn-daemon",
-            Verb::Update => "update",
-            Verb::Version => "version",
-            Verb::Project { .. } => "project",
-            Verb::Operations { .. } => "operations",
-            Verb::Wt { .. } => "wt",
-            Verb::Build { .. } => "build",
-            Verb::Test { .. } => "test",
-            Verb::Lint { .. } => "lint",
-            Verb::Fmt { .. } => "fmt",
-            Verb::Package { .. } => "package",
-            Verb::Deploy { .. } => "deploy",
-            Verb::Dev { .. } => "dev",
-            Verb::Clean { .. } => "clean",
-            Verb::Doc { .. } => "doc",
-        }
-    }
-}
-
 /// VPN management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum VpnAction {
@@ -353,16 +286,6 @@ pub enum ServiceAction {
         /// Deploy all services.
         #[arg(long)]
         all: bool,
-        /// Apply a named profile (shortcuts, skips, overrides).
-        #[arg(long)]
-        profile: Option<String>,
-    },
-
-    /// List all available services that can be applied.
-    List {
-        /// Output format.
-        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table)]
-        format: crate::output::OutputFormat,
     },
 
     /// kustomize build + domain subst + kubectl apply.
@@ -398,9 +321,6 @@ pub enum ServiceAction {
         /// Re-enable a resource or pattern.
         #[arg(long)]
         enable: Vec<String>,
-        /// Apply a named profile (shortcuts, skips, overrides).
-        #[arg(long)]
-        profile: Option<String>,
     },
 
     /// Generate/store all credentials in OpenBao.
@@ -804,7 +724,7 @@ pub struct ProjectRunArgs {
     pub jobs: Option<usize>,
     /// Print commands before running.
     #[arg(long)]
-    pub echo: bool,
+    pub verbose: bool,
     /// Print what would run, don't execute.
     #[arg(long)]
     pub dry_run: bool,
@@ -972,95 +892,6 @@ pub enum WorktreeAction {
     },
 }
 
-/// Version control subcommands.
-#[derive(Subcommand, Debug)]
-pub enum VcsAction {
-    /// Show working tree status.
-    Status {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-    },
-    /// Show commit history.
-    Log {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Print one line per commit.
-        #[arg(long)]
-        oneline: bool,
-        /// Limit number of commits.
-        #[arg(short = 'n', long)]
-        limit: Option<usize>,
-    },
-    /// List, create, or delete branches.
-    Branch {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// List branches.
-        #[arg(long, group = "branch_op")]
-        list: bool,
-        /// Create a new branch.
-        #[arg(long, group = "branch_op")]
-        create: Option<String>,
-        /// Delete a branch.
-        #[arg(long, group = "branch_op")]
-        delete: Option<String>,
-    },
-    /// Record changes to the repository.
-    Commit {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Commit message.
-        #[arg(short = 'm', long)]
-        message: String,
-        /// Stage all modified/deleted files before committing.
-        #[arg(long)]
-        all: bool,
-    },
-    /// Push refs to a remote.
-    Push {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-        /// Set upstream and push.
-        #[arg(long)]
-        set_upstream: Option<String>,
-    },
-    /// Fetch from remote.
-    Fetch {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-    },
-    /// Pull from remote.
-    Pull {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-    },
-    /// Clone a repository.
-    Clone {
-        /// Repository URL.
-        url: String,
-        /// Local name override (default: inferred from URL).
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Initialize workspace repos from a manifest.
-    Init {
-        /// Git URL of the workspace root repository.
-        /// If omitted, uses the current directory's sunbeam.workspace.yaml.
-        url: Option<String>,
-        /// Local directory name when cloning a git repo.
-        #[arg(long)]
-        name: Option<String>,
-    },
-}
 /// Supported shell flavors for worktree integration.
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum WtShell {
@@ -1130,11 +961,8 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
-#[tracing::instrument(skip(cli), fields(verb = tracing::field::Empty))]
-pub async fn dispatch(cli: Cli) -> Result<()> {
-    let verb_name = cli.verb.as_ref().map(|v| v.as_ref_str());
-    tracing::Span::current().record("verb", &verb_name.unwrap_or("none"));
-    tracing::debug!(msg = "cli dispatch", verb = ?cli.verb);
+pub async fn dispatch() -> Result<()> {
+    let cli = Cli::parse();
 
     // Resolve the active context from config + CLI flags (like kubectl).
     // `--domain` / `--email` are Option<String>: `None` means "don't override",
@@ -1143,26 +971,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     // for note #3's bug report — keeping an Option here makes the intent
     // explicit.
     let config = crate::config::load_config();
-    let mut active = crate::config::resolve_context(
+    let active = crate::config::resolve_context(
         &config,
         "",
         cli.context.as_deref(),
         cli.domain.as_deref().unwrap_or(""),
     );
-
-    // Resolve domain once at the CLI boundary. If the context has no domain,
-    // discover it from cluster state (gitea-inline-config secret or Lima IP).
-    if active.domain.is_empty() {
-        match crate::kube::get_domain().await {
-            Ok(d) if !d.is_empty() => active.domain = d,
-            _ => {}
-        }
-    }
-
-    // Resolve ACME email once at the CLI boundary.
-    if active.acme_email.is_empty() {
-        active.acme_email = "ops@sunbeam.pt".to_string();
-    }
 
     // Thread the active Sunbeam context's kube-context into the shared kube
     // client. An empty value here means the user picked a context that has
@@ -1189,8 +1003,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             yes,
             infra,
             keep_data,
-            use_lima,
-            profile,
         }) => {
             // Confirmation prompt (kept outside the workflow so the workflow
             // itself is non-interactive and fully automatable).
@@ -1215,7 +1027,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 }
             }
 
-            tracing::info!("Tearing down cluster (workflow engine)...");
+            crate::output::step("Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
                 let cfg = crate::config::load_config();
@@ -1230,13 +1042,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             crate::workflows::down::register(&host).await;
 
             let step_ctx = crate::workflows::StepContext::from_active();
-            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
-
             let initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "infra": infra,
                 "keep_data": keep_data,
-                "profile": effective_profile,
                 "namespaces_to_delete": [],
                 "remaining_namespaces": [],
             });
@@ -1268,11 +1077,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             set,
             disable,
             enable,
-            skip_cilium,
+            show_params,
             graph,
-            use_lima,
-            profile,
-            serial,
         }) => {
             if graph {
                 let def = crate::workflows::up::definition::build();
@@ -1280,72 +1086,52 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 return Ok(());
             }
 
-            let mut overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+            // Resolve overlay for parameter discovery
+            let infra_dir = crate::config::get_infra_dir();
+            let resolved_domain = if let Some(d) = cli.domain.as_deref().filter(|s| !s.is_empty()) {
+                d.to_string()
+            } else {
+                crate::config::domain().to_string()
+            };
+            let is_local_dev = resolved_domain.ends_with("sslip.io")
+                || resolved_domain.ends_with("nip.io")
+                || resolved_domain == "localhost"
+                || resolved_domain.starts_with("192.168.")
+                || resolved_domain.starts_with("10.")
+                || resolved_domain.starts_with("172.");
+            let overlay_name = if is_local_dev { "local" } else { "production" };
+            let overlay = infra_dir.join("overlays").join(overlay_name);
 
-            let config = crate::config::load_config();
+            let email = if let Some(e) = cli.email.as_deref().filter(|s| !s.is_empty()) {
+                e.to_string()
+            } else {
+                crate::config::load_config().acme_email
+            };
 
-            // --use-lima implies --profile lima
-            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
-
-            let mut skip_namespaces: Vec<String> = Vec::new();
-            let mut skip_ory = false;
-            let mut serial_mode = serial;
-
-            // Load profile: CLI --profile first, then active context
-            let profile_to_load = effective_profile.clone().or_else(|| {
-                let active_ctx = config.contexts.get(&config.current_context)?;
-                match &active_ctx.profile {
-                    crate::config::ProfileRef::Name(name) => Some(name.clone()),
-                    _ => None,
-                }
-            });
-
-            if let Some(profile_name) = profile_to_load {
-                let profile_path = crate::config::get_infra_dir()
-                    .join("profiles")
-                    .join(format!("{profile_name}.yaml"));
-
-                let profile_obj = if profile_path.exists() {
-                    crate::profiles::load_profile(&profile_path)?
-                } else if let Some(p) = config.resolve_profile(&crate::config::ProfileRef::Name(profile_name.clone())) {
-                    p
-                } else {
-                    return Err(SunbeamError::Config(format!(
-                        "Profile not found: {} (looked at {} and config.json)",
-                        profile_name, profile_path.display()
-                    )));
-                };
-
-                // Extract workflow flags
-                skip_namespaces = profile_obj.skip_namespaces.clone();
-                skip_ory = profile_obj.skip_ory;
-                serial_mode = profile_obj.serial_mode || serial;
-
-                // Resolve manifest overrides via tunables/shortcuts
-                let base_dir = crate::config::get_infra_dir().join("base");
-                match crate::profiles::discover_manifests(&base_dir).await {
-                    Ok(resources) => {
-                        match crate::profiles::resolve_profile_overrides(&profile_obj, &config.presets, &resources) {
-                            Ok(profile_overrides) => {
-                                overrides.items.extend(profile_overrides.items);
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to resolve profile overrides: {e}");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to discover manifests for profile resolution: {e}");
-                    }
-                }
+            if show_params {
+                crate::output::step("Loading deployment configs...");
+                let catalog = crate::manifest_params::discover_from_overlay(
+                    &overlay,
+                    &resolved_domain,
+                    &email,
+                )
+                .await
+                .map_err(|e| SunbeamError::Other(format!("Failed to discover manifests: {e}")))?;
+                crate::manifest_params::print_catalog(&catalog);
+                return Ok(());
             }
 
-            tracing::info!("Bringing up cluster (workflow engine)...");
+            let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
-            let ctx_name = if config.current_context.is_empty() {
-                "default".to_string()
-            } else {
-                config.current_context.clone()
+            crate::output::step("Bringing up cluster (workflow engine)...");
+
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
             };
 
             let host = crate::workflows::host::create_host(&ctx_name).await?;
@@ -1354,11 +1140,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let step_ctx = crate::workflows::StepContext::from_active();
             let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
-                "skip_cilium": skip_cilium,
-                "serial_mode": serial_mode,
-                "skip_ory": skip_ory,
-                "skip_namespaces": skip_namespaces,
-                "profile": effective_profile,
+                "domain": "",
             });
             if !overrides.items.is_empty() {
                 initial_data["manifest_overrides"] =
@@ -1391,7 +1173,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         Some(Verb::Service { action }) => {
-            crate::service_cmds::dispatch(action).await
+            crate::service_cmds::dispatch(
+                action,
+                cli.domain.as_deref().unwrap_or(""),
+                cli.email.as_deref().unwrap_or(""),
+            )
+            .await
         }
 
         Some(Verb::Config { action }) => match action {
@@ -1446,16 +1233,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             Some(ConfigAction::UseContext { name }) => {
                 let mut config = crate::config::load_config();
                 if !config.contexts.contains_key(&name) {
-                    tracing::warn!(
+                    crate::output::warn(&format!(
                         "Context '{name}' does not exist. Creating empty context."
-                    );
+                    ));
                     config
                         .contexts
                         .insert(name.clone(), crate::config::Context::default());
                 }
                 config.current_context = name.clone();
                 crate::config::save_config(&config)?;
-                tracing::info!("Switched to context '{name}'.");
+                crate::output::ok(&format!("Switched to context '{name}'."));
                 Ok(())
             }
             Some(ConfigAction::Get) => {
@@ -1465,22 +1252,22 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     &config.current_context
                 };
-                tracing::info!("Current context: {current}");
+                crate::output::ok(&format!("Current context: {current}"));
                 println!();
                 for (name, ctx) in &config.contexts {
                     let marker = if name == current { " *" } else { "" };
-                    tracing::info!("Context: {name}{marker}");
+                    crate::output::ok(&format!("Context: {name}{marker}"));
                     if !ctx.domain.is_empty() {
-                        tracing::info!("  domain:       {}", ctx.domain);
+                        crate::output::ok(&format!("  domain:       {}", ctx.domain));
                     }
                     if !ctx.kube_context.is_empty() {
-                        tracing::info!("  kube-context: {}", ctx.kube_context);
+                        crate::output::ok(&format!("  kube-context: {}", ctx.kube_context));
                     }
                     if !ctx.infra_dir.is_empty() {
-                        tracing::info!("  infra-dir:    {}", ctx.infra_dir);
+                        crate::output::ok(&format!("  infra-dir:    {}", ctx.infra_dir));
                     }
                     if !ctx.acme_email.is_empty() {
-                        tracing::info!("  acme-email:   {}", ctx.acme_email);
+                        crate::output::ok(&format!("  acme-email:   {}", ctx.acme_email));
                     }
                     println!();
                 }
@@ -1715,42 +1502,6 @@ mod tests {
         match cli.verb {
             Some(Verb::Up { graph, .. }) => assert!(graph),
             _ => panic!("expected Up with --graph"),
-        }
-    }
-
-    #[test]
-    fn test_up_profile_flag() {
-        let cli = parse(&["sunbeam", "up", "--profile", "lima"]);
-        match cli.verb {
-            Some(Verb::Up { profile, .. }) => assert_eq!(profile, Some("lima".to_string())),
-            _ => panic!("expected Up with --profile"),
-        }
-    }
-
-    #[test]
-    fn test_up_use_lima_flag() {
-        let cli = parse(&["sunbeam", "up", "--use-lima"]);
-        match cli.verb {
-            Some(Verb::Up { use_lima, .. }) => assert!(use_lima),
-            _ => panic!("expected Up with --use-lima"),
-        }
-    }
-
-    #[test]
-    fn test_up_serial_flag() {
-        let cli = parse(&["sunbeam", "up", "--serial"]);
-        match cli.verb {
-            Some(Verb::Up { serial, .. }) => assert!(serial),
-            _ => panic!("expected Up with --serial"),
-        }
-    }
-
-    #[test]
-    fn test_down_profile_flag() {
-        let cli = parse(&["sunbeam", "down", "--profile", "lima"]);
-        match cli.verb {
-            Some(Verb::Down { profile, .. }) => assert_eq!(profile, Some("lima".to_string())),
-            _ => panic!("expected Down with --profile"),
         }
     }
 
@@ -2215,11 +1966,10 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "deploy"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Deploy { target, all, profile },
+                action: ServiceAction::Deploy { target, all },
             }) => {
                 assert!(target.is_none());
                 assert!(!all);
-                assert!(profile.is_none());
             }
             _ => panic!("expected Service Deploy"),
         }

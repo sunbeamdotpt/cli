@@ -476,13 +476,13 @@ pub fn get_infra_dir() -> PathBuf {
             let mut dir = p.as_path();
             for _ in 0..10 {
                 dir = dir.parent()?;
-                if dir.join("infra/sbbb").is_dir() {
-                    return Some(dir.join("infra/sbbb"));
+                if dir.join("infrastructure").is_dir() {
+                    return Some(dir.join("infrastructure"));
                 }
             }
             None
         })
-        .unwrap_or_else(|| PathBuf::from("infra/sbbb"))
+        .unwrap_or_else(|| PathBuf::from("infrastructure"))
 }
 
 /// Monorepo root directory (parent of the infrastructure directory).
