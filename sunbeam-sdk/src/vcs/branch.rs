@@ -5,7 +5,7 @@ use crate::vcs::{VcsArgs, resolve_targets, run_git, run_git_output_lines};
 
 pub async fn cmd_branch(
     args: VcsArgs,
-    list: bool,
+    _list: bool,
     create: Option<String>,
     delete: Option<String>,
 ) -> Result<()> {
@@ -29,7 +29,8 @@ pub async fn cmd_branch(
     }
 
     for target in targets {
-        let lines = run_git_output_lines(&target.path, &["branch", "--format=%(refname:short)"])?;
+        let lines =
+            run_git_output_lines(&target.path, &["branch", "--format=%(refname:short)"])?;
         for line in &lines {
             if multi {
                 writeln!(stdout, "[{:>12}]  {}", target.name, line).ok();
@@ -39,4 +40,55 @@ pub async fn cmd_branch(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vcs::test_helpers::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cmd_branch_list() {
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        git_commit(tmp.path(), "first");
+        let _env = TestEnv::new(tmp.path());
+        let args = VcsArgs {
+            repo: None,
+            all: false,
+        };
+        futures::executor::block_on(cmd_branch(args, true, None, None)).unwrap();
+    }
+
+    #[test]
+    fn test_cmd_branch_create() {
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        git_commit(tmp.path(), "first");
+        let _env = TestEnv::new(tmp.path());
+        let args = VcsArgs {
+            repo: None,
+            all: false,
+        };
+        futures::executor::block_on(cmd_branch(args, false, Some("feature".into()), None)).unwrap();
+        let branches = run_git_output_lines(tmp.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        assert!(branches.iter().any(|b| b == "feature"));
+    }
+
+    #[test]
+    fn test_cmd_branch_delete() {
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        git_commit(tmp.path(), "first");
+        run_git(tmp.path(), &["branch", "tmp-branch"]).unwrap();
+        let _env = TestEnv::new(tmp.path());
+        let args = VcsArgs {
+            repo: None,
+            all: false,
+        };
+        futures::executor::block_on(cmd_branch(args, false, None, Some("tmp-branch".into()))).unwrap();
+        let branches = run_git_output_lines(tmp.path(), &["branch", "--format=%(refname:short)"]).unwrap();
+        assert!(!branches.iter().any(|b| b == "tmp-branch"));
+    }
 }

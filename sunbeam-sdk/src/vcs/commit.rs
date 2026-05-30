@@ -13,3 +13,44 @@ pub async fn cmd_commit(args: VcsArgs, message: String, all: bool) -> Result<()>
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vcs::test_helpers::*;
+    use crate::vcs::run_git_output_lines;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cmd_commit() {
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        std::fs::write(tmp.path().join("f.txt"), "hello").unwrap();
+        run_git(tmp.path(), &["add", "."]).unwrap();
+        let _env = TestEnv::new(tmp.path());
+        let args = VcsArgs {
+            repo: None,
+            all: false,
+        };
+        futures::executor::block_on(cmd_commit(args, "test commit".into(), false)).unwrap();
+        let log = run_git_output_lines(tmp.path(), &["log", "--oneline"]).unwrap();
+        assert!(!log.is_empty());
+        assert!(log[0].contains("test commit"));
+    }
+
+    #[test]
+    fn test_cmd_commit_all() {
+        let tmp = TempDir::new().unwrap();
+        git_init(tmp.path());
+        git_commit(tmp.path(), "first");
+        std::fs::write(tmp.path().join("file.txt"), "modified").unwrap();
+        let _env = TestEnv::new(tmp.path());
+        let args = VcsArgs {
+            repo: None,
+            all: false,
+        };
+        futures::executor::block_on(cmd_commit(args, "auto commit".into(), true)).unwrap();
+        let log = run_git_output_lines(tmp.path(), &["log", "--oneline"]).unwrap();
+        assert!(log[0].contains("auto commit"));
+    }
+}
