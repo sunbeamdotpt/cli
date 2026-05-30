@@ -47,12 +47,19 @@ impl StepBody for EnsureLimaVm {
             &data.domain
         };
 
-        if !data.use_lima {
-            tracing::info!(msg = "--use-lima not set — skipping Lima VM management.");
+        let profile = ctx
+            .workflow
+            .data
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if profile != "lima" {
+            tracing::info!(msg = "Profile is not 'lima' — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!(msg = "Ensuring Lima VM 'sunbeam'...");
+        tracing::info!("Ensuring Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
 
         // Verify limactl is available
         let limactl_check = tokio::process::Command::new("limactl")
@@ -69,14 +76,14 @@ impl StepBody for EnsureLimaVm {
 
         match status.as_deref() {
             None | Some("") | Some("None") => {
-                tracing::info!(msg = "Creating Lima VM 'sunbeam'...");
+                tracing::info!("Creating Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
                 create_lima_vm().await.map_err(step_err)?;
             }
             Some("Running") => {
-                tracing::info!(msg = "Lima VM 'sunbeam' is already running.");
+                tracing::info!("Lima VM '{}' is already running.", crate::constants::LIMA_VM_NAME);
             }
             Some(st) => {
-                tracing::info!(msg = "Lima VM 'sunbeam' is stopped — starting...", status = st);
+                tracing::info!("Lima VM '{}' is stopped — starting... (status: {})", crate::constants::LIMA_VM_NAME, st);
                 start_lima_vm().await.map_err(step_err)?;
             }
         }
@@ -87,11 +94,11 @@ impl StepBody for EnsureLimaVm {
         loop {
             attempt += 1;
             if std::time::Instant::now() > vm_deadline {
-                return Err(step_err("Timed out waiting for Lima VM 'sunbeam' to reach Running status (5 min). Try: limactl list sunbeam"));
+                return Err(step_err(format!("Timed out waiting for Lima VM '{}' to reach Running status (5 min). Try: limactl list {}", crate::constants::LIMA_VM_NAME, crate::constants::LIMA_VM_NAME)));
             }
             match lima_vm_status().await.as_deref() {
                 Some("Running") => {
-                    tracing::info!(msg = "Lima VM 'sunbeam' is running.", attempt = attempt);
+                    tracing::info!("Lima VM '{}' is running. (attempt: {})", crate::constants::LIMA_VM_NAME, attempt);
                     break;
                 }
                 Some(st) => {
@@ -121,7 +128,7 @@ impl StepBody for EnsureLimaVm {
         // Paths for kubeconfig merging (used below).
         let lima_kc = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".lima/sunbeam/copied-from-guest/kubeconfig.yaml");
+            .join(format!(".lima/{}/copied-from-guest/kubeconfig.yaml", crate::constants::LIMA_VM_NAME));
         let host_kc = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join(".kube/config");
@@ -135,10 +142,11 @@ impl StepBody for EnsureLimaVm {
         loop {
             k3s_attempt += 1;
             if std::time::Instant::now() > k3s_deadline {
-                return Err(step_err(
+                return Err(step_err(format!(
                     "Timed out waiting for k3s API to become reachable (5 min).\n\
-                     Try: limactl shell sunbeam -- sudo systemctl status k3s",
-                ));
+                     Try: limactl shell {} -- sudo systemctl status k3s",
+                    crate::constants::LIMA_VM_NAME
+                )));
             }
 
             // Lima copies the guest kubeconfig here once k3s is initialised.
@@ -224,10 +232,10 @@ impl StepBody for EnsureLimaVm {
     }
 }
 
-/// Query the status of the `sunbeam` Lima VM.
+/// Query the status of the Lima VM.
 async fn lima_vm_status() -> Option<String> {
     let output = tokio::process::Command::new("limactl")
-        .args(["list", "sunbeam", "--format", "{{.Status}}"])
+        .args(["list", crate::constants::LIMA_VM_NAME, "--format", "{{.Status}}"])
         .output()
         .await
         .ok()?;
@@ -239,14 +247,14 @@ async fn lima_vm_status() -> Option<String> {
     }
 }
 
-/// Create the `sunbeam` Lima VM from the embedded YAML.
+/// Create the Lima VM from the embedded YAML.
 async fn create_lima_vm() -> Result<(), String> {
     let tmp = std::env::temp_dir().join("lima-sunbeam.yaml");
     std::fs::write(&tmp, LIMA_SUNBEAM_YAML)
         .map_err(|e| format!("Failed to write temp lima yaml: {e}"))?;
 
     let status = tokio::process::Command::new("limactl")
-        .args(["create", "--name", "sunbeam", "--tty=false"])
+        .args(["create", "--name", crate::constants::LIMA_VM_NAME, "--tty=false"])
         .arg(&tmp)
         .status()
         .await
@@ -260,10 +268,10 @@ async fn create_lima_vm() -> Result<(), String> {
     start_lima_vm().await
 }
 
-/// Start the `sunbeam` Lima VM.
+/// Start the Lima VM.
 async fn start_lima_vm() -> Result<(), String> {
     let status = tokio::process::Command::new("limactl")
-        .args(["start", "sunbeam"])
+        .args(["start", crate::constants::LIMA_VM_NAME])
         .status()
         .await
         .map_err(|e| format!("Failed to run limactl start: {e}"))?;

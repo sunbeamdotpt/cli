@@ -268,17 +268,17 @@ impl StepBody for ForceDeleteStuckNamespaces {
 
 // ── DeleteLimaVm ────────────────────────────────────────────────────────────
 
-/// Delete the Lima sunbeam VM.
+/// Delete the Lima VM.
 ///
 /// This is a best-effort step — failure does not block the workflow.
 #[derive(Default)]
 pub struct DeleteLimaVm;
 
-/// Run `limactl delete sunbeam --force` directly.
+/// Run `limactl delete <VM_NAME> --force` directly.
 #[tracing::instrument]
 pub async fn delete_lima_vm() -> Result<(), String> {
     let status = tokio::process::Command::new("limactl")
-        .args(["delete", "sunbeam", "--force"])
+        .args(["delete", crate::constants::LIMA_VM_NAME, "--force"])
         .status()
         .await
         .map_err(|e| format!("Failed to run limactl delete: {e}"))?;
@@ -293,15 +293,19 @@ pub async fn delete_lima_vm() -> Result<(), String> {
 #[async_trait::async_trait]
 impl StepBody for DeleteLimaVm {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        let data: DownData = serde_json::from_value(ctx.workflow.data.clone())
-            .map_err(|e| step_err(format!("DownData parse: {e}")))?;
+        let profile = ctx
+            .workflow
+            .data
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
-        if !data.use_lima {
-            tracing::info!("--use-lima not set — skipping Lima VM management.");
+        if profile != "lima" {
+            tracing::info!("Profile is not 'lima' — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!("Deleting Lima VM 'sunbeam'...");
+        tracing::info!("Deleting Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
         match delete_lima_vm().await {
             Ok(()) => tracing::info!("Lima VM deleted."),
             Err(e) => tracing::warn!("{e}"),

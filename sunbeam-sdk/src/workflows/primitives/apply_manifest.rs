@@ -6,10 +6,10 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-/// Global mutex that serializes ApplyManifest steps on Lima VMs.
+/// Global mutex that serializes ApplyManifest steps when running in serial mode.
 /// Single-node k3s cannot handle the pod-startup storm from many
 /// namespaces applied in parallel, even with a kube_apply semaphore.
-static LIMA_APPLY_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+static SERIAL_APPLY_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -97,90 +97,20 @@ impl StepBody for ApplyManifest {
             .unwrap_or(&crate::config::active_context().domain);
         let skip_patterns = build_skip_patterns(config, domain);
 
-        // On Lima VMs, serialize all ApplyManifest steps to protect single-node
-        // k3s from being overwhelmed by concurrent namespace applications.
-        let use_lima = data
-            .get("use_lima")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let lima_skip: Vec<String> = data
-            .get("lima_skip_namespaces")
+        let skip_namespaces: Vec<String> = data
+            .get("skip_namespaces")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        if lima_skip.contains(&namespace.to_string()) {
-            tracing::info!("Skipping {namespace} namespace apply (Lima VM)");
+        if skip_namespaces.contains(&namespace.to_string()) {
+            tracing::info!("Skipping {namespace} namespace apply (profile skip list)");
             return Ok(ExecutionResult::next());
         }
 
-        let mut overrides: crate::manifest_params::Overrides = data
+        let overrides: crate::manifest_params::Overrides = data
             .get("manifest_overrides")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
-
-        // On Lima dev VMs, disk is limited — shrink production-sized PVCs.
-        // Also shrink postgres resources so the initdb job can schedule on a
-        // 10 GiB node alongside the data-namespace pods.
-        if use_lima && namespace == "data" {
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "cluster/data/postgres".into(),
-                field_path: "spec/storage/size".into(),
-                value: "10Gi".into(),
-            });
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "persistentvolumeclaim/data/opensearch-data".into(),
-                field_path: "spec/resources/requests/storage".into(),
-                value: "5Gi".into(),
-            });
-            // Undo production-overlay sizing (4 Gi req / 8 Gi lim) so initdb
-            // and the running instance fit on a single-node Lima VM.
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "cluster/data/postgres".into(),
-                field_path: "spec/resources".into(),
-                value: r#"{"requests":{"memory":"512Mi","cpu":"250m"},"limits":{"memory":"1Gi"}}"#
-                    .into(),
-            });
-            // Restore base postgresql parameters (undo production overlay).
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "cluster/data/postgres".into(),
-                field_path: "spec/postgresql/parameters".into(),
-                value: r#"{"max_connections":"100","shared_buffers":"128MB","work_mem":"4MB","effective_cache_size":"256MB","maintenance_work_mem":"64MB"}"#
-                    .into(),
-            });
-            // Scale searxng to zero — it crashes anyway and wastes 1 Gi of
-            // scheduling headroom on a tiny node.
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "deployment/data/searxng".into(),
-                field_path: "spec/replicas".into(),
-                value: "0".into(),
-            });
-            // Shrink OpenSearch to 512 Mi req / 1 Gi lim so it fits alongside
-            // postgres on a 10 Gi node. JVM heap is capped at 512 Mi.
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "deployment/data/opensearch".into(),
-                field_path: "spec/template/spec/containers/0/resources".into(),
-                value: r#"{"requests":{"memory":"512Mi","cpu":"100m"},"limits":{"memory":"1Gi"}}"#
-                    .into(),
-            });
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "deployment/data/opensearch".into(),
-                field_path: "spec/template/spec/containers/0/env".into(),
-                value: r#"[{"name":"discovery.type","value":"single-node"},{"name":"OPENSEARCH_JAVA_OPTS","value":"-Xms256m -Xmx512m"},{"name":"DISABLE_SECURITY_PLUGIN","value":"true"},{"name":"plugins.ml_commons.only_run_on_ml_node","value":"false"},{"name":"plugins.ml_commons.native_memory_threshold","value":"90"},{"name":"plugins.ml_commons.model_access_control_enabled","value":"false"},{"name":"plugins.ml_commons.allow_registering_model_via_url","value":"true"}]"#
-                    .into(),
-            });
-        }
-
-        // On Lima VMs, the unified overlay adds hostPort 22 (SSH), 80, and 443
-        // to the pingora deployment. hostPort 22 conflicts with the VM's own
-        // SSH daemon and breaks Lima's guest agent forwarding. Strip all
-        // hostPorts so pingora uses container ports only.
-        if use_lima && namespace == "ingress" {
-            overrides.items.push(crate::manifest_params::Override::Set {
-                resource: "deployment/ingress/pingora".into(),
-                field_path: "spec/template/spec/containers/0/ports".into(),
-                value: r#"[{"name":"http","containerPort":80,"protocol":"TCP"},{"name":"https","containerPort":443,"protocol":"TCP"},{"name":"ssh","containerPort":22,"protocol":"TCP"}]"#.into(),
-            });
-        }
 
         let opts = crate::manifests::ApplyOptions {
             namespace: namespace.to_string(),
@@ -194,32 +124,23 @@ impl StepBody for ApplyManifest {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let _lima_guard = if use_lima {
-            let lock = LIMA_APPLY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-            tracing::info!("Applying {namespace} (Lima serialized)...");
+        let _serial_guard = if serial_mode {
+            let lock = SERIAL_APPLY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+            tracing::info!("Applying {namespace} (serial mode)...");
             let guard = lock.lock().await;
             // Give single-node k3s a moment to breathe between namespace
             // applications — pod startup storms from previous namespaces can
             // make the API server temporarily unresponsive.
             let base_delay = config
-                .get("lima_delay_secs")
+                .get("serial_delay_secs")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10);
-            // In serial mode, double the breathing room so pods from the
-            // previous namespace have time to start before we hammer the
-            // scheduler with the next namespace.
-            let delay = if serial_mode { base_delay * 3 } else { base_delay };
+            let delay = base_delay * 3;
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             Some(guard)
         } else {
             // Stagger parallel steps to avoid thundering-herd against k3s API.
-            let stagger = if serial_mode {
-                // In serial mode, add a generous fixed stagger regardless of
-                // namespace name so we don't flood the API server.
-                2000u64 + stagger_millis_for(namespace)
-            } else {
-                stagger_millis_for(namespace)
-            };
+            let stagger = stagger_millis_for(namespace);
             if stagger > 0 {
                 tracing::info!("Applying {namespace} (staggering {stagger}ms)...");
                 tokio::time::sleep(std::time::Duration::from_millis(stagger)).await;
