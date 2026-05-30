@@ -1,12 +1,9 @@
-use std::io::Write;
-
 use crate::error::Result;
 use crate::vcs::{VcsArgs, resolve_targets, run_git_output_lines};
 
 pub async fn cmd_status(args: VcsArgs) -> Result<()> {
     let targets = resolve_targets(&args)?;
     let multi = targets.len() > 1;
-    let mut stdout = std::io::stdout();
     let mut any_output = false;
 
     for target in targets {
@@ -16,16 +13,16 @@ pub async fn cmd_status(args: VcsArgs) -> Result<()> {
         }
         for line in &lines {
             if multi {
-                writeln!(stdout, "[{:>12}]  {}", target.name, line).ok();
+                tracing::info!("[{:>12}]  {}", target.name, line);
             } else {
-                writeln!(stdout, "{}", line).ok();
+                tracing::info!("{}", line);
             }
             any_output = true;
         }
     }
 
     if !any_output && multi {
-        println!("All repos clean.");
+        tracing::info!("All repos clean.");
     }
     Ok(())
 }

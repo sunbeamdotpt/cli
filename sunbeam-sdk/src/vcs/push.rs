@@ -14,7 +14,7 @@ pub async fn cmd_push(
             git_args.push(branch);
         }
         run_git(&target.path, &git_args)?;
-        println!("Pushed {} to {}", target.name, remote);
+        tracing::info!("Pushed {} to {}", target.name, remote);
     }
     Ok(())
 }
