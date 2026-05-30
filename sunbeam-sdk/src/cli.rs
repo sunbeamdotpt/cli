@@ -57,15 +57,15 @@ pub enum Verb {
         /// Skip the Cilium CNI check.
         #[arg(long)]
         skip_cilium: bool,
-        /// Show all discoverable manifest parameters and exit.
-        #[arg(long)]
-        show_params: bool,
         /// Output a Graphviz DOT graph of the workflow and exit.
         #[arg(long)]
         graph: bool,
-        /// Use Lima VM for the cluster (local k3s via limactl).
+        /// Use Lima VM for local k3s (shorthand for --profile lima).
         #[arg(long)]
         use_lima: bool,
+        /// Profile to load (from infra/profiles/<name>.yaml).
+        #[arg(long)]
+        profile: Option<String>,
         /// Run in serial mode: longer delays between namespace applies and
         /// more conservative resource usage for tiny single-node clusters.
         #[arg(long)]
@@ -83,9 +83,12 @@ pub enum Verb {
         /// Preserve data namespace (postgres, opensearch, openbao).
         #[arg(long)]
         keep_data: bool,
-        /// Use Lima VM for the cluster (local k3s via limactl).
+        /// Use Lima VM for local k3s (shorthand for --profile lima).
         #[arg(long)]
         use_lima: bool,
+        /// Profile to load (from infra/profiles/<name>.yaml).
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Manage sunbeam configuration.
@@ -1092,6 +1095,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             infra,
             keep_data,
             use_lima,
+            profile,
         }) => {
             // Confirmation prompt (kept outside the workflow so the workflow
             // itself is non-interactive and fully automatable).
@@ -1116,15 +1120,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 }
             }
 
-            if use_lima {
-                tracing::info!("Deleting Lima VM 'sunbeam'...");
-                match crate::workflows::down::steps::delete_lima_vm().await {
-                    Ok(()) => tracing::info!("Lima VM deleted."),
-                    Err(e) => tracing::warn!("Failed to delete Lima VM: {e}"),
-                }
-                return Ok(());
-            }
-
             tracing::info!("Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
@@ -1140,11 +1135,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             crate::workflows::down::register(&host).await;
 
             let step_ctx = crate::workflows::StepContext::from_active();
+            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
+
             let initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "infra": infra,
                 "keep_data": keep_data,
-                "use_lima": use_lima,
+                "profile": effective_profile,
                 "namespaces_to_delete": [],
                 "remaining_namespaces": [],
             });
@@ -1177,9 +1174,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             disable,
             enable,
             skip_cilium,
-            show_params,
             graph,
             use_lima,
+            profile,
             serial,
         }) => {
             if graph {
@@ -1188,63 +1185,72 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 return Ok(());
             }
 
-            // Resolve overlay for parameter discovery
-            let infra_dir = crate::config::get_infra_dir();
-            let resolved_domain = crate::config::domain().to_string();
-            let overlay = infra_dir.join("overlays");
-            let email = crate::config::active_context().acme_email.clone();
-
-            if show_params {
-                tracing::info!("Loading deployment configs...");
-                let catalog = crate::manifest_params::discover_from_overlay(
-                    &overlay,
-                    &resolved_domain,
-                    &email,
-                )
-                .await
-                .map_err(|e| SunbeamError::Other(format!("Failed to discover manifests: {e}")))?;
-                crate::manifest_params::print_catalog(&catalog);
-                return Ok(());
-            }
-
             let mut overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
-            if use_lima {
-                tracing::info!("Applying local-dev resource overrides for Lima VM...");
-                let local_dev_patches = [
-                    // PVC size overrides
-                    ("Cluster/data/postgres", "spec/storage/size", "10Gi"),
-                    ("PersistentVolumeClaim/data/opensearch-data", "spec/resources/requests/storage", "10Gi"),
-                    ("StatefulSet/storage/seaweedfs-volume", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
-                    ("PersistentVolumeClaim/matrix/tuwunel-data", "spec/resources/requests/storage", "10Gi"),
-                    ("StatefulSet/monitoring/loki", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
-                    ("StatefulSet/monitoring/tempo", "spec/volumeClaimTemplates/0/spec/resources/requests/storage", "10Gi"),
-                    ("Prometheus/monitoring/kube-prometheus-stack-prometheus", "spec/storage/volumeClaimTemplate/spec/resources/requests/storage", "10Gi"),
-                    // CPU request overrides — Lima VM has 6 cores, reduce heavy hitters
-                    ("Deployment/build/buildkitd", "spec/template/spec/containers/0/resources/requests/cpu", "100m"),
-                    ("Deployment/data/opensearch", "spec/template/spec/containers/0/resources/requests/cpu", "250m"),
-                    ("Deployment/media/livekit-server", "spec/template/spec/containers/0/resources/requests/cpu", "250m"),
-                    ("Deployment/ingress/pingora", "spec/template/spec/containers/0/resources/requests/cpu", "100m"),
-                    ("Deployment/data/searxng", "spec/template/spec/containers/0/resources/requests/cpu", "50m"),
-                ];
-                for (resource, field_path, value) in local_dev_patches {
-                    overrides.items.push(crate::manifest_params::Override::Set {
-                        resource: resource.to_string(),
-                        field_path: field_path.to_string(),
-                        value: value.to_string(),
-                    });
+            let config = crate::config::load_config();
+
+            // --use-lima implies --profile lima
+            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
+
+            let mut skip_namespaces: Vec<String> = Vec::new();
+            let mut skip_ory = false;
+            let mut serial_mode = serial;
+
+            // Load profile: CLI --profile first, then active context
+            let profile_to_load = effective_profile.clone().or_else(|| {
+                let active_ctx = config.contexts.get(&config.current_context)?;
+                match &active_ctx.profile {
+                    crate::config::ProfileRef::Name(name) => Some(name.clone()),
+                    _ => None,
+                }
+            });
+
+            if let Some(profile_name) = profile_to_load {
+                let profile_path = crate::config::get_infra_dir()
+                    .join("profiles")
+                    .join(format!("{profile_name}.yaml"));
+
+                let profile_obj = if profile_path.exists() {
+                    crate::profiles::load_profile(&profile_path)?
+                } else if let Some(p) = config.resolve_profile(&crate::config::ProfileRef::Name(profile_name.clone())) {
+                    p
+                } else {
+                    return Err(SunbeamError::Config(format!(
+                        "Profile not found: {} (looked at {} and config.json)",
+                        profile_name, profile_path.display()
+                    )));
+                };
+
+                // Extract workflow flags
+                skip_namespaces = profile_obj.skip_namespaces.clone();
+                skip_ory = profile_obj.skip_ory;
+                serial_mode = profile_obj.serial_mode || serial;
+
+                // Resolve manifest overrides via tunables/shortcuts
+                let base_dir = crate::config::get_infra_dir().join("base");
+                match crate::profiles::discover_manifests(&base_dir).await {
+                    Ok(resources) => {
+                        match crate::profiles::resolve_profile_overrides(&profile_obj, &config.presets, &resources) {
+                            Ok(profile_overrides) => {
+                                overrides.items.extend(profile_overrides.items);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to resolve profile overrides: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to discover manifests for profile resolution: {e}");
+                    }
                 }
             }
 
             tracing::info!("Bringing up cluster (workflow engine)...");
 
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
+            let ctx_name = if config.current_context.is_empty() {
+                "default".to_string()
+            } else {
+                config.current_context.clone()
             };
 
             let host = crate::workflows::host::create_host(&ctx_name).await?;
@@ -1254,14 +1260,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "skip_cilium": skip_cilium,
-                "use_lima": use_lima,
-                "serial_mode": serial,
-                "skip_ory": use_lima,
-                "lima_skip_namespaces": if use_lima {
-                    vec!["ory".to_string(), "monitoring".to_string(), "media".to_string(), "devtools".to_string(), "storage".to_string(), "stalwart".to_string(), "vpn".to_string(), "matrix".to_string(), "press".to_string(), "wfe".to_string(), "oci".to_string(), "ingress".to_string()]
-                } else {
-                    Vec::<String>::new()
-                },
+                "serial_mode": serial_mode,
+                "skip_ory": skip_ory,
+                "skip_namespaces": skip_namespaces,
+                "profile": effective_profile,
             });
             if !overrides.items.is_empty() {
                 initial_data["manifest_overrides"] =
@@ -1622,6 +1624,15 @@ mod tests {
     }
 
     #[test]
+    fn test_up_profile_flag() {
+        let cli = parse(&["sunbeam", "up", "--profile", "lima"]);
+        match cli.verb {
+            Some(Verb::Up { profile, .. }) => assert_eq!(profile, Some("lima".to_string())),
+            _ => panic!("expected Up with --profile"),
+        }
+    }
+
+    #[test]
     fn test_up_use_lima_flag() {
         let cli = parse(&["sunbeam", "up", "--use-lima"]);
         match cli.verb {
@@ -1640,11 +1651,11 @@ mod tests {
     }
 
     #[test]
-    fn test_down_use_lima_flag() {
-        let cli = parse(&["sunbeam", "down", "--use-lima"]);
+    fn test_down_profile_flag() {
+        let cli = parse(&["sunbeam", "down", "--profile", "lima"]);
         match cli.verb {
-            Some(Verb::Down { use_lima, .. }) => assert!(use_lima),
-            _ => panic!("expected Down with --use-lima"),
+            Some(Verb::Down { profile, .. }) => assert_eq!(profile, Some("lima".to_string())),
+            _ => panic!("expected Down with --profile"),
         }
     }
 

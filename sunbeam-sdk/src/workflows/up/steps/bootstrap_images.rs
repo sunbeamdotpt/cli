@@ -30,14 +30,15 @@ pub struct BootstrapCriticalImages;
 #[async_trait::async_trait]
 impl StepBody for BootstrapCriticalImages {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        let lima_skip: Vec<String> = ctx
+        let profile = ctx
             .workflow
             .data
-            .get("lima_skip_namespaces")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-        if lima_skip.contains(&"ingress".to_string()) {
-            tracing::info!("Skipping proxy image bootstrap (Lima VM — ingress skipped)");
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if profile != "lima" {
+            tracing::info!("Profile is not 'lima' — skipping critical image bootstrap (Lima-specific).");
             return Ok(ExecutionResult::next());
         }
 
@@ -268,8 +269,11 @@ async fn image_exists_in_k3s(image_ref: &str) -> wfe_core::Result<bool> {
 const BUILDKIT_ENDPOINT: &str = "tcp://127.0.0.1:1234";
 
 async fn build_proxy_image() -> wfe_core::Result<PathBuf> {
-    let ws_root = std::env::current_dir()
-        .map_err(|e| step_err(format!("Failed to get cwd: {e}")))?;
+    // Discover the workspace root (where sunbeam.workspace.yaml lives) rather
+    // than assuming cwd is the workspace root. This step may be invoked from
+    // anywhere (e.g. platform/cli when running `cargo run --bin sunbeam`).
+    let ws_root = crate::discovery::find_workspace_root(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+        .map_err(|e| step_err(format!("Failed to find workspace root: {e}")))?;
 
     let tar_path = std::env::temp_dir().join("sunbeam-proxy-bootstrap.tar");
 
@@ -361,7 +365,7 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
         .args([
             "copy",
             &tar_path.display().to_string(),
-            "sunbeam:/tmp/sunbeam-proxy-bootstrap.tar",
+            &format!("{}:/tmp/sunbeam-proxy-bootstrap.tar", crate::constants::LIMA_VM_NAME),
         ])
         .output()
         .await
