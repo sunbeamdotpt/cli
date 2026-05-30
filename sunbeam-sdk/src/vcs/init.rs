@@ -27,12 +27,12 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
             )));
         }
 
-        println!("Cloning workspace root into {repo_name}...");
+        tracing::info!("Cloning workspace root into {repo_name}...");
         run_git(&cwd, &["clone", &url, &repo_name])?;
 
         let manifest_path = dest.join(WORKSPACE_FILE);
         if !manifest_path.exists() {
-            println!("No {WORKSPACE_FILE} found in cloned repo; done.");
+            tracing::info!("No {WORKSPACE_FILE} found in cloned repo; done.");
             return Ok(());
         }
 
@@ -50,7 +50,7 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         (cwd, ws)
     };
 
-    println!(
+    tracing::info!(
         "Workspace '{}' found. Initializing repos...",
         ws.workspace.name
     );
@@ -62,19 +62,19 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         let repo_path = ws_root.join(&entry.repo.path);
 
         if repo_path.exists() {
-            println!("  [{}] already exists, skipping", entry.name);
+            tracing::info!("  [{}] already exists, skipping", entry.name);
             skipped += 1;
             continue;
         }
 
         let Some(upstream) = &entry.repo.upstream else {
-            println!("  [{}] no upstream, skipping", entry.name);
+            tracing::info!("  [{}] no upstream, skipping", entry.name);
             skipped += 1;
             continue;
         };
 
         let git_url = upstream_to_git_url(upstream);
-        println!(
+        tracing::info!(
             "  [{}] cloning {} -> {}",
             entry.name, git_url, entry.repo.path
         );
@@ -87,13 +87,13 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         match run_git(&ws_root, &["clone", &git_url, &entry.repo.path]) {
             Ok(_) => cloned += 1,
             Err(e) => {
-                eprintln!("  [{}] clone failed: {e}", entry.name);
+                tracing::warn!("  [{}] clone failed: {e}", entry.name);
                 skipped += 1;
             }
         }
     }
 
-    println!("\nDone: {cloned} cloned, {skipped} skipped.");
+    tracing::info!("Done: {cloned} cloned, {skipped} skipped.");
     Ok(())
 }
 

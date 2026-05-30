@@ -5,7 +5,7 @@ pub async fn cmd_fetch(args: VcsArgs, remote: String) -> Result<()> {
     let targets = resolve_targets(&args)?;
     for target in targets {
         run_git(&target.path, &["fetch", &remote])?;
-        println!("Fetched {} in {}", remote, target.name);
+        tracing::info!("Fetched {} in {}", remote, target.name);
     }
     Ok(())
 }
