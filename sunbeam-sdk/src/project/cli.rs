@@ -61,7 +61,7 @@ async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
         }
     })?;
 
-    let updated = crate::proxy::bump_proxy_tag(&current, tag)?;
+    let updated = crate::proxy::bump_proxy_image(&current, tag)?;
     std::fs::write(&kustomization_path, updated.as_bytes()).map_err(|e| {
         SunbeamError::Io {
             context: format!("writing {}", kustomization_path.display()),

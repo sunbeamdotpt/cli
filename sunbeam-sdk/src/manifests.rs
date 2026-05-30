@@ -51,6 +51,37 @@ pub fn filter_by_namespace(manifests: &str, namespace: &str, skip_patterns: &[St
     format!("---\n{}\n", kept.join("\n---\n"))
 }
 
+/// Remove YAML documents that belong to skipped namespaces.
+///
+/// Keeps cluster-scoped resources and kube-system resources, but drops
+/// namespace-scoped resources and Namespace resources for skipped namespaces.
+pub fn filter_skip_namespaces(manifests: &str, skip_namespaces: &[String]) -> String {
+    let mut kept = Vec::new();
+    for doc in manifests.split("\n---") {
+        let doc = doc.trim();
+        if doc.is_empty() {
+            continue;
+        }
+        let in_skip_ns = skip_namespaces
+            .iter()
+            .any(|ns| doc.contains(&format!("namespace: {ns}")));
+        let is_skip_ns = skip_namespaces.iter().any(|ns| {
+            doc.contains("kind: Namespace") && doc.contains(&format!("name: {ns}"))
+        });
+        let is_cluster_scoped =
+            !doc.contains("namespace: ") && !doc.contains("kind: Namespace");
+        let is_system_ns = doc.contains("namespace: kube-system");
+
+        if is_cluster_scoped || is_system_ns || (!in_skip_ns && !is_skip_ns) {
+            kept.push(doc);
+        }
+    }
+    if kept.is_empty() {
+        return String::new();
+    }
+    format!("---\n{}\n", kept.join("\n---\n"))
+}
+
 /// Options controlling a manifest apply operation.
 #[derive(Debug, Clone, Default)]
 pub struct ApplyOptions {
@@ -67,6 +98,8 @@ pub struct ApplyOptions {
     /// EnsureCilium) has discovered a live domain that differs from the
     /// statically-configured one.
     pub domain: Option<String>,
+    /// Namespaces to skip when applying all namespaces.
+    pub skip_namespaces: Vec<String>,
 }
 
 /// Discover available service namespaces by scanning `<infra_dir>/base/`
@@ -143,6 +176,10 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
 
     if let Some(ov) = &opts.overrides {
         manifests = crate::manifest_params::apply_overrides(&manifests, ov)?;
+    }
+
+    if !opts.skip_namespaces.is_empty() {
+        manifests = filter_skip_namespaces(&manifests, &opts.skip_namespaces);
     }
 
     if !namespace.is_empty() {
@@ -1078,6 +1115,7 @@ spec:
             skip_patterns: vec!["scaleway-certmanager-webhook".to_string()],
             overrides: Some(overrides),
             domain: None,
+            skip_namespaces: Vec::new(),
         };
         assert_eq!(opts.namespace, "ory");
         assert!(opts.dry_run);
@@ -1254,5 +1292,29 @@ spec:
         );
         // Should NOT contain arbitrary non-service directories
         assert!(!found.contains(&"not-a-service".to_string()));
+    }
+
+    #[test]
+    fn test_filter_skip_namespaces_drops_skipped() {
+        let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\ndata:\n  key: val\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm2\n  namespace: matrix\ndata:\n  key: val\n---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: ory\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: reader\n";
+        let result = filter_skip_namespaces(input, &["ory".to_string()]);
+        assert!(!result.contains("namespace: ory"), "should drop ory namespace resources");
+        assert!(!result.contains("name: ory\n"), "should drop ory Namespace resource");
+        assert!(result.contains("namespace: matrix"), "should keep matrix");
+        assert!(result.contains("kind: ClusterRole"), "should keep cluster-scoped");
+    }
+
+    #[test]
+    fn test_filter_skip_namespaces_keeps_all_when_empty() {
+        let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\n";
+        let result = filter_skip_namespaces(input, &[]);
+        assert!(result.contains("namespace: ory"));
+    }
+
+    #[test]
+    fn test_filter_skip_namespaces_keeps_kube_system() {
+        let input = "---\napiVersion: v1\nkind: Role\nmetadata:\n  name: leader\n  namespace: kube-system\n";
+        let result = filter_skip_namespaces(input, &["kube-system".to_string()]);
+        assert!(result.contains("namespace: kube-system"));
     }
 }
