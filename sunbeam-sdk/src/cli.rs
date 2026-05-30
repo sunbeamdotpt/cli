@@ -966,6 +966,95 @@ pub enum WorktreeAction {
     },
 }
 
+/// Version control subcommands.
+#[derive(Subcommand, Debug)]
+pub enum VcsAction {
+    /// Show working tree status.
+    Status {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+    },
+    /// Show commit history.
+    Log {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// Print one line per commit.
+        #[arg(long)]
+        oneline: bool,
+        /// Limit number of commits.
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
+    },
+    /// List, create, or delete branches.
+    Branch {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// List branches.
+        #[arg(long, group = "branch_op")]
+        list: bool,
+        /// Create a new branch.
+        #[arg(long, group = "branch_op")]
+        create: Option<String>,
+        /// Delete a branch.
+        #[arg(long, group = "branch_op")]
+        delete: Option<String>,
+    },
+    /// Record changes to the repository.
+    Commit {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// Commit message.
+        #[arg(short = 'm', long)]
+        message: String,
+        /// Stage all modified/deleted files before committing.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Push refs to a remote.
+    Push {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// Remote name (default: origin).
+        #[arg(long, default_value = "origin")]
+        remote: String,
+        /// Set upstream and push.
+        #[arg(long)]
+        set_upstream: Option<String>,
+    },
+    /// Fetch from remote.
+    Fetch {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// Remote name (default: origin).
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// Pull from remote.
+    Pull {
+        #[command(flatten)]
+        args: crate::vcs::VcsArgs,
+        /// Remote name (default: origin).
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+    /// Clone a repository.
+    Clone {
+        /// Repository URL.
+        url: String,
+        /// Local name override (default: inferred from URL).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Initialize workspace repos from a manifest.
+    Init {
+        /// Git URL of the workspace root repository.
+        /// If omitted, uses the current directory's sunbeam.workspace.yaml.
+        url: Option<String>,
+        /// Local directory name when cloning a git repo.
+        #[arg(long)]
+        name: Option<String>,
+    },
+}
 /// Supported shell flavors for worktree integration.
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum WtShell {
