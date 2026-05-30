@@ -5,7 +5,7 @@ pub async fn cmd_pull(args: VcsArgs, remote: String) -> Result<()> {
     let targets = resolve_targets(&args)?;
     for target in targets {
         run_git(&target.path, &["pull", &remote])?;
-        println!("Pulled {} in {}", remote, target.name);
+        tracing::info!("Pulled {} in {}", remote, target.name);
     }
     Ok(())
 }
