@@ -353,6 +353,9 @@ pub enum ServiceAction {
         /// Deploy all services.
         #[arg(long)]
         all: bool,
+        /// Apply a named profile (shortcuts, skips, overrides).
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// List all available services that can be applied.
@@ -395,6 +398,9 @@ pub enum ServiceAction {
         /// Re-enable a resource or pattern.
         #[arg(long)]
         enable: Vec<String>,
+        /// Apply a named profile (shortcuts, skips, overrides).
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Generate/store all credentials in OpenBao.
@@ -2209,10 +2215,11 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "deploy"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Deploy { target, all },
+                action: ServiceAction::Deploy { target, all, profile },
             }) => {
                 assert!(target.is_none());
                 assert!(!all);
+                assert!(profile.is_none());
             }
             _ => panic!("expected Service Deploy"),
         }
