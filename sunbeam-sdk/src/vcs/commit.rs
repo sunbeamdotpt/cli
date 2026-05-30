@@ -9,7 +9,7 @@ pub async fn cmd_commit(args: VcsArgs, message: String, all: bool) -> Result<()>
             git_args.push("-a");
         }
         run_git(&target.path, &git_args)?;
-        println!("Committed in {}", target.name);
+        tracing::info!("Committed in {}", target.name);
     }
     Ok(())
 }

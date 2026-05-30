@@ -23,7 +23,7 @@ pub async fn cmd_clone(url: String, name: Option<String>) -> Result<()> {
         .ok_or_else(|| SunbeamError::Config(format!("invalid destination path for {repo_name}")))?;
 
     run_git(parent, &["clone", &url, dir_name])?;
-    println!("Cloned {} into {}", url, dest.display());
+    tracing::info!("Cloned {} into {}", url, dest.display());
     Ok(())
 }
 
