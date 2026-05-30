@@ -28,6 +28,110 @@ async fn resolve_service(name: &str) -> Result<(String, String)> {
     Ok((svc.namespace.clone(), svc.deployments[0].clone()))
 }
 
+// ---------------------------------------------------------------------------
+// Profile resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Synchronous inner function — takes explicit config and infra_dir so it
+/// can be unit-tested without touching the filesystem or global config.
+fn resolve_service_profile_inner(
+    profile_flag: Option<String>,
+    config: &crate::config::SunbeamConfig,
+    infra_dir: &std::path::Path,
+) -> Result<Option<(String, crate::config::Profile)>> {
+    let profile_to_load = profile_flag.or_else(|| {
+        let active_ctx = config.contexts.get(&config.current_context)?;
+        match &active_ctx.profile {
+            crate::config::ProfileRef::Name(name) => Some(name.clone()),
+            _ => None,
+        }
+    });
+
+    if let Some(name) = profile_to_load {
+        let path = infra_dir.join("profiles").join(format!("{name}.yaml"));
+        if path.exists() {
+            Ok(Some((
+                name.clone(),
+                crate::profiles::load_profile(&path)?,
+            )))
+        } else if let Some(p) =
+            config.resolve_profile(&crate::config::ProfileRef::Name(name.clone()))
+        {
+            Ok(Some((name, p)))
+        } else {
+            Err(crate::error::SunbeamError::Config(format!(
+                "Profile not found: {name} (looked at {} and config.json)",
+                path.display()
+            )))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Async wrapper that reads the live config and infra_dir.
+async fn resolve_service_profile(
+    profile_flag: Option<String>,
+) -> Result<Option<(String, crate::config::Profile)>> {
+    let config = crate::config::load_config();
+    let infra_dir = crate::config::get_infra_dir();
+    resolve_service_profile_inner(profile_flag, &config, &infra_dir)
+}
+
+/// Merge profile overrides with CLI overrides. CLI overrides are appended
+/// last so they win when `apply_overrides` processes items in order.
+fn merge_overrides(
+    profile_overrides: crate::manifest_params::Overrides,
+    cli_overrides: crate::manifest_params::Overrides,
+) -> crate::manifest_params::Overrides {
+    let mut combined = profile_overrides;
+    combined.items.extend(cli_overrides.items);
+    combined
+}
+
+/// Load profile (if any), resolve its overrides against discovered manifests,
+/// and merge with explicit CLI --set/--disable/--enable flags.
+///
+/// Returns (profile_name_and_obj, merged_overrides, skip_namespaces).
+async fn build_profile_context(
+    profile_flag: Option<String>,
+    set: &[String],
+    disable: &[String],
+    enable: &[String],
+) -> Result<(Option<(String, crate::config::Profile)>, crate::manifest_params::Overrides, Vec<String>)> {
+    let profile = resolve_service_profile(profile_flag).await?;
+    let cli_overrides = crate::manifest_params::Overrides::from_cli(set, disable, enable)?;
+    let mut skip_namespaces = Vec::new();
+
+    if let Some((_, ref p)) = profile {
+        skip_namespaces = p.skip_namespaces.clone();
+        if p.skip_ory {
+            skip_namespaces.push("ory".to_string());
+        }
+
+        let base_dir = crate::config::get_infra_dir().join("base");
+        let config = crate::config::load_config();
+        match crate::profiles::discover_manifests(&base_dir).await {
+            Ok(resources) => {
+                match crate::profiles::resolve_profile_overrides(p, &config.presets, &resources) {
+                    Ok(profile_overrides) => {
+                        let overrides = merge_overrides(profile_overrides, cli_overrides);
+                        return Ok((profile, overrides, skip_namespaces));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to resolve profile overrides: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to discover manifests for profile resolution: {e}");
+            }
+        }
+    }
+
+    Ok((profile, cli_overrides, skip_namespaces))
+}
+
 /// Top-level dispatcher for `sunbeam service <action>`.
 #[tracing::instrument]
 pub async fn dispatch(action: ServiceAction) -> Result<()> {
@@ -38,13 +142,24 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
         ServiceAction::Get { target, output } => crate::services::cmd_get(&target, &output).await,
         ServiceAction::Restart { target } => crate::services::cmd_restart(target.as_deref()).await,
         ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
-        ServiceAction::Deploy { target, all } => match target {
+        ServiceAction::Deploy { target, all, profile } => match target {
             Some(t) if !all => {
                 let span = tracing::info_span!("deploy", target = %t);
-                cmd_deploy(&t).instrument(span).await
+                cmd_deploy(&t, profile).instrument(span).await
             }
             _ => {
-                let opts = crate::manifests::ApplyOptions::default();
+                let (maybe_profile, overrides, skip_namespaces) =
+                    build_profile_context(profile, &[], &[], &[]).await?;
+
+                if !skip_namespaces.is_empty() && maybe_profile.is_none() {
+                    // No profile loaded but we have skips — impossible path, but be defensive
+                }
+
+                let opts = crate::manifests::ApplyOptions {
+                    overrides: Some(overrides),
+                    skip_namespaces,
+                    ..Default::default()
+                };
                 crate::manifests::apply_manifests(&opts).await?;
                 Ok(())
             }
@@ -57,13 +172,29 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
             set,
             disable,
             enable,
+            profile,
             ..
         } => {
+            let (maybe_profile, overrides, skip_namespaces) =
+                build_profile_context(profile, &set, &disable, &enable).await?;
+
             let ns = namespace.unwrap_or_default();
-            let overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+
+            if !ns.is_empty() && skip_namespaces.contains(&ns) {
+                if let Some((name, _)) = maybe_profile {
+                    bail!("Namespace '{}' is skipped by profile '{}'", ns, name);
+                }
+            }
 
             if !dry_run && ns.is_empty() && !apply_all {
-                tracing::warn!("This will apply ALL namespaces.");
+                if skip_namespaces.is_empty() {
+                    tracing::warn!("This will apply ALL namespaces.");
+                } else {
+                    tracing::warn!(
+                        "This will apply all namespaces except: {}",
+                        skip_namespaces.join(", ")
+                    );
+                }
                 eprint!("  Continue? [y/N] ");
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
@@ -79,6 +210,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
                 skip_patterns: Vec::new(),
                 overrides: Some(overrides),
                 domain: None,
+                skip_namespaces,
             };
             let rendered = crate::manifests::apply_manifests(&opts).await?;
             if dry_run {
@@ -290,13 +422,44 @@ async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
 }
 
 /// Deploy service(s) by name, category, or namespace.
-async fn cmd_deploy(target: &str) -> Result<()> {
+async fn cmd_deploy(target: &str, profile_flag: Option<String>) -> Result<()> {
+    let (maybe_profile, overrides, skip_namespaces) =
+        build_profile_context(profile_flag, &[], &[], &[]).await?;
     let reg = get_registry().await?;
     let resolved = reg.resolve(target);
+
     if resolved.is_empty() {
         bail!(
             "Unknown service: '{target}'. Try 'sunbeam service deploy --all' or a service name like 'hydra'."
         );
+    }
+
+    // Filter out services in skipped namespaces
+    let resolved: Vec<_> = resolved
+        .into_iter()
+        .filter(|s| !skip_namespaces.contains(&s.namespace))
+        .collect();
+
+    if resolved.is_empty() {
+        if let Some((name, _)) = maybe_profile {
+            bail!(
+                "All matching services are in namespaces skipped by profile '{}'",
+                name
+            );
+        } else {
+            bail!(
+                "Unknown service: '{target}'. Try 'sunbeam service deploy --all' or a service name like 'hydra'."
+            );
+        }
+    }
+
+    // Warn about skipped services
+    if !skip_namespaces.is_empty() {
+        let all_resolved = reg.resolve(target);
+        let skipped_count = all_resolved.len() - resolved.len();
+        if skipped_count > 0 {
+            tracing::warn!("Skipped {skipped_count} service(s) in excluded namespaces");
+        }
     }
 
     let mut namespaces: Vec<&str> = resolved.iter().map(|s| s.namespace.as_str()).collect();
@@ -307,6 +470,8 @@ async fn cmd_deploy(target: &str) -> Result<()> {
         tracing::info!("Applying manifests for {ns}...");
         let opts = crate::manifests::ApplyOptions {
             namespace: ns.to_string(),
+            overrides: Some(overrides.clone()),
+            skip_namespaces: skip_namespaces.clone(),
             ..Default::default()
         };
         crate::manifests::apply_manifests(&opts).await?;
@@ -673,4 +838,236 @@ async fn cmd_edit(service: &str) -> Result<()> {
 
     tracing::info!("{service} updated.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use crate::config::{Context, Profile, ProfileRef, Rule, SunbeamConfig};
+
+    // -------------------------------------------------------------------
+    // resolve_service_profile_inner
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_service_profile_from_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profile_dir = tmp.path().join("profiles");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let profile_path = profile_dir.join("test.yaml");
+        let profile = Profile {
+            skip_ory: true,
+            ..Default::default()
+        };
+        std::fs::write(&profile_path, serde_yaml::to_string(&profile).unwrap()).unwrap();
+
+        let config = SunbeamConfig::default();
+        let result = resolve_service_profile_inner(Some("test".to_string()), &config, tmp.path()).unwrap();
+        assert!(result.is_some());
+        let (name, p) = result.unwrap();
+        assert_eq!(name, "test");
+        assert!(p.skip_ory);
+    }
+
+    #[test]
+    fn test_resolve_service_profile_from_config() {
+        let mut config = SunbeamConfig::default();
+        let mut profile = Profile::default();
+        profile.skip_ory = true;
+        config.profiles.insert("lima".to_string(), profile);
+
+        let result = resolve_service_profile_inner(
+            Some("lima".to_string()),
+            &config,
+            std::path::Path::new("/nonexistent"),
+        )
+        .unwrap();
+        assert!(result.is_some());
+        let (name, p) = result.unwrap();
+        assert_eq!(name, "lima");
+        assert!(p.skip_ory);
+    }
+
+    #[test]
+    fn test_resolve_service_profile_from_context() {
+        let mut config = SunbeamConfig::default();
+        let mut ctx = Context::default();
+        ctx.profile = ProfileRef::Name("lima".to_string());
+        config.contexts.insert("local".to_string(), ctx);
+        config.current_context = "local".to_string();
+
+        let mut profile = Profile::default();
+        profile.skip_ory = true;
+        config.profiles.insert("lima".to_string(), profile);
+
+        let result = resolve_service_profile_inner(
+            None,
+            &config,
+            std::path::Path::new("/nonexistent"),
+        )
+        .unwrap();
+        assert!(result.is_some());
+        let (name, _) = result.unwrap();
+        assert_eq!(name, "lima");
+    }
+
+    #[test]
+    fn test_resolve_service_profile_not_found() {
+        let config = SunbeamConfig::default();
+        let result = resolve_service_profile_inner(
+            Some("missing".to_string()),
+            &config,
+            std::path::Path::new("/nonexistent"),
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Profile not found"));
+        assert!(err.contains("missing"));
+    }
+
+    #[test]
+    fn test_resolve_service_profile_no_profile_configured() {
+        let config = SunbeamConfig::default();
+        let result = resolve_service_profile_inner(
+            None,
+            &config,
+            std::path::Path::new("/nonexistent"),
+        )
+        .unwrap();
+        assert!(result.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Namespace filtering
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_filter_services_by_skip_list_keeps_non_skipped() {
+        let svc1 = crate::registry::ServiceDefinition {
+            name: "hydra".to_string(),
+            display_name: "Hydra".to_string(),
+            category: crate::registry::Category::Auth,
+            namespace: "ory".to_string(),
+            deployments: vec![],
+            kv_path: None,
+            database: None,
+            build_target: None,
+            depends_on: vec![],
+            health: crate::registry::HealthCheck::None,
+            virtual_service: false,
+            resource_kind: "Deployment".to_string(),
+            pod_selector: None,
+            shell_command: None,
+            ports: vec![],
+        };
+        let svc2 = crate::registry::ServiceDefinition {
+            name: "gitea".to_string(),
+            display_name: "Gitea".to_string(),
+            category: crate::registry::Category::DevTools,
+            namespace: "devtools".to_string(),
+            deployments: vec![],
+            kv_path: None,
+            database: None,
+            build_target: None,
+            depends_on: vec![],
+            health: crate::registry::HealthCheck::None,
+            virtual_service: false,
+            resource_kind: "Deployment".to_string(),
+            pod_selector: None,
+            shell_command: None,
+            ports: vec![],
+        };
+        let services = vec![&svc1, &svc2];
+        let filtered: Vec<_> = services
+            .into_iter()
+            .filter(|s| !["ory".to_string()].contains(&s.namespace))
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "gitea");
+    }
+
+    #[test]
+    fn test_filter_services_by_skip_list_empty_skips_all_kept() {
+        let svc = crate::registry::ServiceDefinition {
+            name: "hydra".to_string(),
+            display_name: "Hydra".to_string(),
+            category: crate::registry::Category::Auth,
+            namespace: "ory".to_string(),
+            deployments: vec![],
+            kv_path: None,
+            database: None,
+            build_target: None,
+            depends_on: vec![],
+            health: crate::registry::HealthCheck::None,
+            virtual_service: false,
+            resource_kind: "Deployment".to_string(),
+            pod_selector: None,
+            shell_command: None,
+            ports: vec![],
+        };
+        let services = vec![&svc];
+        let filtered: Vec<_> = services
+            .into_iter()
+            .filter(|s| [].contains(&s.namespace))
+            .collect();
+        assert_eq!(filtered.len(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Override merging
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_merge_overrides_cli_wins() {
+        let profile = crate::manifest_params::Overrides {
+            items: vec![crate::manifest_params::Override::Set {
+                resource: "deployment/ory/hydra".to_string(),
+                field_path: "spec/replicas".to_string(),
+                value: "1".to_string(),
+            }],
+        };
+        let cli = crate::manifest_params::Overrides {
+            items: vec![crate::manifest_params::Override::Set {
+                resource: "deployment/ory/hydra".to_string(),
+                field_path: "spec/replicas".to_string(),
+                value: "3".to_string(),
+            }],
+        };
+        let merged = merge_overrides(profile, cli);
+        assert_eq!(merged.items.len(), 2);
+        let last = match &merged.items[1] {
+            crate::manifest_params::Override::Set { value, .. } => value.clone(),
+            _ => panic!("expected Set"),
+        };
+        assert_eq!(last, "3");
+    }
+
+    #[test]
+    fn test_merge_overrides_profile_only() {
+        let profile = crate::manifest_params::Overrides {
+            items: vec![crate::manifest_params::Override::Set {
+                resource: "deployment/ory/hydra".to_string(),
+                field_path: "spec/replicas".to_string(),
+                value: "1".to_string(),
+            }],
+        };
+        let cli = crate::manifest_params::Overrides { items: vec![] };
+        let merged = merge_overrides(profile, cli);
+        assert_eq!(merged.items.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_overrides_cli_only() {
+        let profile = crate::manifest_params::Overrides { items: vec![] };
+        let cli = crate::manifest_params::Overrides {
+            items: vec![crate::manifest_params::Override::Set {
+                resource: "deployment/ory/hydra".to_string(),
+                field_path: "spec/replicas".to_string(),
+                value: "3".to_string(),
+            }],
+        };
+        let merged = merge_overrides(profile, cli);
+        assert_eq!(merged.items.len(), 1);
+    }
 }

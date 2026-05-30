@@ -65,7 +65,7 @@ pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
             for j in (i + 1)..lines.len() {
                 let trimmed = lines[j].trim();
                 // Stop at next rule or section boundary.
-                if trimmed.starts_with("- ") && !trimmed.starts_with("- name:") {
+                if trimmed.starts_with('-') && !trimmed.starts_with("- name:") {
                     break;
                 }
                 if trimmed == "kind: Deployment" {
@@ -85,7 +85,7 @@ pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
             let mut image_idx = None;
             for j in (kind_idx + 1)..lines.len() {
                 let trimmed = lines[j].trim();
-                if trimmed.starts_with("- ") && !trimmed.starts_with("- name:") {
+                if trimmed.starts_with('-') && !trimmed.starts_with("- name:") {
                     break;
                 }
                 if trimmed.starts_with("image:") {
@@ -186,55 +186,59 @@ async fn wait_for_job(ns: &str, name: &str, timeout_secs: u64) -> Result<()> {
 mod tests {
     use super::*;
 
-    const KUSTOMIZATION: &str = "\
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-namespace: ingress
-
-resources:
-  - namespace.yaml
-  - pingora-deployment.yaml
-
-images:
-  - name: sunbeam-proxy
-    newName: src.sunbeam.pt/studio/proxy
-    newTag: 4bb17d7c
+    const PROFILE: &str = "\
+rules:
+  -
+    resource: pingora
+    namespace: ingress
+    kind: Deployment
+    image: \"old-image\"
 ";
 
     #[test]
-    fn bump_proxy_tag_updates_tag() {
-        let result = bump_proxy_tag(KUSTOMIZATION, "deadbeef").unwrap();
-        assert!(result.contains("newTag: deadbeef"), "result={result}");
-        assert!(!result.contains("newTag: 4bb17d7c"), "old tag still present");
+    fn bump_proxy_image_updates_image() {
+        let result = bump_proxy_image(PROFILE, "new-image").unwrap();
+        assert!(result.contains("image: \"new-image\""), "result={result}");
+        assert!(!result.contains("image: \"old-image\""), "old image still present");
     }
 
     #[test]
-    fn bump_proxy_tag_preserves_trailing_newline() {
-        let result = bump_proxy_tag(KUSTOMIZATION, "deadbeef").unwrap();
+    fn bump_proxy_image_preserves_trailing_newline() {
+        let result = bump_proxy_image(PROFILE, "new-image").unwrap();
         assert!(result.ends_with('\n'), "trailing newline lost");
     }
 
     #[test]
-    fn bump_proxy_tag_preserves_other_fields() {
-        let result = bump_proxy_tag(KUSTOMIZATION, "cafebabe").unwrap();
-        assert!(result.contains("newName: src.sunbeam.pt/studio/proxy"));
+    fn bump_proxy_image_preserves_other_fields() {
+        let result = bump_proxy_image(PROFILE, "new-image").unwrap();
+        assert!(result.contains("resource: pingora"));
         assert!(result.contains("namespace: ingress"));
-        assert!(result.contains("- name: sunbeam-proxy"));
+        assert!(result.contains("kind: Deployment"));
     }
 
     #[test]
-    fn bump_proxy_tag_no_trailing_newline() {
-        let input = "images:\n  - name: sunbeam-proxy\n    newTag: aaaaaaaa";
-        let result = bump_proxy_tag(input, "bbbbbbbb").unwrap();
-        assert!(!result.ends_with('\n'));
-        assert!(result.contains("newTag: bbbbbbbb"));
+    fn bump_proxy_image_inserts_image_when_missing() {
+        let input = "\
+rules:
+  -
+    resource: pingora
+    namespace: ingress
+    kind: Deployment
+";
+        let result = bump_proxy_image(input, "inserted-image").unwrap();
+        assert!(result.contains("image: \"inserted-image\""), "result={result}");
     }
 
     #[test]
-    fn bump_proxy_tag_stanza_missing_errors() {
-        let input = "images:\n  - name: other-image\n    newTag: 1234\n";
-        let err = bump_proxy_tag(input, "abcd1234").unwrap_err();
+    fn bump_proxy_image_missing_rule_errors() {
+        let input = "\
+rules:
+  -
+    resource: other
+    namespace: default
+    kind: Deployment
+";
+        let err = bump_proxy_image(input, "abcd1234").unwrap_err();
         assert!(
             err.to_string().contains("not found"),
             "err={err}"
@@ -242,21 +246,29 @@ images:
     }
 
     #[test]
-    fn bump_proxy_tag_multiple_images_only_updates_proxy() {
+    fn bump_proxy_image_multiple_rules_only_updates_pingora() {
         let input = "\
-images:
-  - name: other-image
-    newTag: 0000
-  - name: sunbeam-proxy
-    newName: src.sunbeam.pt/studio/proxy
-    newTag: aaaaaaaa
-  - name: yet-another
-    newTag: 9999
+rules:
+  -
+    resource: other
+    namespace: default
+    kind: Deployment
+    image: \"other-image\"
+  -
+    resource: pingora
+    namespace: ingress
+    kind: Deployment
+    image: \"old-proxy-image\"
+  -
+    resource: another
+    namespace: default
+    kind: Deployment
+    image: \"another-image\"
 ";
-        let result = bump_proxy_tag(input, "bbbbbbbb").unwrap();
-        assert!(result.contains("newTag: 0000"), "other-image changed");
-        assert!(result.contains("newTag: 9999"), "yet-another changed");
-        assert!(result.contains("newTag: bbbbbbbb"), "proxy not updated");
-        assert!(!result.contains("newTag: aaaaaaaa"), "old proxy tag remains");
+        let result = bump_proxy_image(input, "new-proxy-image").unwrap();
+        assert!(result.contains("image: \"other-image\""), "other-image changed");
+        assert!(result.contains("image: \"another-image\""), "another-image changed");
+        assert!(result.contains("image: \"new-proxy-image\""), "proxy not updated");
+        assert!(!result.contains("image: \"old-proxy-image\""), "old proxy image remains");
     }
 }
