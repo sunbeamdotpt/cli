@@ -31,6 +31,8 @@ pub mod down;
 pub mod exec;
 /// Kubernetes client setup and manifest operations.
 pub mod kube;
+/// Unified tracing-based logging subsystem.
+pub mod logging;
 /// Runtime manifest parameter discovery and override application.
 pub mod manifest_params;
 /// Kustomize build, apply, and namespace filtering.
@@ -49,8 +51,6 @@ pub mod port_forward;
 pub mod project;
 /// Local proxy and port-forward helpers.
 pub mod proxy;
-/// Unified tracing-based logging subsystem.
-pub mod logging;
 /// Infrastructure manifest registry and namespace discovery.
 pub mod registry;
 /// OpenBao secret reading and seeding.
@@ -69,6 +69,8 @@ pub mod update;
 pub mod users;
 /// Vault transit keystore operations.
 pub mod vault_keystore;
+/// Version control commands (git).
+pub mod vcs;
 /// VPN connect/disconnect/status commands.
 pub mod vpn_cmds;
 /// VPN daemon socket and environment detection.
