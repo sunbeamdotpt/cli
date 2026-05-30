@@ -1,8 +1,8 @@
-//! Proxy image management — build, push, node-level pre-pull, kustomization bump.
+//! Proxy image management — build, push, node-level pre-pull, profile bump.
 //!
 //! The entry point for the CLI is `cmd_preseed_image`, which applies the
 //! image-puller Job to the cluster and waits for it to complete.  The
-//! kustomization bump (`bump_proxy_tag`) is a pure function and is tested
+//! profile bump (`bump_proxy_image`) is a pure function and is tested
 //! independently.
 
 use crate::error::{Result, ResultExt, SunbeamError};
@@ -46,60 +46,78 @@ pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()>
     Ok(())
 }
 
-/// Replace the `newTag` value for the `sunbeam-proxy` image entry inside a
-/// kustomization YAML string.  Returns the updated string.
+/// Replace the `image` value for the `pingora` Deployment rule inside a
+/// profile YAML string.  Returns the updated string.
 ///
-/// The replacement is line-oriented: it finds the `newTag:` line that
-/// immediately follows the `- name: sunbeam-proxy` stanza and rewrites it.
-/// Returns an error when the stanza is not found.
-pub fn bump_proxy_tag(kustomization: &str, new_tag: &str) -> Result<String> {
-    let mut lines: Vec<&str> = kustomization.lines().collect();
-    let mut found = false;
+/// The replacement is line-oriented: it finds the `resource: pingora` rule
+/// that belongs to `namespace: ingress` and `kind: Deployment`, then
+/// updates or inserts the `image:` line within that rule block.
+/// Returns an error when the rule is not found.
+pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
+    let lines: Vec<&str> = profile.lines().collect();
 
     for i in 0..lines.len() {
-        if lines[i].trim() == "- name: sunbeam-proxy" {
-            // Scan forward for the newTag: line within the same stanza.
+        if lines[i].trim() == "resource: pingora" {
+            // Verify this is the ingress Deployment rule.
+            let mut is_target = false;
+            let mut kind_idx = None;
+
             for j in (i + 1)..lines.len() {
                 let trimmed = lines[j].trim();
-                if trimmed.starts_with("newTag:") {
-                    // Preserve the leading indentation.
-                    let indent: &str = &lines[j][..lines[j].len() - lines[j].trim_start().len()];
-                    // We can't mutate `lines` (it's `Vec<&str>`), so build a
-                    // new owned vec.
-                    let owned: String = {
-                        let mut out = Vec::with_capacity(lines.len());
-                        for (k, line) in lines.iter().enumerate() {
-                            if k == j {
-                                out.push(format!("{indent}newTag: {new_tag}"));
-                            } else {
-                                out.push((*line).to_string());
-                            }
-                        }
-                        out.join("\n")
-                    };
-                    // Preserve a trailing newline if the original had one.
-                    let result = if kustomization.ends_with('\n') {
-                        format!("{owned}\n")
-                    } else {
-                        owned
-                    };
-                    return Ok(result);
+                // Stop at next rule or section boundary.
+                if trimmed.starts_with("- ") && !trimmed.starts_with("- name:") {
+                    break;
                 }
-                // Stop if we hit another image stanza `- name:` or a blank
-                // line outside the stanza — don't walk past the block.
-                if trimmed.starts_with("- name:") {
+                if trimmed == "kind: Deployment" {
+                    is_target = true;
+                    kind_idx = Some(j);
+                }
+            }
+
+            if !is_target {
+                continue;
+            }
+
+            let kind_idx = kind_idx.unwrap();
+            let indent = "    ";
+
+            // Look for an existing image: line after kind: Deployment.
+            let mut image_idx = None;
+            for j in (kind_idx + 1)..lines.len() {
+                let trimmed = lines[j].trim();
+                if trimmed.starts_with("- ") && !trimmed.starts_with("- name:") {
+                    break;
+                }
+                if trimmed.starts_with("image:") {
+                    image_idx = Some(j);
                     break;
                 }
             }
-            found = true; // stanza found but no newTag: line
-            break;
+
+            // Build the output.
+            let mut out: Vec<String> = Vec::with_capacity(lines.len() + 1);
+            for (k, line) in lines.iter().enumerate() {
+                if Some(k) == image_idx {
+                    out.push(format!("{indent}image: \"{new_image}\""));
+                } else {
+                    out.push((*line).to_string());
+                }
+            }
+
+            // If no image: line found, insert after kind: Deployment.
+            if image_idx.is_none() {
+                out.insert(kind_idx + 1, format!("{indent}image: \"{new_image}\""));
+            }
+
+            let mut result = out.join("\n");
+            if profile.ends_with('\n') {
+                result.push('\n');
+            }
+            return Ok(result);
         }
     }
 
-    if found {
-        bail!("sunbeam-proxy image stanza found but has no newTag: line");
-    }
-    bail!("sunbeam-proxy image stanza not found in kustomization")
+    bail!("pingora Deployment rule not found in profile")
 }
 
 // ---------------------------------------------------------------------------

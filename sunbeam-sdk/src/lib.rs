@@ -15,6 +15,8 @@ pub mod cli;
 pub mod cluster;
 /// Context-based configuration file I/O.
 pub mod config;
+/// Manifest-anchored profile override system.
+pub mod profiles;
 /// Shared constants (paths, ports, timeouts).
 pub mod constants;
 /// kubectl describe wrappers.

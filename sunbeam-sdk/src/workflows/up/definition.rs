@@ -250,7 +250,7 @@ pub fn build() -> WorkflowDefinition {
             })
             .branch(|b| {
                 b.add_step_typed::<ApplyManifest>("apply-ory",
-                    Some(json!({"namespace": "ory", "lima_delay_secs": 30})));
+                    Some(json!({"namespace": "ory", "serial_delay_secs": 30})));
             })
             .branch(|b| {
                 b.add_step_typed::<ApplyManifest>("apply-devtools",

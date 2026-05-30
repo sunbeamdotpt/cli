@@ -73,16 +73,14 @@ impl StepBody for EnsureCilium {
         }
         tracing::info!(msg = "Cilium is healthy.");
 
-        // When using Lima, resolve domain from the live cluster so that VM IP
-        // changes (e.g. new Lima instance) are picked up automatically.
+        // Resolve domain from the live cluster so that VM IP changes
+        // (e.g. new Lima instance) are picked up automatically.
         let mut result = ExecutionResult::next();
-        if data.use_lima {
-            let live_domain = k::get_domain()
-                .await
-                .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
-            if !live_domain.is_empty() && live_domain != data.domain {
-                result.output_data = Some(serde_json::json!({ "domain": live_domain }));
-            }
+        let live_domain = k::get_domain()
+            .await
+            .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
+        if !live_domain.is_empty() && live_domain != data.domain {
+            result.output_data = Some(serde_json::json!({ "domain": live_domain }));
         }
 
         Ok(result)
@@ -162,14 +160,14 @@ pub struct EnsureSeaweedFSBuckets;
 #[async_trait::async_trait]
 impl StepBody for EnsureSeaweedFSBuckets {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        let lima_skip: Vec<String> = ctx
+        let skip_namespaces: Vec<String> = ctx
             .workflow
             .data
-            .get("lima_skip_namespaces")
+            .get("skip_namespaces")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
-        if lima_skip.contains(&"storage".to_string()) {
-            tracing::info!("Skipping SeaweedFS bucket setup (Lima VM)");
+        if skip_namespaces.contains(&"storage".to_string()) {
+            tracing::info!("Skipping SeaweedFS bucket setup (profile skip list)");
             return Ok(ExecutionResult::next());
         }
 
