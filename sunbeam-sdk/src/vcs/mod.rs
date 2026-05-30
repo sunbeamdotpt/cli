@@ -4,6 +4,7 @@ mod branch;
 mod clone;
 mod commit;
 mod fetch;
+mod init;
 mod log;
 mod pull;
 mod push;
@@ -58,6 +59,7 @@ pub async fn dispatch(action: VcsAction) -> Result<()> {
         VcsAction::Fetch { args, remote } => fetch::cmd_fetch(args, remote).await,
         VcsAction::Pull { args, remote } => pull::cmd_pull(args, remote).await,
         VcsAction::Clone { url, name } => clone::cmd_clone(url, name).await,
+        VcsAction::Init { url, name } => init::cmd_init(url, name).await,
     }
 }
 
