@@ -89,16 +89,13 @@ pub struct UpData {
     /// Skip Cilium check.
     #[serde(default)]
     pub skip_cilium: bool,
-    /// Use Lima VM for the cluster (local k3s via limactl).
-    #[serde(default)]
-    pub use_lima: bool,
-    /// Skip Ory (Hydra/Kratos/Keto) namespace — used on Lima VMs where
-    /// the full identity stack overwhelms single-node k3s.
+    /// Skip Ory (Hydra/Kratos/Keto) namespace — used on resource-constrained
+    /// environments where the full identity stack overwhelms single-node k3s.
     #[serde(default)]
     pub skip_ory: bool,
-    /// Namespaces to skip when running on Lima (to reduce resource pressure).
+    /// Namespaces to skip (to reduce resource pressure on constrained clusters).
     #[serde(default)]
-    pub lima_skip_namespaces: Vec<String>,
+    pub skip_namespaces: Vec<String>,
     /// Run in serial mode: longer delays and more conservative resource usage
     /// for tiny single-node clusters.
     #[serde(default)]
@@ -139,9 +136,6 @@ pub struct DownData {
     /// Namespaces still stuck after wait.
     #[serde(default)]
     pub remaining_namespaces: Vec<String>,
-    /// Use Lima VM for the cluster (local k3s via limactl).
-    #[serde(default)]
-    pub use_lima: bool,
 }
 
 /// Workflow data for the `bootstrap` workflow.
@@ -282,9 +276,8 @@ mod tests {
             dirty_paths: vec![],
             pg_pod: Some("postgres-1".to_string()),
             skip_cilium: false,
-            use_lima: false,
             skip_ory: false,
-            lima_skip_namespaces: vec![],
+            skip_namespaces: vec![],
             serial_mode: false,
         };
         let json = serde_json::to_value(&d).unwrap();

@@ -49,14 +49,14 @@ impl StepBody for WaitForRollout {
             .unwrap_or(false);
         let timeout_secs = if serial_mode { timeout_secs * 2 } else { timeout_secs };
 
-        let lima_skip: Vec<String> = ctx
+        let skip_namespaces: Vec<String> = ctx
             .workflow
             .data
-            .get("lima_skip_namespaces")
+            .get("skip_namespaces")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
-        if lima_skip.contains(&namespace.to_string()) {
-            tracing::info!("Skipping wait for {namespace}/{deployment} (Lima VM)");
+        if skip_namespaces.contains(&namespace.to_string()) {
+            tracing::info!("Skipping wait for {namespace}/{deployment} (profile skip list)");
             return Ok(ExecutionResult::next());
         }
 

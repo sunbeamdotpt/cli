@@ -7,6 +7,114 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
+// Profile data model
+// ---------------------------------------------------------------------------
+
+/// A named profile — presets and rules that override manifest fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Profile {
+    /// Profile-scoped presets (shadow global presets with the same name).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub presets: HashMap<String, Preset>,
+
+    /// Rules that map resources to shortcut overrides.
+    #[serde(default)]
+    pub rules: Vec<Rule>,
+
+    /// Namespaces to skip during apply (workflow behavior, not manifest override).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip_namespaces: Vec<String>,
+
+    /// Skip Ory identity stack (workflow behavior).
+    #[serde(default)]
+    pub skip_ory: bool,
+
+    /// Run in serial mode (workflow behavior).
+    #[serde(default)]
+    pub serial_mode: bool,
+}
+
+/// A preset is a reusable bundle of shortcut values.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Preset {
+    /// Flat map of shortcut keys → values.
+    #[serde(flatten)]
+    pub values: HashMap<String, serde_json::Value>,
+}
+
+/// A rule targets one resource and applies presets + explicit shortcuts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule {
+    /// Resource name (matches `metadata.name` in manifests).
+    pub resource: String,
+
+    /// Optional namespace disambiguator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// Optional kind disambiguator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// Optional preset to expand before applying explicit shortcuts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+
+    /// Top-level shortcuts (merged on top of preset).
+    #[serde(flatten)]
+    pub shortcuts: HashMap<String, serde_json::Value>,
+
+    /// Named container shortcuts.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub containers: HashMap<String, ContainerShortcuts>,
+
+    /// Named volume shortcuts.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub volumes: HashMap<String, serde_json::Value>,
+
+    /// Environment variable shortcuts (top-level `env` key).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, serde_json::Value>,
+}
+
+/// Shortcuts scoped to a named container.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContainerShortcuts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, serde_json::Value>,
+}
+
+/// How a context references a profile: by name, inline, or not at all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProfileRef {
+    /// Reference a named profile from the top-level `profiles` map.
+    Name(String),
+    /// An embedded profile object (context-specific, not shared).
+    Inline(Profile),
+    /// No profile — serialized as absent.
+    #[serde(skip)]
+    None,
+}
+
+impl ProfileRef {
+    /// Returns true if this is the `None` variant.
+    pub fn is_none(&self) -> bool {
+        matches!(self, ProfileRef::None)
+    }
+}
+
+impl Default for ProfileRef {
+    fn default() -> Self {
+        ProfileRef::None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Config data model
 // ---------------------------------------------------------------------------
 
@@ -23,6 +131,14 @@ pub struct SunbeamConfig {
     /// Named contexts.
     #[serde(default)]
     pub contexts: HashMap<String, Context>,
+
+    /// Named profiles shared across contexts.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub profiles: HashMap<String, Profile>,
+
+    /// Global presets shared across profiles.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub presets: HashMap<String, Preset>,
 
     // --- Legacy fields (migrated on load) ---
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -51,6 +167,10 @@ pub struct Context {
     /// ACME email for cert-manager.
     #[serde(default, rename = "acme-email")]
     pub acme_email: String,
+
+    /// Profile reference: name string, inline object, or omitted.
+    #[serde(default, skip_serializing_if = "ProfileRef::is_none")]
+    pub profile: ProfileRef,
 
     /// VPN coordination server URL (Headscale). When set, `sunbeam connect`
     /// can establish a WireGuard tunnel through this server and the CLI
@@ -385,6 +505,86 @@ pub fn clear_config() -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Profile CRUD helpers
+// ---------------------------------------------------------------------------
+
+impl SunbeamConfig {
+    /// Resolve a `ProfileRef` into an actual `Profile`.
+    ///
+    /// - `Name(name)` → look up `self.profiles[name]`
+    /// - `Inline(profile)` → return a clone
+    /// - `None` → return `None`
+    pub fn resolve_profile(&self, profile_ref: &ProfileRef) -> Option<Profile> {
+        match profile_ref {
+            ProfileRef::Name(name) => self.profiles.get(name).cloned(),
+            ProfileRef::Inline(profile) => Some(profile.clone()),
+            ProfileRef::None => None,
+        }
+    }
+
+    /// Add or replace a rule in a named profile.
+    pub fn add_rule(&mut self, profile_name: &str, rule: Rule) {
+        let profile = self.profiles.entry(profile_name.to_string()).or_default();
+        // Remove any existing rule for the same resource
+        profile.rules.retain(|r| r.resource != rule.resource);
+        profile.rules.push(rule);
+    }
+
+    /// Remove a rule by resource name from a named profile.
+    pub fn remove_rule(&mut self, profile_name: &str, resource: &str) -> bool {
+        if let Some(profile) = self.profiles.get_mut(profile_name) {
+            let before = profile.rules.len();
+            profile.rules.retain(|r| r.resource != resource);
+            profile.rules.len() < before
+        } else {
+            false
+        }
+    }
+
+    /// Add or replace a preset in a named profile.
+    pub fn add_preset(&mut self, profile_name: &str, preset_name: &str, preset: Preset) {
+        let profile = self.profiles.entry(profile_name.to_string()).or_default();
+        profile.presets.insert(preset_name.to_string(), preset);
+    }
+
+    /// Merge values into an existing preset in a named profile.
+    pub fn set_preset(&mut self, profile_name: &str, preset_name: &str, values: HashMap<String, serde_json::Value>) {
+        let profile = self.profiles.entry(profile_name.to_string()).or_default();
+        let preset = profile.presets.entry(preset_name.to_string()).or_default();
+        preset.values.extend(values);
+    }
+
+    /// Remove a preset from a named profile.
+    pub fn remove_preset(&mut self, profile_name: &str, preset_name: &str) -> bool {
+        if let Some(profile) = self.profiles.get_mut(profile_name) {
+            profile.presets.remove(preset_name).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Deep-copy a named profile to a new name.
+    pub fn copy_profile(&mut self, src: &str, dst: &str) -> bool {
+        if let Some(src_profile) = self.profiles.get(src).cloned() {
+            self.profiles.insert(dst.to_string(), src_profile);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Add or replace a global preset.
+    pub fn add_global_preset(&mut self, name: &str, preset: Preset) {
+        self.presets.insert(name.to_string(), preset);
+    }
+
+    /// Remove a global preset.
+    pub fn remove_global_preset(&mut self, name: &str) -> bool {
+        self.presets.remove(name).is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +594,8 @@ mod tests {
         let config = SunbeamConfig::default();
         assert!(config.current_context.is_empty());
         assert!(config.contexts.is_empty());
+        assert!(config.profiles.is_empty());
+        assert!(config.presets.is_empty());
     }
 
     #[test]
@@ -467,7 +669,7 @@ mod tests {
         let config = SunbeamConfig::default();
         // No current-context, no --context flag → defaults to "local"
         let ctx = resolve_context(&config, "", None, "");
-        assert_eq!(ctx.kube_context, "sunbeam");
+        assert_eq!(ctx.kube_context, crate::constants::LIMA_KUBE_CONTEXT);
     }
 
     #[test]
@@ -557,5 +759,315 @@ mod tests {
         // --context prod overrides current-context "staging"
         let ctx = resolve_context(&config, "", Some("prod"), "");
         assert_eq!(ctx.domain, "prod.example.com");
+    }
+
+    // -----------------------------------------------------------------------
+    // ProfileRef tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_profile_ref_name_roundtrip() {
+        let pref = ProfileRef::Name("lima".to_string());
+        let json = serde_json::to_string(&pref).unwrap();
+        assert_eq!(json, "\"lima\"");
+        let back: ProfileRef = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ProfileRef::Name(n) if n == "lima"));
+    }
+
+    #[test]
+    fn test_profile_ref_inline_roundtrip() {
+        let profile = Profile {
+            rules: vec![Rule {
+                resource: "searxng".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: {
+                    let mut m = HashMap::new();
+                    m.insert("scale".to_string(), serde_json::json!(0));
+                    m
+                },
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            }],
+            ..Default::default()
+        };
+        let pref = ProfileRef::Inline(profile);
+        let json = serde_json::to_value(&pref).unwrap();
+        assert!(json.get("rules").is_some());
+        let back: ProfileRef = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, ProfileRef::Inline(_)));
+    }
+
+    #[test]
+    fn test_profile_ref_none_serializes_to_nothing() {
+        let ctx = Context {
+            profile: ProfileRef::None,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(!json.contains("profile"));
+    }
+
+    #[test]
+    fn test_context_with_profile_name() {
+        let ctx = Context {
+            profile: ProfileRef::Name("lima".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"lima\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Profile resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_profile_name() {
+        let mut config = SunbeamConfig::default();
+        let mut profile = Profile::default();
+        profile.rules.push(Rule {
+            resource: "postgres".to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        config.profiles.insert("lima".to_string(), profile);
+
+        let resolved = config.resolve_profile(&ProfileRef::Name("lima".to_string()));
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().rules[0].resource, "postgres");
+    }
+
+    #[test]
+    fn test_resolve_profile_inline() {
+        let config = SunbeamConfig::default();
+        let profile = Profile {
+            rules: vec![Rule {
+                resource: "searxng".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            }],
+            ..Default::default()
+        };
+        let resolved = config.resolve_profile(&ProfileRef::Inline(profile));
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().rules[0].resource, "searxng");
+    }
+
+    #[test]
+    fn test_resolve_profile_none() {
+        let config = SunbeamConfig::default();
+        assert!(config.resolve_profile(&ProfileRef::None).is_none());
+    }
+
+    #[test]
+    fn test_resolve_profile_missing_name() {
+        let config = SunbeamConfig::default();
+        assert!(config.resolve_profile(&ProfileRef::Name("nope".to_string())).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Profile CRUD tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_add_rule_creates_profile() {
+        let mut config = SunbeamConfig::default();
+        config.add_rule("lima", Rule {
+            resource: "pingora".to_string(),
+            namespace: Some("ingress".to_string()),
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        assert!(config.profiles.contains_key("lima"));
+        assert_eq!(config.profiles["lima"].rules.len(), 1);
+    }
+
+    #[test]
+    fn test_add_rule_replaces_existing() {
+        let mut config = SunbeamConfig::default();
+        config.add_rule("lima", Rule {
+            resource: "pingora".to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        config.add_rule("lima", Rule {
+            resource: "pingora".to_string(),
+            namespace: Some("ingress".to_string()),
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        assert_eq!(config.profiles["lima"].rules.len(), 1);
+        assert_eq!(config.profiles["lima"].rules[0].namespace, Some("ingress".to_string()));
+    }
+
+    #[test]
+    fn test_remove_rule() {
+        let mut config = SunbeamConfig::default();
+        config.add_rule("lima", Rule {
+            resource: "pingora".to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        assert!(config.remove_rule("lima", "pingora"));
+        assert!(config.profiles["lima"].rules.is_empty());
+        assert!(!config.remove_rule("lima", "pingora"));
+    }
+
+    #[test]
+    fn test_remove_rule_missing_profile() {
+        let mut config = SunbeamConfig::default();
+        assert!(!config.remove_rule("lima", "pingora"));
+    }
+
+    #[test]
+    fn test_add_preset() {
+        let mut config = SunbeamConfig::default();
+        let mut preset = Preset::default();
+        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        config.add_preset("lima", "tiny", preset);
+        assert_eq!(config.profiles["lima"].presets["tiny"].values["instances"], 1);
+    }
+
+    #[test]
+    fn test_set_preset_merges() {
+        let mut config = SunbeamConfig::default();
+        let mut preset = Preset::default();
+        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        config.add_preset("lima", "tiny", preset);
+
+        let mut updates = HashMap::new();
+        updates.insert("memory".to_string(), serde_json::json!("512Mi"));
+        config.set_preset("lima", "tiny", updates);
+
+        assert_eq!(config.profiles["lima"].presets["tiny"].values["instances"], 1);
+        assert_eq!(config.profiles["lima"].presets["tiny"].values["memory"], "512Mi");
+    }
+
+    #[test]
+    fn test_remove_preset() {
+        let mut config = SunbeamConfig::default();
+        config.add_preset("lima", "tiny", Preset::default());
+        assert!(config.remove_preset("lima", "tiny"));
+        assert!(!config.remove_preset("lima", "tiny"));
+    }
+
+    #[test]
+    fn test_copy_profile() {
+        let mut config = SunbeamConfig::default();
+        config.add_rule("lima", Rule {
+            resource: "pingora".to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        assert!(config.copy_profile("lima", "lima-big"));
+        assert!(config.profiles.contains_key("lima-big"));
+        assert_eq!(config.profiles["lima-big"].rules.len(), 1);
+        // Mutate copy without affecting original
+        config.add_rule("lima-big", Rule {
+            resource: "searxng".to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+        assert_eq!(config.profiles["lima"].rules.len(), 1);
+        assert_eq!(config.profiles["lima-big"].rules.len(), 2);
+    }
+
+    #[test]
+    fn test_copy_profile_missing() {
+        let mut config = SunbeamConfig::default();
+        assert!(!config.copy_profile("nope", "dst"));
+    }
+
+    #[test]
+    fn test_global_preset() {
+        let mut config = SunbeamConfig::default();
+        let mut preset = Preset::default();
+        preset.values.insert("scale".to_string(), serde_json::json!(0));
+        config.add_global_preset("off", preset);
+        assert!(config.presets.contains_key("off"));
+        assert!(config.remove_global_preset("off"));
+        assert!(!config.presets.contains_key("off"));
+    }
+
+    #[test]
+    fn test_profile_crud_roundtrip() {
+        let mut config = SunbeamConfig::default();
+        let mut preset = Preset::default();
+        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        config.add_preset("lima", "tiny", preset);
+        config.add_rule("lima", Rule {
+            resource: "postgres".to_string(),
+            namespace: None,
+            kind: None,
+            preset: Some("tiny".to_string()),
+            shortcuts: HashMap::new(),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        });
+
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let loaded: SunbeamConfig = serde_json::from_str(&json).unwrap();
+        assert!(loaded.profiles.contains_key("lima"));
+        assert_eq!(loaded.profiles["lima"].presets["tiny"].values["instances"], 1);
+        assert_eq!(loaded.profiles["lima"].rules[0].resource, "postgres");
+    }
+
+    #[test]
+    fn test_config_with_profile_ref_roundtrip() {
+        let mut config = SunbeamConfig::default();
+        config.contexts.insert(
+            "lima-local".to_string(),
+            Context {
+                profile: ProfileRef::Name("lima".to_string()),
+                domain: "192.168.5.15.sslip.io".to_string(),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let loaded: SunbeamConfig = serde_json::from_str(&json).unwrap();
+        let ctx = loaded.contexts.get("lima-local").unwrap();
+        assert!(matches!(&ctx.profile, ProfileRef::Name(n) if n == "lima"));
     }
 }
