@@ -68,6 +68,10 @@ hostname.workspace = true
 whoami.workspace = true
 libc.workspace = true
 
+# VCS
+repo-rs = "0.1.2"
+gix = { workspace = true, default-features = false, features = ["revision"] }
+
 # OpenBao / Vault
 vaultrs.workspace = true
 
