@@ -67,7 +67,7 @@ libc.workspace = true
 
 # VCS
 repo-rs = "0.1.2"
-gix = { workspace = true, default-features = false, features = ["revision"] }
+gix = { workspace = true, default-features = false, features = ["revision", "sha1"] }
 
 # OpenBao / Vault
 vaultrs.workspace = true

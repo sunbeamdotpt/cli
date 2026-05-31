@@ -1,0 +1,287 @@
+# Lima VM: Ubuntu LTS + k3s + Cilium + nerdctl + BuildKit
+# Usage:
+#   limactl create --name sunbeam lima-sunbeam.yaml
+#   limactl start sunbeam
+#   export KUBECONFIG=$(limactl list sunbeam --format 'unix://{{.Dir}}/copied-from-guest/kubeconfig.yaml')
+
+minimumLimaVersion: "2.0.0"
+
+mountType: virtiofs
+cpus: 6
+memory: 16GiB
+disk: 60GiB
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+mounts: []
+
+# containerd is managed by k3s
+containerd:
+  system: false
+  user: false
+
+provision:
+  # 1. Base packages
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      apt-get update
+      apt-get install -y \
+        curl bash iptables ip6tables coreutils findutils grep \
+        open-iscsi openssh-server pigz tar gzip
+      # Ensure iscsid starts on boot (Longhorn requires it)
+      systemctl enable iscsid || true
+      systemctl start iscsid || true
+      # Keep sshd on port 22 for Lima's internal use (limactl shell, etc.).
+      # Add a second sshd instance on port 2222 to avoid conflict with
+      # ingress hostPort 22 (pingora SSH passthrough).
+      printf '%s\n' \
+        '[Unit]' \
+        'Description=OpenBSD Secure Shell server (port 2222)' \
+        'After=network.target' \
+        '' \
+        '[Service]' \
+        'Type=simple' \
+        'ExecStart=/usr/sbin/sshd -D -p 2222' \
+        'Restart=always' \
+        'RestartSec=5' \
+        '' \
+        '[Install]' \
+        'WantedBy=multi-user.target' \
+        > /etc/systemd/system/sshd-2222.service
+      systemctl daemon-reload
+      systemctl enable sshd-2222 || true
+      systemctl start sshd-2222 || true
+
+  # 2. Raise inotify limits (Longhorn CSI sidecars need fsnotify watchers)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      cat > /etc/sysctl.d/99-inotify.conf << 'EOF'
+      fs.inotify.max_user_watches = 524288
+      fs.inotify.max_user_instances = 512
+      EOF
+      sysctl --system
+
+  # 2b. Swap file — prevents OOM killer from killing k3s API server
+  # when many pods start simultaneously on the single-node Lima VM.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if [ ! -f /swapfile ]; then
+        fallocate -l 8G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=8192
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+  # 3. Mount propagation fix (Cilium needs rshared for BPF)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      mount --make-rshared /
+      # Persist across reboots via systemd service that runs before k3s
+      cat > /etc/systemd/system/mount-shared.service << 'EOF'
+      [Unit]
+      Description=Set mount propagation to rshared for Cilium BPF
+      Before=k3s.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/mount --make-rshared /
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+      systemctl daemon-reload
+      systemctl enable mount-shared || true
+
+  # 4. Install k3s (no traefik, no servicelb, no flannel — Cilium will handle CNI)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if [ ! -f /usr/local/bin/k3s ]; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server \
+          --write-kubeconfig-mode=644 \
+          --disable=traefik \
+          --disable=servicelb \
+          --flannel-backend=none \
+          --disable-network-policy" sh -
+      fi
+
+  # 5. Install Cilium CLI
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v cilium >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && CLARCH="arm64" || CLARCH="amd64"
+      CILIUM_CLI_VERSION=$(curl -fsSL https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+      curl -fsSL "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin
+      chmod +x /usr/local/bin/cilium
+
+  # 6. Install Cilium into k3s
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      # Wait for k3s API to be ready
+      for i in $(seq 1 60); do
+        kubectl get nodes >/dev/null 2>&1 && break
+        sleep 2
+      done
+      # Install Cilium if not already present
+      if ! kubectl get ns cilium-system >/dev/null 2>&1; then
+        cilium install --set kubeProxyReplacement=true
+      fi
+      # Wait for Cilium to be ready (up to 5 min)
+      cilium status --wait --wait-duration 5m || true
+
+  # 7. Install nerdctl
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v nerdctl >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && NARCH="arm64" || NARCH="amd64"
+      NERDCTL_VERSION=$(curl -fsSL https://api.github.com/repos/containerd/nerdctl/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"v//' | sed 's/".*//')
+      curl -fsSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-${NARCH}.tar.gz" \
+        | tar -xz -C /usr/local/bin
+      chmod +x /usr/local/bin/nerdctl
+
+  # 8. Install host-level BuildKit daemon
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      if command -v buildkitd >/dev/null 2>&1; then exit 0; fi
+      ARCH=$(uname -m)
+      [ "$ARCH" = "aarch64" ] && BKARCH="arm64" || BKARCH="amd64"
+      BUILDKIT_VERSION=$(curl -fsSL https://api.github.com/repos/moby/buildkit/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"v//' | sed 's/".*//')
+      curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-${BKARCH}.tar.gz" \
+        | tar -xz -C /usr/local
+      chmod +x /usr/local/bin/buildkitd /usr/local/bin/buildctl
+
+  # 9. BuildKit systemd service (Ubuntu uses systemd)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      cat > /etc/systemd/system/buildkit.service << 'EOF'
+      [Unit]
+      Description=BuildKit daemon
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/buildkitd --addr unix:///run/buildkit/buildkitd.sock --addr tcp://0.0.0.0:1234
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+      systemctl daemon-reload
+      systemctl enable buildkit || true
+      systemctl start buildkit || true
+      # Wait for socket and fix permissions so Lima can forward it
+      for i in $(seq 1 10); do
+        [ -S /run/buildkit/buildkitd.sock ] && break
+        sleep 1
+      done
+      chmod 666 /run/buildkit/buildkitd.sock 2>/dev/null || true
+
+  # 10. Deploy in-cluster BuildKit (DaemonSet)
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      # Wait for nodes to be ready
+      for i in $(seq 1 60); do
+        kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True && break
+        sleep 3
+      done
+      # Deploy BuildKit as a DaemonSet if not already present
+      if ! kubectl get daemonset buildkitd -n buildkit >/dev/null 2>&1; then
+        kubectl create namespace buildkit 2>/dev/null || true
+        kubectl apply -n buildkit -f - << 'MANIFEST'
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: buildkitd
+      spec:
+        selector:
+          matchLabels:
+            app: buildkitd
+        template:
+          metadata:
+            labels:
+              app: buildkitd
+          spec:
+            containers:
+              - name: buildkitd
+                image: moby/buildkit:latest
+                args: []
+                securityContext:
+                  privileged: true
+                ports:
+                  - containerPort: 1234
+                    protocol: TCP
+                volumeMounts:
+                  - name: buildkit-state
+                    mountPath: /var/lib/buildkit
+            volumes:
+              - name: buildkit-state
+                emptyDir: {}
+      MANIFEST
+      fi
+
+probes:
+  - script: |
+      #!/bin/bash
+      set -eux
+      if ! timeout 30 bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+        echo >&2 "k3s is not ready yet"
+        exit 1
+      fi
+    hint: "Waiting for k3s kubeconfig"
+
+copyToHost:
+  - guest: "/etc/rancher/k3s/k3s.yaml"
+    host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+    deleteOnStop: true
+
+portForwards:
+  # sshd on port 2222 (avoids conflict with ingress hostPort 22)
+  - guestPort: 2222
+    hostPort: 2222
+    proto: tcp
+  # k3s API server
+  - guestPort: 6443
+    hostPort: 6443
+    proto: tcp
+  # BuildKit TCP (host-level daemon)
+  - guestPort: 1234
+    hostPort: 1234
+    proto: tcp
+  # containerd socket (k3s-managed containerd)
+  - guestSocket: "/run/k3s/containerd/containerd.sock"
+    hostSocket: "{{.Dir}}/containerd.sock"

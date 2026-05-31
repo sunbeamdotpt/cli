@@ -9,7 +9,7 @@ fn main() {
 
     // Embed lima-sunbeam.yaml for VM provisioning
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let lima_yaml_src = manifest_dir.join("../../../lima-sunbeam.yaml");
+    let lima_yaml_src = manifest_dir.join("../lima-sunbeam.yaml");
     let lima_yaml_dst = out_dir.join("lima-sunbeam.yaml");
     fs::copy(&lima_yaml_src, &lima_yaml_dst)
         .expect(&format!("lima-sunbeam.yaml not found at {}", lima_yaml_src.display()));
