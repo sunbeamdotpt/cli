@@ -8,6 +8,9 @@ description = "Sunbeam Studios SDK, CLI, and ecosystem integrations"
 
 
 [dependencies]
+# Internal
+sunbeam-net = { git = "https://github.com/sunbeamdotpt/vpn" }
+
 # Core
 thiserror.workspace = true
 anyhow.workspace = true
@@ -72,12 +75,12 @@ gix = { workspace = true, default-features = false, features = ["revision", "sha
 # OpenBao / Vault
 vaultrs.workspace = true
 
-# Workflow engine (requires wfe crates to be published)
-# wfe.workspace = true
-# wfe-core.workspace = true
-# wfe-sqlite.workspace = true
-# wfe-yaml.workspace = true
-# wfe-server-protos.workspace = true
+# Workflow engine
+wfe.workspace = true
+wfe-core.workspace = true
+wfe-sqlite.workspace = true
+wfe-yaml.workspace = true
+wfe-server-protos.workspace = true
 tonic = { workspace = true, features = ["tls-native-roots"] }
 prost-types.workspace = true
 prost.workspace = true
