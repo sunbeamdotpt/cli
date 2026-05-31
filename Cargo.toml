@@ -102,7 +102,7 @@ prost-types = "0.14"
 prost = "0.14"
 
 # VCS
-gix = { version = "0.81.0", default-features = false, features = ["revision"] }
+gix = { version = "0.81.0", default-features = false, features = ["sha1", "revision"] }
 
 # Dev
 wiremock = "0.6"
