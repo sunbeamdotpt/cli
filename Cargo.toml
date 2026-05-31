@@ -108,6 +108,13 @@ gix = { version = "0.81.0", default-features = false, features = ["sha1", "revis
 wiremock = "0.6"
 pretty_assertions = "1"
 
+# Workflow engine
+wfe = "1.10.0"
+wfe-core = { version = "1.10.0", features = ["test-support"] }
+wfe-sqlite = "1.10.0"
+wfe-yaml = { version = "1.10.0", features = ["rustlang", "buildkit", "containerd", "kubernetes"] }
+wfe-server-protos = "1.10.0"
+
 [package]
 name = "sunbeam"
 version.workspace = true
