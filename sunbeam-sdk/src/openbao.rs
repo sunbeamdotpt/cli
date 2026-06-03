@@ -325,6 +325,41 @@ impl BaoClient {
         }
     }
 
+    /// Generic LIST against the OpenBao API.
+    ///
+    /// Returns the parsed JSON body on success, or `Ok(None)` on 404.
+    #[tracing::instrument(skip(self))]
+    pub async fn list(&self, path: &str) -> Result<Option<serde_json::Value>> {
+        tracing::debug!("list {path}");
+        let url = format!("{}/v1/{}?list=true", self.base_url, path.trim_start_matches('/'));
+        let mut req = reqwest::Client::new().get(&url);
+        if let Some(token) = self.token_header() {
+            req = req.header("X-Vault-Token", token);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .with_ctx(|| format!("Failed to list {path}"))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("List {path} returned {status}: {body}");
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        if body.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(
+                serde_json::from_str(&body).ctx("Failed to parse list response")?,
+            ))
+        }
+    }
+
     // ── Generic write (for auth config, roles, etc.) ────────────────────
 
 /// Write.

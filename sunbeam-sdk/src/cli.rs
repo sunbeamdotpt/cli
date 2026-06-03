@@ -134,11 +134,19 @@ pub enum Verb {
         action: VpnAction,
     },
 
-    /// bao CLI passthrough (runs inside OpenBao pod with root token).
-    #[command(hide = true)]
-    Bao {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        bao_args: Vec<String>,
+    /// OpenBao secrets engine interaction (KV, transit, generic read/write).
+    Secrets {
+        /// OpenBao address override.
+        #[arg(short, long)]
+        addr: Option<String>,
+        /// Root token override.
+        #[arg(short, long)]
+        token: Option<String>,
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
+        output: crate::output::OutputFormat,
+        #[command(subcommand)]
+        action: crate::secrets_cli::SecretsAction,
     },
 
     /// Generate shell completions.
@@ -194,7 +202,7 @@ impl Verb {
             Verb::Workflow { .. } => "workflow",
             Verb::Service { .. } => "service",
             Verb::Vpn { .. } => "vpn",
-            Verb::Bao { .. } => "bao",
+            Verb::Secrets { .. } => "secrets",
             Verb::Completions { .. } => "completions",
             Verb::Doctor => "doctor",
             Verb::VpnDaemon => "vpn-daemon",
@@ -403,12 +411,6 @@ pub enum ServiceAction {
         service: String,
     },
 
-    /// Manage OpenBao Transit secrets engine (mounts, keys, signing).
-    Transit {
-        #[command(subcommand)]
-        action: TransitAction,
-    },
-
     /// Delete a Job by namespace/name (workaround for k8s Job immutability).
     DeleteJob {
         /// Job reference in the form <namespace>/<name>.
@@ -423,33 +425,6 @@ pub enum SecretsAction {
     Get {
         /// Field name within the service's KV path.
         key: String,
-    },
-}
-
-/// OpenBao Transit secrets engine subcommands.
-#[derive(Subcommand, Debug)]
-pub enum TransitAction {
-    /// Enable a transit secrets engine at a mount path (idempotent).
-    Enable {
-        /// Mount path (e.g. "transit/sbbb").
-        mount: String,
-    },
-    /// Create an Ed25519 key under a transit mount (idempotent).
-    CreateKey {
-        /// Mount path (e.g. "transit/sbbb").
-        mount: String,
-        /// Key name (e.g. "sbbb-shell").
-        name: String,
-        /// Key type.
-        #[arg(long, default_value = "ed25519")]
-        key_type: String,
-    },
-    /// Read the public metadata of a transit key.
-    ReadKey {
-        /// Mount path (e.g. "transit/sbbb").
-        mount: String,
-        /// Key name (e.g. "sbbb-shell").
-        name: String,
     },
 }
 
@@ -1218,7 +1193,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             Some(ConfigAction::Clear) => crate::config::clear_config(),
         },
 
-        Some(Verb::Bao { bao_args }) => crate::kube::cmd_bao(&bao_args).await,
+        Some(Verb::Secrets { addr, token, output, action }) => {
+            crate::secrets_cli::dispatch(addr.as_deref(), token.as_deref(), output, action).await
+        }
 
         Some(Verb::User { action }) => match action {
             None => {
@@ -2176,6 +2153,106 @@ mod tests {
                 assert!(!all);
             }
             _ => panic!("expected Project Check"),
+        }
+    }
+
+    // -- Secrets subcommand tests --
+
+    #[test]
+    fn test_secrets_kv_get_parses() {
+        let cli = parse(&["sunbeam", "secrets", "kv", "get", "secret/hydra"]);
+        match cli.verb {
+            Some(Verb::Secrets { action, .. }) => {
+                assert!(matches!(
+                    action,
+                    crate::secrets_cli::SecretsAction::Kv(
+                        crate::secrets_cli::KvAction::Get { .. }
+                    )
+                ));
+            }
+            _ => panic!("expected Secrets Kv Get"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_kv_put_parses() {
+        let cli = parse(&["sunbeam", "secrets", "kv", "put", "secret/hydra", "foo=bar"]);
+        match cli.verb {
+            Some(Verb::Secrets { action, .. }) => match action {
+                crate::secrets_cli::SecretsAction::Kv(
+                    crate::secrets_cli::KvAction::Put { path, pairs, .. },
+                ) => {
+                    assert_eq!(path, "secret/hydra");
+                    assert_eq!(pairs, vec!["foo=bar"]);
+                }
+                _ => panic!("expected Kv Put"),
+            },
+            _ => panic!("expected Secrets"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_transit_enable_parses() {
+        let cli = parse(&["sunbeam", "secrets", "transit", "enable", "transit/sbbb"]);
+        match cli.verb {
+            Some(Verb::Secrets { action, .. }) => match action {
+                crate::secrets_cli::SecretsAction::Transit(
+                    crate::secrets_cli::TransitAction::Enable { mount },
+                ) => {
+                    assert_eq!(mount, "transit/sbbb");
+                }
+                _ => panic!("expected Transit Enable"),
+            },
+            _ => panic!("expected Secrets"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_status_parses() {
+        let cli = parse(&["sunbeam", "secrets", "status"]);
+        match cli.verb {
+            Some(Verb::Secrets { action, .. }) => {
+                assert!(matches!(
+                    action,
+                    crate::secrets_cli::SecretsAction::Status
+                ));
+            }
+            _ => panic!("expected Secrets Status"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_exec_parses() {
+        let cli = parse(&["sunbeam", "secrets", "exec", "kv", "list", "secret/"]);
+        match cli.verb {
+            Some(Verb::Secrets { action, .. }) => match action {
+                crate::secrets_cli::SecretsAction::Exec { args } => {
+                    assert_eq!(args, vec!["kv", "list", "secret/"]);
+                }
+                _ => panic!("expected Exec"),
+            },
+            _ => panic!("expected Secrets"),
+        }
+    }
+
+    #[test]
+    fn test_secrets_with_addr_and_token() {
+        let cli = parse(&[
+            "sunbeam",
+            "secrets",
+            "--addr",
+            "https://vault.example.com:8200",
+            "--token",
+            "hvs.test",
+            "status",
+        ]);
+        match cli.verb {
+            Some(Verb::Secrets { addr, token, action, .. }) => {
+                assert_eq!(addr, Some("https://vault.example.com:8200".to_string()));
+                assert_eq!(token, Some("hvs.test".to_string()));
+                assert!(matches!(action, crate::secrets_cli::SecretsAction::Status));
+            }
+            _ => panic!("expected Secrets with addr+token"),
         }
     }
 

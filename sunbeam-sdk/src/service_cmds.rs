@@ -3,7 +3,7 @@
 //! These commands use the service registry for name resolution and delegate to
 //! kubectl for interactive operations.
 
-use crate::cli::{SecretsAction, ServiceAction, TransitAction};
+use crate::cli::{SecretsAction, ServiceAction};
 use crate::error::{Result, SunbeamError};
 use tracing::Instrument;
 use crate::registry::{self, ServiceRegistry};
@@ -241,7 +241,6 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
         ServiceAction::Scale { service, replicas } => cmd_scale(&service, replicas).await,
         ServiceAction::Top { service } => cmd_top(&service).await,
         ServiceAction::Edit { service } => cmd_edit(&service).await,
-        ServiceAction::Transit { action } => cmd_transit(action).await,
         ServiceAction::DeleteJob { target } => cmd_delete_job(&target).await,
     }
 }
@@ -276,71 +275,6 @@ async fn cmd_delete_job(target: &str) -> Result<()> {
     }
 }
 
-/// Manage OpenBao Transit: enable mounts, create keys, read public key metadata.
-async fn cmd_transit(action: TransitAction) -> Result<()> {
-    let ob_pod =
-        crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
-            .await
-            .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
-
-    let _pf = crate::secrets::port_forward("data", &ob_pod, 8200).await?;
-    let bao_url = format!("http://127.0.0.1:{}", _pf.local_port);
-
-    let token = crate::kube::kube_get_secret_field("data", "openbao-keys", "root-token")
-        .await
-        .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
-
-    let bao = crate::openbao::BaoClient::with_token(&bao_url, &token);
-
-    match action {
-        TransitAction::Enable { mount } => {
-            let path = mount.trim_matches('/');
-            tracing::info!("Enabling transit engine at {path}...");
-            bao.enable_secrets_engine(path, "transit").await?;
-            tracing::info!("Transit engine ready at {path}/");
-        }
-        TransitAction::CreateKey {
-            mount,
-            name,
-            key_type,
-        } => {
-            let mount = mount.trim_matches('/');
-            let key_path = format!("{mount}/keys/{name}");
-
-            if let Some(existing) = bao.read(&key_path).await? {
-                tracing::info!("Key {key_path} already exists.");
-                if let Some(t) = existing
-                    .get("data")
-                    .and_then(|d| d.get("type"))
-                    .and_then(|v| v.as_str())
-                    && t != key_type
-                {
-                    tracing::warn!("Existing key type is {t}, requested {key_type} — leaving as-is.");
-                }
-                return Ok(());
-            }
-
-            tracing::info!("Creating {key_type} key at {key_path}...");
-            bao.write(&key_path, &serde_json::json!({ "type": key_type }))
-                .await?;
-            tracing::info!("Key {key_path} created.");
-        }
-        TransitAction::ReadKey { mount, name } => {
-            let mount = mount.trim_matches('/');
-            let key_path = format!("{mount}/keys/{name}");
-            match bao.read(&key_path).await? {
-                Some(value) => {
-                    println!("{}", serde_json::to_string_pretty(&value)?);
-                }
-                None => {
-                    tracing::warn!("Key {key_path} not found.");
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
 
 /// Helper: run a named workflow via the in-process engine.
 async fn run_workflow(
