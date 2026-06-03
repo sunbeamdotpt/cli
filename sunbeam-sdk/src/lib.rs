@@ -43,8 +43,7 @@ pub mod openbao;
 pub mod operations;
 /// CLI output helpers (tables, JSON, YAML, step banners).
 pub mod output;
-/// Project management (Planka + Gitea ticket sync).
-pub mod pm;
+
 /// Kubernetes port-forward utilities.
 pub mod port_forward;
 /// Per-project build, test, and deployment commands.
