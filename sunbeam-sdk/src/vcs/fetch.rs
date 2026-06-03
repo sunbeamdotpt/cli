@@ -1,11 +1,12 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git};
 
-pub async fn cmd_fetch(args: VcsArgs, remote: String) -> Result<()> {
+pub async fn cmd_fetch(logger: &crate::logger::Logger, args: VcsArgs, remote: String) -> Result<()> {
     let targets = resolve_targets(&args)?;
     for target in targets {
         run_git(&target.path, &["fetch", &remote])?;
-        tracing::info!("Fetched {} in {}", remote, target.name);
+        info!(logger, "Fetched", remote = remote, repo = target.name);
     }
     Ok(())
 }
@@ -32,6 +33,7 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_fetch(args, "origin".into())).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_fetch(&logger, args, "origin".into())).unwrap();
     }
 }

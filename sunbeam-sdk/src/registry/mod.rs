@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use crate::{debug, info, trace};
 use kube::Client;
 use kube::api::{Api, ListParams};
 // ── Label / annotation keys ──────────────────────────────────────────
@@ -297,12 +298,16 @@ impl ServiceRegistry {
 // ── Discovery ────────────────────────────────────────────────────────
 
 /// Discover all services from K8s resources with `sunbeam.pt/service` labels.
-#[tracing::instrument(skip(client))]
-pub async fn discover(client: &Client) -> crate::error::Result<ServiceRegistry> {
+#[tracing::instrument(skip(logger, client))]
+pub async fn discover(
+    logger: &crate::logger::Logger,
+    client: &Client,
+) -> crate::error::Result<ServiceRegistry> {
     let mut services: HashMap<String, ServiceDefinition> = HashMap::new();
 
     // Query Deployments
     discover_resources::<k8s_openapi::api::apps::v1::Deployment>(
+        logger,
         client,
         &mut services,
         "Deployment",
@@ -311,6 +316,7 @@ pub async fn discover(client: &Client) -> crate::error::Result<ServiceRegistry> 
 
     // Query StatefulSets
     discover_resources::<k8s_openapi::api::apps::v1::StatefulSet>(
+        logger,
         client,
         &mut services,
         "StatefulSet",
@@ -318,17 +324,18 @@ pub async fn discover(client: &Client) -> crate::error::Result<ServiceRegistry> 
     .await?;
 
     // Query DaemonSets
-    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(client, &mut services, "DaemonSet")
+    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(logger, client, &mut services, "DaemonSet")
         .await?;
 
     // Query ConfigMaps (for virtual/external services)
-    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(client, &mut services, "ConfigMap")
+    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(logger, client, &mut services, "ConfigMap")
         .await?;
 
     Ok(ServiceRegistry { services })
 }
 
 async fn discover_resources<R>(
+    logger: &crate::logger::Logger,
     client: &Client,
     services: &mut HashMap<String, ServiceDefinition>,
     kind: &str,
@@ -348,7 +355,7 @@ where
         .list(&lp)
         .await
         .map_err(|e| crate::error::SunbeamError::kube(format!("discover {kind}: {e}")))?;
-    tracing::debug!("discover_resources {kind}: found {count} items", count = list.items.len());
+    debug!(logger, "discover_resources", kind = kind, count = list.items.len());
 
     for resource in &list.items {
         let meta = resource.meta();
@@ -432,7 +439,7 @@ where
             })
             .unwrap_or_default();
 
-        tracing::debug!("discover_resources {kind}: added {service_name} in {ns}");
+        debug!(logger, "discover_resources added", kind = kind, service_name = service_name, ns = ns);
         services.insert(
             service_name.clone(),
             ServiceDefinition {

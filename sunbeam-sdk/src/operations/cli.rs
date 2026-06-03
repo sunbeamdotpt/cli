@@ -5,21 +5,21 @@ use crate::discovery::{find_workspace_root, WORKSPACE_FILE};
 use crate::error::Result;
 use crate::operations::compose::ComposeOptions;
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
-
+use crate::{debug, error, info, trace};
 
 /// Dispatch.
-#[tracing::instrument]
-pub async fn dispatch(action: OperationsAction) -> Result<()> {
-    tracing::debug!("operations dispatch: {action:?}");
-    tracing::info!("operations dispatch: {action:?}");
+#[tracing::instrument(skip(logger))]
+pub async fn dispatch(logger: &crate::logger::Logger, action: OperationsAction) -> Result<()> {
+    debug!(logger, "operations dispatch", action = format!("{:?}", action));
+    info!(logger, "operations dispatch", action = format!("{:?}", action));
     match action {
         OperationsAction::Compose { action } => {
             let (ws, ws_root) = load_workspace().await?;
-            dispatch_compose(action, ws, ws_root).await
+            dispatch_compose(logger, action, ws, ws_root).await
         }
         OperationsAction::Stack { action } => {
             let (ws, ws_root) = load_workspace().await?;
-            dispatch_stack(action, ws, ws_root).await
+            dispatch_stack(logger, action, ws, ws_root).await
         }
         OperationsAction::Info => {
             let (ws, _) = load_workspace().await?;
@@ -43,9 +43,9 @@ pub async fn dispatch(action: OperationsAction) -> Result<()> {
                 if entries.is_empty() {
                     continue;
                 }
-                tracing::info!("[{}]", bucket.as_str());
+                info!(logger, "bucket", name = bucket.as_str());
                 for e in entries {
-                    tracing::info!("  {}  {}", e.name, e.repo.path);
+                    info!(logger, "repo entry", name = e.name, path = e.repo.path.as_str());
                 }
             }
             Ok(())
@@ -61,6 +61,7 @@ async fn load_workspace() -> Result<(WorkspaceConfig, std::path::PathBuf)> {
 }
 
 async fn dispatch_compose(
+    logger: &crate::logger::Logger,
     action: ComposeAction,
     ws: WorkspaceConfig,
     ws_root: std::path::PathBuf,
@@ -68,7 +69,7 @@ async fn dispatch_compose(
     match action {
         ComposeAction::Render => {
             let path = crate::operations::compose::materialize(&ws, &ws_root)?;
-            tracing::info!("wrote {}", path.display());
+            info!(logger, "wrote", path = path.display());
             Ok(())
         }
         ComposeAction::Up { services, wait } => {
@@ -123,6 +124,7 @@ fn print_ps_table(statuses: Vec<crate::operations::compose::ServiceStatus>) {
 }
 
 async fn dispatch_stack(
+    logger: &crate::logger::Logger,
     action: StackAction,
     mut ws: WorkspaceConfig,
     ws_root: std::path::PathBuf,
@@ -153,7 +155,7 @@ async fn dispatch_stack(
         StackAction::Diff { left, right } => {
             let entries =
                 crate::operations::stack::diff(&ws, &ws_root, &left, right.as_deref())?;
-            print_diff(entries);
+            print_diff(logger, entries);
             Ok(())
         }
     }
@@ -180,11 +182,11 @@ fn print_stack_table(summaries: Vec<crate::operations::stack::StackSummary>) {
     println!("{table}");
 }
 
-fn print_diff(entries: Vec<crate::operations::stack::StackDiffEntry>) {
+fn print_diff(logger: &crate::logger::Logger, entries: Vec<crate::operations::stack::StackDiffEntry>) {
     for e in entries {
         let left = e.left.as_deref().unwrap_or("(missing)");
         let right = e.right.as_deref().unwrap_or("(missing)");
-        tracing::info!("  {}  {left} -> {right}", e.project);
+        info!(logger, "diff entry", project = e.project, left = left, right = right);
     }
 }
 

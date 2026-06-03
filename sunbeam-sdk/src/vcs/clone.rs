@@ -1,9 +1,8 @@
-use std::path::PathBuf;
-
 use crate::error::{Result, SunbeamError};
+use crate::info;
 use crate::vcs::run_git;
 
-pub async fn cmd_clone(url: String, name: Option<String>) -> Result<()> {
+pub async fn cmd_clone(logger: &crate::logger::Logger, url: String, name: Option<String>) -> Result<()> {
     let repo_name = name
         .or_else(|| extract_name_from_url(&url))
         .ok_or_else(|| {
@@ -23,7 +22,7 @@ pub async fn cmd_clone(url: String, name: Option<String>) -> Result<()> {
         .ok_or_else(|| SunbeamError::Config(format!("invalid destination path for {repo_name}")))?;
 
     run_git(parent, &["clone", &url, dir_name])?;
-    tracing::info!("Cloned {} into {}", url, dest.display());
+    info!(logger, "Cloned", url = url, dest = format!("{}", dest.display()));
     Ok(())
 }
 
@@ -71,7 +70,9 @@ mod tests {
         let _env = TestEnv::new(root.path());
         _env.set_repo_code_root(&code_root);
 
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         futures::executor::block_on(cmd_clone(
+            &logger,
             format!("file://{}", bare.display()),
             Some("origin".into()),
         ))
@@ -93,7 +94,9 @@ mod tests {
         let _env = TestEnv::new(root.path());
         _env.set_repo_code_root(&code_root);
 
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         futures::executor::block_on(cmd_clone(
+            &logger,
             format!("file://{}", bare.display()),
             None,
         ))
@@ -106,7 +109,8 @@ mod tests {
     fn test_cmd_clone_name_inference_fails() {
         let root = TempDir::new().unwrap();
         let _env = TestEnv::new(root.path());
-        let err = futures::executor::block_on(cmd_clone("https://example.com/".into(), None)).unwrap_err();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let err = futures::executor::block_on(cmd_clone(&logger, "https://example.com/".into(), None)).unwrap_err();
         assert!(format!("{err}").contains("pass --name"));
     }
 }

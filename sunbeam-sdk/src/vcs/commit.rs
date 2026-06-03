@@ -1,7 +1,8 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git};
 
-pub async fn cmd_commit(args: VcsArgs, message: String, all: bool) -> Result<()> {
+pub async fn cmd_commit(logger: &crate::logger::Logger, args: VcsArgs, message: String, all: bool) -> Result<()> {
     let targets = resolve_targets(&args)?;
     for target in targets {
         let mut git_args = vec!["commit", "-m", &message];
@@ -9,7 +10,7 @@ pub async fn cmd_commit(args: VcsArgs, message: String, all: bool) -> Result<()>
             git_args.push("-a");
         }
         run_git(&target.path, &git_args)?;
-        tracing::info!("Committed in {}", target.name);
+        info!(logger, "Committed", repo = target.name);
     }
     Ok(())
 }
@@ -32,7 +33,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_commit(args, "test commit".into(), false)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_commit(&logger, args, "test commit".into(), false)).unwrap();
         let log = run_git_output_lines(tmp.path(), &["log", "--oneline"]).unwrap();
         assert!(!log.is_empty());
         assert!(log[0].contains("test commit"));
@@ -49,7 +51,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_commit(args, "auto commit".into(), true)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_commit(&logger, args, "auto commit".into(), true)).unwrap();
         let log = run_git_output_lines(tmp.path(), &["log", "--oneline"]).unwrap();
         assert!(log[0].contains("auto commit"));
     }

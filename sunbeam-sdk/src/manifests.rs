@@ -199,9 +199,9 @@ pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions
     } else {
         Some(vec![namespace.clone()])
     };
-    pre_apply_cleanup(ns_list.as_deref()).await;
+    pre_apply_cleanup(logger, ns_list.as_deref()).await;
 
-    let before = snapshot_configmaps().await;
+    let before = snapshot_configmaps(logger).await;
 
     crate::kube::kube_apply(logger, &manifests).await?;
 
@@ -221,7 +221,7 @@ pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions
         crate::kube::kube_apply(logger, &manifests2).await?;
     }
 
-    restart_for_changed_configmaps(&before, &snapshot_configmaps().await).await;
+    restart_for_changed_configmaps(&before, &snapshot_configmaps(logger).await).await;
 
     // Post-apply hooks
     if namespace.is_empty() || namespace == "matrix" {
@@ -296,14 +296,14 @@ fn clean_partial_chart_extracts(infra_dir: &std::path::Path) {
 }
 
 /// Delete immutable resources that must be re-created on each apply.
-async fn pre_apply_cleanup(namespaces: Option<&[String]>) {
+async fn pre_apply_cleanup(logger: &crate::logger::Logger, namespaces: Option<&[String]>) {
     let discovered: Vec<String>;
     let ns_list: Vec<&str> = match namespaces {
         Some(ns) => ns.iter().map(|s| s.as_str()).collect(),
         None => {
             discovered = match crate::kube::get_client().await {
                 Ok(client) => {
-                    let reg = crate::registry::discover(&client).await;
+                    let reg = crate::registry::discover(logger, &client).await;
                     reg.map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
                         .unwrap_or_default()
                 }
@@ -409,14 +409,14 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
 }
 
 /// Snapshot ConfigMap resourceVersions across managed namespaces.
-async fn snapshot_configmaps() -> std::collections::HashMap<String, String> {
+async fn snapshot_configmaps(logger: &crate::logger::Logger) -> std::collections::HashMap<String, String> {
     let mut result = std::collections::HashMap::new();
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
         Err(_) => return result,
     };
 
-    let reg = crate::registry::discover(&client).await;
+    let reg = crate::registry::discover(logger, &client).await;
     let namespaces: Vec<String> = reg
         .map(|r| r.namespaces().into_iter().map(|s| s.to_string()).collect())
         .unwrap_or_default();

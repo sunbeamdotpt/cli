@@ -4,6 +4,7 @@ use clap::Subcommand;
 
 use crate::error::{Result, SunbeamError};
 use crate::output;
+use crate::info;
 
 use super::host;
 
@@ -138,16 +139,17 @@ pub async fn dispatch(
     action: WorkflowAction,
     output: crate::wfectl::output::OutputFormat,
 ) -> Result<()> {
+    let logger = crate::logger::Logger::new(crate::logger::TracingSink);
     let (target_name, target_cfg) = resolve_target(target)?;
     tracing::Span::current().record("target", &target_name);
 
     // Target management commands work regardless of target.
     match action {
         WorkflowAction::Login { name, url } => {
-            return login_target(&name, &url);
+            return login_target(&logger, &name, &url);
         }
         WorkflowAction::Logout { name } => {
-            return logout_target(&name);
+            return logout_target(&logger, &name);
         }
         WorkflowAction::Targets => {
             return list_targets();
@@ -156,10 +158,10 @@ pub async fn dispatch(
     }
 
     if target_name == "local" {
-        dispatch_local(action).await
+        dispatch_local(&logger, action).await
     } else {
         let t = target_cfg.expect("remote target resolved");
-        dispatch_remote(action, output, &t).await
+        dispatch_remote(&logger, action, output, &t).await
     }
 }
 
@@ -167,7 +169,7 @@ pub async fn dispatch(
 // Local dispatch
 // ---------------------------------------------------------------------------
 
-async fn dispatch_local(action: WorkflowAction) -> Result<()> {
+async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) -> Result<()> {
     match action {
         WorkflowAction::List { status, .. } => {
             let ctx_name = {
@@ -179,7 +181,7 @@ async fn dispatch_local(action: WorkflowAction) -> Result<()> {
                 }
             };
             let h = host::create_host(&ctx_name).await?;
-            let result = list_workflows(&h, &status).await;
+            let result = list_workflows(logger, &h, &status).await;
             host::shutdown_host(h).await;
             result
         }
@@ -193,7 +195,7 @@ async fn dispatch_local(action: WorkflowAction) -> Result<()> {
                 }
             };
             let h = host::create_host(&ctx_name).await?;
-            let result = show_workflow_status(&h, &id).await;
+            let result = show_workflow_status(logger, &h, &id).await;
             host::shutdown_host(h).await;
             result
         }
@@ -207,7 +209,7 @@ async fn dispatch_local(action: WorkflowAction) -> Result<()> {
                 }
             };
             let h = host::create_host(&ctx_name).await?;
-            let result = retry_workflow(&h, &id).await;
+            let result = retry_workflow(logger, &h, &id).await;
             host::shutdown_host(h).await;
             result
         }
@@ -221,7 +223,7 @@ async fn dispatch_local(action: WorkflowAction) -> Result<()> {
                 }
             };
             let h = host::create_host(&ctx_name).await?;
-            let result = cancel_workflow(&h, &id).await;
+            let result = cancel_workflow(logger, &h, &id).await;
             host::shutdown_host(h).await;
             result
         }
@@ -233,13 +235,13 @@ async fn dispatch_local(action: WorkflowAction) -> Result<()> {
 }
 
 /// Inner dispatch that operates on an already-created host. Testable.
-#[tracing::instrument(skip(h))]
-pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
+#[tracing::instrument(skip(h, logger))]
+pub async fn dispatch_with_host(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
     match action {
-        WorkflowAction::List { status, .. } => list_workflows(h, &status).await,
-        WorkflowAction::Status { id } => show_workflow_status(h, &id).await,
-        WorkflowAction::Retry { id } => retry_workflow(h, &id).await,
-        WorkflowAction::Cancel { id } => cancel_workflow(h, &id).await,
+        WorkflowAction::List { status, .. } => list_workflows(logger, h, &status).await,
+        WorkflowAction::Status { id } => show_workflow_status(logger, h, &id).await,
+        WorkflowAction::Retry { id } => retry_workflow(logger, h, &id).await,
+        WorkflowAction::Cancel { id } => cancel_workflow(logger, h, &id).await,
         WorkflowAction::Run { .. } => unreachable!("handled above"),
         _ => Err(SunbeamError::Other(format!(
             "command '{action:?}' is not supported for local target"
@@ -252,6 +254,7 @@ pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -
 // ---------------------------------------------------------------------------
 
 async fn dispatch_remote(
+    logger: &crate::logger::Logger,
     action: WorkflowAction,
     output: crate::wfectl::output::OutputFormat,
     target: &crate::config::WorkflowTarget,
@@ -270,7 +273,7 @@ async fn dispatch_remote(
 
     let token = crate::wfectl::resolve_token(&domain)
         .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
-    let client = crate::wfectl::client::build(&target.url, &token)
+    let client = crate::wfectl::client::build(logger, &target.url, &token)
         .await
         .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
 
@@ -282,11 +285,11 @@ async fn dispatch_remote(
                 limit,
                 skip,
             };
-            crate::wfectl::list::run(args, client, output).await
+            crate::wfectl::list::run(logger, args, client, output).await
         }
         WorkflowAction::Cancel { id } => {
             let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
-            crate::wfectl::cancel::run(args, client).await
+            crate::wfectl::cancel::run(logger, args, client).await
         }
         WorkflowAction::Register(args) => {
             crate::wfectl::register::run(args, client, output).await
@@ -295,16 +298,16 @@ async fn dispatch_remote(
             crate::wfectl::definitions::run(args, client, output).await
         }
         WorkflowAction::Start(args) => {
-            crate::wfectl::run::run(args, client, output).await
+            crate::wfectl::run::run(logger, args, client, output).await
         }
         WorkflowAction::Get(args) => {
-            crate::wfectl::get::run(args, client, output).await
+            crate::wfectl::get::run(logger, args, client, output).await
         }
         WorkflowAction::Suspend(args) => {
-            crate::wfectl::suspend::run(args, client).await
+            crate::wfectl::suspend::run(logger, args, client).await
         }
         WorkflowAction::Resume(args) => {
-            crate::wfectl::resume::run(args, client).await
+            crate::wfectl::resume::run(logger, args, client).await
         }
         WorkflowAction::Publish(args) => {
             crate::wfectl::publish::run(args, client, output).await
@@ -313,7 +316,7 @@ async fn dispatch_remote(
             crate::wfectl::watch::run(args, client).await
         }
         WorkflowAction::Logs(args) => {
-            crate::wfectl::logs::run(args, client).await
+            crate::wfectl::logs::run(logger, args, client).await
         }
         WorkflowAction::SearchLogs(args) => {
             crate::wfectl::search_logs::run(args, client, output).await
@@ -351,7 +354,7 @@ fn parse_status_filter(status: &str) -> Option<crate::wfectl::list::StatusFilter
 // Target management
 // ---------------------------------------------------------------------------
 
-fn login_target(name: &str, url: &str) -> Result<()> {
+fn login_target(logger: &crate::logger::Logger, name: &str, url: &str) -> Result<()> {
     let mut cfg = crate::config::load_config();
     cfg.workflow_targets.insert(
         name.to_string(),
@@ -361,17 +364,17 @@ fn login_target(name: &str, url: &str) -> Result<()> {
         },
     );
     crate::config::save_config(&cfg)?;
-    tracing::info!("saved workflow target '{name}' -> {url}");
+    info!(logger, "saved workflow target", name = name, url = url);
     Ok(())
 }
 
-fn logout_target(name: &str) -> Result<()> {
+fn logout_target(logger: &crate::logger::Logger, name: &str) -> Result<()> {
     let mut cfg = crate::config::load_config();
     if cfg.workflow_targets.remove(name).is_some() {
         crate::config::save_config(&cfg)?;
-        tracing::info!("removed workflow target '{name}'");
+        info!(logger, "removed workflow target", name = name);
     } else {
-        tracing::warn!("workflow target '{name}' not found");
+        info!(logger, "workflow target not found", name = name);
     }
     Ok(())
 }
@@ -409,8 +412,8 @@ fn list_targets() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// List workflow instances.
-#[tracing::instrument(skip(h))]
-pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Result<()> {
+#[tracing::instrument(skip(h, logger))]
+pub async fn list_workflows(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, _status_filter: &str) -> Result<()> {
     let now = chrono::Utc::now();
     let ids = h
         .persistence()
@@ -419,7 +422,7 @@ pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Resu
         .map_err(|e| SunbeamError::Other(format!("query workflows: {e}")))?;
 
     if ids.is_empty() {
-        tracing::info!("No workflow instances found.");
+        info!(logger, "No workflow instances found.");
         return Ok(());
     }
 
@@ -445,19 +448,19 @@ pub async fn list_workflows(h: &wfe::WorkflowHost, _status_filter: &str) -> Resu
 }
 
 /// Show status of a single workflow instance.
-#[tracing::instrument(skip(h))]
-pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+#[tracing::instrument(skip(h, logger))]
+pub async fn show_workflow_status(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     match h.get_workflow(id).await {
         Ok(wf) => {
-            tracing::info!("Workflow: {}", wf.workflow_definition_id);
-            tracing::info!("Status:   {:?}", wf.status);
-            tracing::info!("Created:  {}", wf.create_time);
+            info!(logger, "Workflow:", definition_id = wf.workflow_definition_id);
+            info!(logger, "Status:", status = format!("{:?}", wf.status));
+            info!(logger, "Created:", create_time = wf.create_time);
             if let Some(ct) = wf.complete_time {
-                tracing::info!("Completed: {ct}");
+                info!(logger, "Completed:", completed = ct);
             }
 
             println!();
-            tracing::info!("Execution pointers:");
+            info!(logger, "Execution pointers:");
             let rows: Vec<Vec<String>> = wf
                 .execution_pointers
                 .iter()
@@ -480,7 +483,7 @@ pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()>
             );
         }
         Err(e) => {
-            tracing::warn!("Workflow instance '{id}' not found: {e}");
+            info!(logger, "Workflow instance not found", id = id, err = e);
         }
     }
 
@@ -488,22 +491,22 @@ pub async fn show_workflow_status(h: &wfe::WorkflowHost, id: &str) -> Result<()>
 }
 
 /// Resume a suspended/failed workflow.
-#[tracing::instrument(skip(h))]
-pub async fn retry_workflow(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+#[tracing::instrument(skip(h, logger))]
+pub async fn retry_workflow(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     h.resume_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("resume workflow: {e}")))?;
-    tracing::info!("Workflow '{id}' resumed.");
+    info!(logger, "Workflow resumed.", id = id);
     Ok(())
 }
 
 /// Terminate a running workflow.
-#[tracing::instrument(skip(h))]
-pub async fn cancel_workflow(h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+#[tracing::instrument(skip(h, logger))]
+pub async fn cancel_workflow(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
     h.terminate_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("terminate workflow: {e}")))?;
-    tracing::info!("Workflow '{id}' cancelled.");
+    info!(logger, "Workflow cancelled.", id = id);
     Ok(())
 }
 
@@ -560,30 +563,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_workflows_empty() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
-        let result = list_workflows(&h, "").await;
+        let result = list_workflows(&logger, &h, "").await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_show_workflow_status_not_found() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
-        let result = show_workflow_status(&h, "nonexistent-id").await;
+        let result = show_workflow_status(&logger, &h, "nonexistent-id").await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_show_workflow_status_found() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
-        let result = show_workflow_status(&h, &id).await;
+        let result = show_workflow_status(&logger, &h, &id).await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_show_status_with_step_details() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -607,31 +614,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(instance.status, WorkflowStatus::Complete);
-        let result = show_workflow_status(&h, &instance.id).await;
+        let result = show_workflow_status(&logger, &h, &instance.id).await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_cancel_workflow_completed() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
-        let result = cancel_workflow(&h, &id).await;
+        let result = cancel_workflow(&logger, &h, &id).await;
         drop(result);
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_retry_workflow_nonexistent() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
-        let result = retry_workflow(&h, "does-not-exist").await;
+        let result = retry_workflow(&logger, &h, "does-not-exist").await;
         assert!(result.is_err());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_cancel_workflow_nonexistent() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
-        let result = cancel_workflow(&h, "does-not-exist").await;
+        let result = cancel_workflow(&logger, &h, "does-not-exist").await;
         assert!(result.is_err());
         h.stop().await;
     }
@@ -650,8 +660,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_list() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
+            &logger,
             &h,
             WorkflowAction::List {
                 status: String::new(),
@@ -667,16 +679,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_status() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
-        let result = dispatch_with_host(&h, WorkflowAction::Status { id }).await;
+        let result = dispatch_with_host(&logger, &h, WorkflowAction::Status { id }).await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_dispatch_with_host_retry_nonexistent() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
+            &logger,
             &h,
             WorkflowAction::Retry {
                 id: "nope".to_string(),
@@ -689,6 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_suspended_workflow() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -709,13 +725,14 @@ mod tests {
         let _ = h.suspend_workflow(&id).await;
 
         // Resume should succeed
-        let result = retry_workflow(&h, &id).await;
+        let result = retry_workflow(&logger, &h, &id).await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_cancel_running_workflow() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -734,15 +751,16 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let result = cancel_workflow(&h, &id).await;
+        let result = cancel_workflow(&logger, &h, &id).await;
         assert!(result.is_ok());
         h.stop().await;
     }
 
     #[tokio::test]
     async fn test_dispatch_with_host_cancel() {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
-        let result = dispatch_with_host(&h, WorkflowAction::Cancel { id }).await;
+        let result = dispatch_with_host(&logger, &h, WorkflowAction::Cancel { id }).await;
         drop(result);
         h.stop().await;
     }
@@ -751,6 +769,7 @@ mod tests {
     async fn test_list_workflows_with_runnable_instance() {
         use wfe_core::models::WorkflowInstance;
 
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
 
         // Manually persist a Runnable workflow so get_runnable_instances finds it
@@ -762,7 +781,7 @@ mod tests {
             .unwrap();
 
         // Now list_workflows should hit the non-empty path
-        let result = list_workflows(&h, "").await;
+        let result = list_workflows(&logger, &h, "").await;
         assert!(result.is_ok());
         h.stop().await;
     }

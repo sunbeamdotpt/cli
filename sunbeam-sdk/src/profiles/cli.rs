@@ -6,9 +6,10 @@ use crate::config::{self, ContainerShortcuts, Preset, Profile, ProfileRef, Rule,
 use crate::error::{Result, SunbeamError};
 use serde_json::Value;
 use std::collections::HashMap;
+use crate::{debug, error, info, trace};
 
 /// Dispatch a profile subcommand.
-pub async fn dispatch(action: ProfileAction) -> Result<()> {
+pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> Result<()> {
     let mut config = config::load_config();
 
     match action {
@@ -33,15 +34,15 @@ pub async fn dispatch(action: ProfileAction) -> Result<()> {
             };
             config.add_rule(&profile, rule);
             config::save_config(&config)?;
-            tracing::info!("Added rule to profile '{profile}'");
+            info!(logger, "Added rule to profile", profile = profile);
         }
 
         ProfileAction::RmRule { profile, resource } => {
             if config.remove_rule(&profile, &resource) {
                 config::save_config(&config)?;
-                tracing::info!("Removed rule for '{resource}' from profile '{profile}'");
+                info!(logger, "Removed rule from profile", resource = resource, profile = profile);
             } else {
-                tracing::warn!("No rule for '{resource}' in profile '{profile}'");
+                info!(logger, "No rule for resource in profile", resource = resource, profile = profile);
             }
         }
 
@@ -63,7 +64,7 @@ pub async fn dispatch(action: ProfileAction) -> Result<()> {
             };
             config.add_preset(&profile, &preset, p);
             config::save_config(&config)?;
-            tracing::info!("Added preset '{preset}' to profile '{profile}'");
+            info!(logger, "Added preset to profile", preset = preset, profile = profile);
         }
 
         ProfileAction::SetPreset {
@@ -74,22 +75,22 @@ pub async fn dispatch(action: ProfileAction) -> Result<()> {
             let parsed = parse_cli_values(&values)?;
             config.set_preset(&profile, &preset, parsed);
             config::save_config(&config)?;
-            tracing::info!("Updated preset '{preset}' in profile '{profile}'");
+            info!(logger, "Updated preset in profile", preset = preset, profile = profile);
         }
 
         ProfileAction::RmPreset { profile, preset } => {
             if config.remove_preset(&profile, &preset) {
                 config::save_config(&config)?;
-                tracing::info!("Removed preset '{preset}' from profile '{profile}'");
+                info!(logger, "Removed preset from profile", preset = preset, profile = profile);
             } else {
-                tracing::warn!("No preset '{preset}' in profile '{profile}'");
+                info!(logger, "No preset in profile", preset = preset, profile = profile);
             }
         }
 
         ProfileAction::Cp { src, dst } => {
             if config.copy_profile(&src, &dst) {
                 config::save_config(&config)?;
-                tracing::info!("Copied profile '{src}' → '{dst}'");
+                info!(logger, "Copied profile", src = src, dst = dst);
             } else {
                 return Err(SunbeamError::Config(format!(
                     "Profile '{src}' not found"

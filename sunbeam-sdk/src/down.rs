@@ -1,6 +1,7 @@
 //! Cluster tear-down — deletes all Sunbeam-managed namespaces.
 
 use crate::error::{Result, SunbeamError};
+use crate::{debug, info, trace};
 use kube::api::{Api, Patch, PatchParams};
 
 /// Namespaces managed by Sunbeam infrastructure.
@@ -29,9 +30,14 @@ pub const APP_NAMESPACES: &[&str] = &[
 ///
 /// * `infra` — also delete cert-manager and longhorn-system.
 /// * `keep_data` — preserve the data namespace (postgres, opensearch, openbao).
-#[tracing::instrument]
-pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
-    tracing::debug!("cmd_down infra={infra} keep_data={keep_data}");
+#[tracing::instrument(skip(logger))]
+pub async fn cmd_down(
+    logger: &crate::logger::Logger,
+    yes: bool,
+    infra: bool,
+    keep_data: bool,
+) -> Result<()> {
+    debug!(logger, "cmd_down", infra = infra, keep_data = keep_data);
     let mut to_delete: Vec<&str> = APP_NAMESPACES.to_vec();
 
     if infra {
@@ -56,14 +62,12 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     to_delete.retain(|ns| existing_names.contains(*ns));
 
     if to_delete.is_empty() {
-        tracing::info!("No Sunbeam-managed namespaces found — nothing to delete.");
+        info!(logger, "No Sunbeam-managed namespaces found — nothing to delete.");
         return Ok(());
     }
 
-    tracing::info!(
-        "The following namespaces will be deleted:\n  {}",
-        to_delete.join("\n  ")
-    );
+    let ns_list = to_delete.join("\n  ");
+    info!(logger, &format!("The following namespaces will be deleted:\n  {ns_list}"));
 
     if !yes {
         eprint!("\nProceed? [y/N] ");
@@ -81,27 +85,27 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     let dp = kube::api::DeleteParams::background();
 
     for ns in &to_delete {
-        tracing::info!("Deleting namespace {ns}...");
+        info!(logger, "Deleting namespace...", ns = ns);
         match ns_api.delete(*ns, &dp).await {
             Ok(_) => {
-                tracing::info!("  {ns} deletion started.");
+                info!(logger, "  deletion started.", ns = ns);
             }
             Err(kube::Error::Api(ae)) if ae.code == 404 => {
-                tracing::info!("  {ns} already gone.");
+                info!(logger, "  already gone.", ns = ns);
             }
             Err(e) => {
-                tracing::warn!("  Failed to delete {ns}: {e}");
+                info!(logger, "  Failed to delete namespace", ns = ns, error = e);
             }
         }
     }
 
     // Wait for namespaces to actually terminate
-    tracing::info!("Waiting for namespaces to terminate...");
+    info!(logger, "Waiting for namespaces to terminate...");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     let mut remaining = Vec::new();
     loop {
         if std::time::Instant::now() > deadline {
-            tracing::warn!("Timed out waiting for namespace deletion.");
+            info!(logger, "Timed out waiting for namespace deletion.");
             break;
         }
         remaining.clear();
@@ -111,7 +115,7 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
             }
         }
         if remaining.is_empty() {
-            tracing::info!("All namespaces deleted.");
+            info!(logger, "All namespaces deleted.");
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -122,9 +126,9 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
     // volumes, etc.) can get stuck in Terminating. Remove finalizers from
     // resources inside the namespace, then from the namespace itself.
     for ns in &remaining {
-        tracing::info!("Force-deleting stuck namespace {ns}...");
-        if let Err(e) = force_delete_namespace(client.clone(), ns).await {
-            tracing::warn!("  Force-delete failed for {ns}: {e}");
+        info!(logger, "Force-deleting stuck namespace...", ns = ns);
+        if let Err(e) = force_delete_namespace(logger, client.clone(), ns).await {
+            info!(logger, "  Force-delete failed", ns = ns, error = e);
         }
     }
 
@@ -138,16 +142,17 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
             }
         }
         if still_stuck.is_empty() {
-            tracing::info!("All namespaces deleted after force-delete.");
+            info!(logger, "All namespaces deleted after force-delete.");
             return Ok(());
         }
         remaining = still_stuck;
     }
 
     if !remaining.is_empty() {
-        tracing::warn!(
-            "Namespaces still stuck after force-delete: {}",
-            remaining.join(", ")
+        info!(
+            logger,
+            "Namespaces still stuck after force-delete",
+            remaining = remaining.join(", ")
         );
     }
 
@@ -158,8 +163,12 @@ pub async fn cmd_down(yes: bool, infra: bool, keep_data: bool) -> Result<()> {
 /// remove the namespace's own finalizers.
 /// Remove finalizers from all namespaced resources in `namespace`, then
 /// remove the namespace's own finalizers.
-#[tracing::instrument(skip(client))]
-pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Result<()> {
+#[tracing::instrument(skip(logger, client))]
+pub async fn force_delete_namespace(
+    logger: &crate::logger::Logger,
+    client: kube::Client,
+    namespace: &str,
+) -> Result<()> {
     use kube::api::{Api, DynamicObject, Patch, PatchParams, ResourceExt};
     use kube::discovery::Scope;
 
@@ -169,8 +178,10 @@ pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Re
     let disc = match kube::discovery::Discovery::new(client.clone()).run().await {
         Ok(d) => d,
         Err(e) => {
-            tracing::warn!(
-                "  Discovery failed, falling back to namespace finalizer removal only: {e}"
+            info!(
+                logger,
+                "  Discovery failed, falling back to namespace finalizer removal only",
+                error = e
             );
             return remove_namespace_finalizers(client, namespace).await;
         }
@@ -202,17 +213,23 @@ pub async fn force_delete_namespace(client: kube::Client, namespace: &str) -> Re
                             }
                         });
                         if let Err(e) = api.patch(&name, &pp, &Patch::Merge(&patch)).await {
-                            tracing::warn!(
-                                "    Could not patch finalizers on {}/{}: {}",
-                                ar.kind, name, e
+                            info!(
+                                logger,
+                                "    Could not patch finalizers",
+                                kind = ar.kind,
+                                name = name,
+                                error = e
                             );
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "    Could not list {} in {namespace}: {e}",
-                        ar.kind
+                    info!(
+                        logger,
+                        "    Could not list resources in namespace",
+                        kind = ar.kind,
+                        namespace = namespace,
+                        error = e
                     );
                 }
             }

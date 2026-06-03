@@ -1,4 +1,5 @@
 use crate::error::{Result, SunbeamError};
+use crate::{debug, error, info, trace};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
@@ -834,11 +835,11 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
 }
 
 /// Main dispatch function — parse CLI args and route to subcommands.
-#[tracing::instrument(skip(cli), fields(verb = tracing::field::Empty))]
-pub async fn dispatch(cli: Cli) -> Result<()> {
+#[tracing::instrument(skip(logger, cli), fields(verb = tracing::field::Empty))]
+pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
     let verb_name = cli.verb.as_ref().map(|v| v.as_ref_str());
     tracing::Span::current().record("verb", &verb_name.unwrap_or("none"));
-    tracing::debug!(msg = "cli dispatch", verb = ?cli.verb);
+    debug!(logger, "cli dispatch", verb = format!("{:?}", cli.verb));
 
     // Resolve the active context from config + CLI flags (like kubectl).
     // `--domain` / `--email` are Option<String>: `None` means "don't override",
@@ -919,7 +920,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 }
             }
 
-            tracing::info!("Tearing down cluster (workflow engine)...");
+            info!(logger, "Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
                 let cfg = crate::config::load_config();
@@ -1034,17 +1035,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                                 overrides.items.extend(profile_overrides.items);
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to resolve profile overrides: {e}");
+                                info!(logger, "Failed to resolve profile overrides", error = e.to_string());
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to discover manifests for profile resolution: {e}");
+                        info!(logger, "Failed to discover manifests for profile resolution", error = e.to_string());
                     }
                 }
             }
 
-            tracing::info!("Bringing up cluster (workflow engine)...");
+            info!(logger, "Bringing up cluster (workflow engine)...");
 
             let ctx_name = if config.current_context.is_empty() {
                 "default".to_string()
@@ -1081,7 +1082,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             .await
             .map_err(|e| SunbeamError::Other(format!("up workflow failed: {e}")))?;
 
-            crate::workflows::up::print_summary(&instance);
+            crate::workflows::up::print_summary(&logger, &instance);
             crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != wfe_core::models::WorkflowStatus::Complete {
@@ -1095,8 +1096,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         Some(Verb::Service { action }) => {
-            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
-            crate::service_cmds::dispatch(&logger, action).await
+            crate::service_cmds::dispatch(logger, action).await
         }
 
         Some(Verb::Config { action }) => match action {
@@ -1151,8 +1151,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             Some(ConfigAction::UseContext { name }) => {
                 let mut config = crate::config::load_config();
                 if !config.contexts.contains_key(&name) {
-                    tracing::warn!(
-                        "Context '{name}' does not exist. Creating empty context."
+                    info!(
+                        logger, "Context does not exist, creating empty context", name = name
                     );
                     config
                         .contexts
@@ -1160,7 +1160,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 }
                 config.current_context = name.clone();
                 crate::config::save_config(&config)?;
-                tracing::info!("Switched to context '{name}'.");
+                info!(logger, "Switched to context", name = name);
                 Ok(())
             }
             Some(ConfigAction::Get) => {
@@ -1170,22 +1170,22 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     &config.current_context
                 };
-                tracing::info!("Current context: {current}");
+                info!(logger, "Current context", context = current);
                 println!();
                 for (name, ctx) in &config.contexts {
                     let marker = if name == current { " *" } else { "" };
-                    tracing::info!("Context: {name}{marker}");
+                    info!(logger, "Context", name = name, marker = marker);
                     if !ctx.domain.is_empty() {
-                        tracing::info!("  domain:       {}", ctx.domain);
+                        info!(logger, "domain", domain = ctx.domain);
                     }
                     if !ctx.kube_context.is_empty() {
-                        tracing::info!("  kube-context: {}", ctx.kube_context);
+                        info!(logger, "kube-context", kube_context = ctx.kube_context);
                     }
                     if !ctx.infra_dir.is_empty() {
-                        tracing::info!("  infra-dir:    {}", ctx.infra_dir);
+                        info!(logger, "infra-dir", infra_dir = ctx.infra_dir);
                     }
                     if !ctx.acme_email.is_empty() {
-                        tracing::info!("  acme-email:   {}", ctx.acme_email);
+                        info!(logger, "acme-email", acme_email = ctx.acme_email);
                     }
                     println!();
                 }
@@ -1318,22 +1318,25 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Doctor) => crate::doctor::cmd_doctor().await,
+        Some(Verb::Doctor) => crate::doctor::cmd_doctor(&logger).await,
 
         Some(Verb::VpnDaemon) => crate::vpn_cmds::cmd_vpn_daemon().await,
 
-        Some(Verb::Update) => crate::update::cmd_update().await,
+        Some(Verb::Update) => crate::update::cmd_update(&logger).await,
 
         Some(Verb::Version) => {
             crate::update::cmd_version();
             Ok(())
         }
 
-        Some(Verb::Project { action }) => crate::project::cli::dispatch(action).await,
+        Some(Verb::Project { action }) => crate::project::cli::dispatch(logger, action).await,
 
-        Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
+        Some(Verb::Operations { action }) => crate::operations::cli::dispatch(logger, action).await,
 
-        Some(Verb::Vcs { action }) => crate::vcs::dispatch(action).await,
+        Some(Verb::Vcs { action }) => {
+            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+            crate::vcs::dispatch(&logger, action).await
+        }
 
 
 

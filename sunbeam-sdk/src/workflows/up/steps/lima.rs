@@ -3,7 +3,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-
+use crate::{debug, info, trace};
 use crate::workflows::data::UpData;
 
 #[cfg(unix)]
@@ -29,12 +29,22 @@ static LIMA_SUNBEAM_YAML: &str =
 /// 3. Starts the VM if it exists but is stopped.
 /// 4. Waits for the VM status to become `Running`.
 /// 5. Waits for k3s kubeconfig to be available inside the VM.
-#[derive(Default)]
-pub struct EnsureLimaVm;
+pub struct EnsureLimaVm {
+    logger: crate::logger::Logger,
+}
+
+impl Default for EnsureLimaVm {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for EnsureLimaVm {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let logger = &self.logger;
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| step_err(format!("UpData parse: {e}")))?;
 
@@ -55,11 +65,11 @@ impl StepBody for EnsureLimaVm {
             .unwrap_or("");
 
         if profile != "lima" {
-            tracing::info!(msg = "Profile is not 'lima' — skipping Lima VM management.");
+            info!(logger, "Profile is not 'lima' — skipping Lima VM management.");
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!("Ensuring Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
+        info!(logger, "Ensuring Lima VM '{}'...", vm = crate::constants::LIMA_VM_NAME);
 
         // Verify limactl is available
         let limactl_check = tokio::process::Command::new("limactl")
@@ -76,14 +86,14 @@ impl StepBody for EnsureLimaVm {
 
         match status.as_deref() {
             None | Some("") | Some("None") => {
-                tracing::info!("Creating Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
+                info!(logger, "Creating Lima VM '{}'...", vm = crate::constants::LIMA_VM_NAME);
                 create_lima_vm().await.map_err(step_err)?;
             }
             Some("Running") => {
-                tracing::info!("Lima VM '{}' is already running.", crate::constants::LIMA_VM_NAME);
+                info!(logger, "Lima VM '{}' is already running.", vm = crate::constants::LIMA_VM_NAME);
             }
             Some(st) => {
-                tracing::info!("Lima VM '{}' is stopped — starting... (status: {})", crate::constants::LIMA_VM_NAME, st);
+                info!(logger, "Lima VM '{}' is stopped — starting... (status: {})", vm = crate::constants::LIMA_VM_NAME, status = st);
                 start_lima_vm().await.map_err(step_err)?;
             }
         }
@@ -98,13 +108,14 @@ impl StepBody for EnsureLimaVm {
             }
             match lima_vm_status().await.as_deref() {
                 Some("Running") => {
-                    tracing::info!("Lima VM '{}' is running. (attempt: {})", crate::constants::LIMA_VM_NAME, attempt);
+                    info!(logger, "Lima VM '{}' is running. (attempt: {})", vm = crate::constants::LIMA_VM_NAME, attempt = attempt);
                     break;
                 }
                 Some(st) => {
                     if attempt % 6 == 0 {
-                        tracing::info!(
-                            msg = "Still waiting for Lima VM...",
+                        info!(
+                            logger,
+                            "Still waiting for Lima VM...",
                             status = st,
                             attempt = attempt,
                             elapsed_secs = attempt * 5,
@@ -114,8 +125,9 @@ impl StepBody for EnsureLimaVm {
                 }
                 None => {
                     if attempt % 6 == 0 {
-                        tracing::info!(
-                            msg = "Still waiting for Lima VM (no status yet)...",
+                        info!(
+                            logger,
+                            "Still waiting for Lima VM (no status yet)...",
                             attempt = attempt,
                             elapsed_secs = attempt * 5,
                         );
@@ -135,7 +147,7 @@ impl StepBody for EnsureLimaVm {
 
         // Wait for k3s kubeconfig to be copied out by Lima, then verify the
         // cluster API is reachable using the Rust k8s client (no shelling out).
-        tracing::info!(msg = "Waiting for k3s API to be reachable...");
+        info!(logger, "Waiting for k3s API to be reachable...");
         let k3s_deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut k3s_ready = false;
         let mut k3s_attempt = 0;
@@ -155,8 +167,9 @@ impl StepBody for EnsureLimaVm {
                 match load_kubeconfig_and_probe(&lima_kc).await {
                     Ok(true) => {
                         k3s_ready = true;
-                        tracing::info!(
-                            msg = "k3s API is reachable.",
+                        info!(
+                            logger,
+                            "k3s API is reachable.",
                             attempt = k3s_attempt,
                         );
                         break;
@@ -164,27 +177,30 @@ impl StepBody for EnsureLimaVm {
                     Ok(false) => {
                         // kubeconfig exists but API not yet responding
                         if k3s_attempt % 6 == 0 {
-                            tracing::info!(
-                                msg = "k3s kubeconfig present but API not responding yet...",
+                            info!(
+                                logger,
+                                "k3s kubeconfig present but API not responding yet...",
                                 attempt = k3s_attempt,
                                 elapsed_secs = k3s_attempt * 5,
                             );
                         }
                     }
                     Err(e) => {
-                        tracing::info!(
-                            msg = "k3s probe error (retrying)...",
+                        info!(
+                            logger,
+                            "k3s probe error (retrying)...",
                             attempt = k3s_attempt,
-                            err = %e,
+                            err = e,
                         );
                     }
                 }
             } else if k3s_attempt % 6 == 0 {
-                tracing::info!(
-                    msg = "Waiting for Lima to copy k3s kubeconfig...",
+                info!(
+                    logger,
+                    "Waiting for Lima to copy k3s kubeconfig...",
                     attempt = k3s_attempt,
                     elapsed_secs = k3s_attempt * 5,
-                    path = %lima_kc.display(),
+                    path = lima_kc.display(),
                 );
             }
 
@@ -192,17 +208,18 @@ impl StepBody for EnsureLimaVm {
         }
 
         if lima_kc.exists() {
-            tracing::info!(msg = "Updating host kubeconfig from Lima VM...");
+            info!(logger, "Updating host kubeconfig from Lima VM...");
             match merge_kubeconfigs(&lima_kc, &host_kc).await {
                 Ok(merged_yaml) => {
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     if let Err(e) = std::fs::write(&host_kc, merged_yaml) {
-                        tracing::warn!(
-                            msg = "Failed to write host kubeconfig.",
-                            path = %host_kc.display(),
-                            err = %e,
+                        info!(
+                            logger,
+                            "Failed to write host kubeconfig.",
+                            path = host_kc.display(),
+                            err = e,
                         );
                     } else {
                         #[cfg(unix)]
@@ -210,13 +227,14 @@ impl StepBody for EnsureLimaVm {
                             &host_kc,
                             std::fs::Permissions::from_mode(0o600),
                         );
-                        tracing::info!(msg = "Host kubeconfig updated.", path = %host_kc.display());
+                        info!(logger, "Host kubeconfig updated.", path = host_kc.display());
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        msg = "Kubeconfig merge failed — using Lima kubeconfig directly.",
-                        err = %e,
+                    info!(
+                        logger,
+                        "Kubeconfig merge failed — using Lima kubeconfig directly.",
+                        err = e,
                     );
                     if let Some(parent) = host_kc.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -388,7 +406,9 @@ mod tests {
 
     #[test]
     fn ensure_lima_vm_is_default() {
-        let _ = EnsureLimaVm;
+        let _ = EnsureLimaVm {
+            logger: crate::logger::Logger::new(crate::logger::NoopSink),
+        };
     }
 
     #[test]

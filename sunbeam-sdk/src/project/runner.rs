@@ -16,6 +16,7 @@ use std::process::Stdio;
 use crate::error::{Result, SunbeamError};
 use crate::project::{ProjectConfig, Target};
 use crate::project::config::{ExecCommand, ExecTarget, WorkflowTarget};
+use crate::{debug, error, info, trace};
 
 /// Outcome of attempting to run a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,14 +41,15 @@ pub struct RunOptions {
 }
 
 /// Run `verb` for the project rooted at `project_root`.
-#[tracing::instrument]
+#[tracing::instrument(skip(logger))]
 pub async fn run(
+    logger: &crate::logger::Logger,
     cfg: &ProjectConfig,
     project_root: &Path,
     verb: &str,
     opts: &RunOptions,
 ) -> Result<RunOutcome> {
-    tracing::info!("project run {verb} {}", cfg.project.name);
+    info!(logger, "project run", verb = verb, project = cfg.project.name);
     match cfg.target(verb) {
         Target::Skip(_) => Ok(RunOutcome::Skipped),
         Target::Exec(t) => run_exec(verb, project_root, &t, opts).await,
@@ -322,7 +324,8 @@ mod tests {
     async fn skip_returns_skipped() {
         let cfg = empty_cfg();
         let tmp = TempDir::new().unwrap();
-        let out = run(&cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
         assert_eq!(out, RunOutcome::Skipped);
     }
 
@@ -330,7 +333,8 @@ mod tests {
     async fn explicit_skip_returns_skipped() {
         let cfg = cfg_with_target("test", Target::Skip(SkipMarker::Skip));
         let tmp = TempDir::new().unwrap();
-        let out = run(&cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
         assert_eq!(out, RunOutcome::Skipped);
     }
 
@@ -338,7 +342,8 @@ mod tests {
     async fn shell_target_runs_successfully() {
         let cfg = cfg_with_target("build", shell("true"));
         let tmp = TempDir::new().unwrap();
-        let out = run(&cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -346,7 +351,8 @@ mod tests {
     async fn shell_failure_is_reported() {
         let cfg = cfg_with_target("build", shell("false"));
         let tmp = TempDir::new().unwrap();
-        let err = run(&cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap_err();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let err = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("build"), "msg={msg}");
         assert!(msg.contains("exit status"), "msg={msg}");
@@ -356,7 +362,8 @@ mod tests {
     async fn argv_target_runs_successfully() {
         let cfg = cfg_with_target("lint", argv(&["echo", "hi"]));
         let tmp = TempDir::new().unwrap();
-        let out = run(&cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let out = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -364,7 +371,8 @@ mod tests {
     async fn argv_missing_binary_errors() {
         let cfg = cfg_with_target("lint", argv(&["this-binary-should-not-exist-anywhere"]));
         let tmp = TempDir::new().unwrap();
-        let err = run(&cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap_err();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let err = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap_err();
         assert!(err.to_string().contains("lint"));
     }
 
@@ -372,9 +380,10 @@ mod tests {
     async fn extra_env_reaches_subprocess() {
         let cfg = cfg_with_target("test", shell("test \"$SB_FOO\" = \"bar\""));
         let tmp = TempDir::new().unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let mut opts = RunOptions::default();
         opts.extra_env.insert("SB_FOO".into(), "bar".into());
-        let out = run(&cfg, tmp.path(), "test", &opts).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "test", &opts).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -389,9 +398,10 @@ mod tests {
         });
         let cfg = cfg_with_target("test", target);
         let tmp = TempDir::new().unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let mut opts = RunOptions::default();
         opts.extra_env.insert("SB_FOO".into(), "from-extra".into());
-        let out = run(&cfg, tmp.path(), "test", &opts).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "test", &opts).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -399,15 +409,17 @@ mod tests {
     async fn dry_run_does_not_execute() {
         let cfg = cfg_with_target("build", shell("false"));
         let tmp = TempDir::new().unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let mut opts = RunOptions::default();
         opts.dry_run = true;
-        let out = run(&cfg, tmp.path(), "build", &opts).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "build", &opts).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
     #[tokio::test]
     async fn cwd_is_respected() {
         let tmp = TempDir::new().unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         fs::create_dir(tmp.path().join("sub")).unwrap();
         fs::write(tmp.path().join("sub").join("marker"), b"x").unwrap();
 
@@ -417,7 +429,7 @@ mod tests {
             env: BTreeMap::new(),
         });
         let cfg = cfg_with_target("test", target);
-        let out = run(&cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 

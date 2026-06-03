@@ -1,11 +1,12 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git};
 
-pub async fn cmd_pull(args: VcsArgs, remote: String) -> Result<()> {
+pub async fn cmd_pull(logger: &crate::logger::Logger, args: VcsArgs, remote: String) -> Result<()> {
     let targets = resolve_targets(&args)?;
     for target in targets {
         run_git(&target.path, &["pull", &remote])?;
-        tracing::info!("Pulled {} in {}", remote, target.name);
+        info!(logger, "Pulled", remote = remote, repo = target.name);
     }
     Ok(())
 }
@@ -38,6 +39,7 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_pull(args, "origin".into())).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_pull(&logger, args, "origin".into())).unwrap();
     }
 }

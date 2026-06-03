@@ -1,7 +1,8 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git_output_lines};
 
-pub async fn cmd_status(args: VcsArgs) -> Result<()> {
+pub async fn cmd_status(logger: &crate::logger::Logger, args: VcsArgs) -> Result<()> {
     let targets = resolve_targets(&args)?;
     let multi = targets.len() > 1;
     let mut any_output = false;
@@ -13,16 +14,16 @@ pub async fn cmd_status(args: VcsArgs) -> Result<()> {
         }
         for line in &lines {
             if multi {
-                tracing::info!("[{:>12}]  {}", target.name, line);
+                info!(logger, &format!("[{:>12}]  {}", target.name, line));
             } else {
-                tracing::info!("{}", line);
+                info!(logger, line);
             }
             any_output = true;
         }
     }
 
     if !any_output && multi {
-        tracing::info!("All repos clean.");
+        info!(logger, "All repos clean.");
     }
     Ok(())
 }
@@ -50,7 +51,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_status(args)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_status(&logger, args)).unwrap();
     }
 
     #[test]
@@ -63,7 +65,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_status(args)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_status(&logger, args)).unwrap();
     }
 
     #[test]
@@ -84,6 +87,7 @@ mod tests {
             repo: None,
             all: true,
         };
-        futures::executor::block_on(cmd_status(args)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_status(&logger, args)).unwrap();
     }
 }

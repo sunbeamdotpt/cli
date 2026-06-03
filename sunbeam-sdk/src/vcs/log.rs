@@ -1,7 +1,8 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git_output_lines};
 
-pub async fn cmd_log(args: VcsArgs, oneline: bool, limit: Option<usize>) -> Result<()> {
+pub async fn cmd_log(logger: &crate::logger::Logger, args: VcsArgs, oneline: bool, limit: Option<usize>) -> Result<()> {
     let targets = resolve_targets(&args)?;
     let multi = targets.len() > 1;
 
@@ -20,9 +21,9 @@ pub async fn cmd_log(args: VcsArgs, oneline: bool, limit: Option<usize>) -> Resu
         let lines = run_git_output_lines(&target.path, &refs)?;
         for line in &lines {
             if multi {
-                tracing::info!("[{:>12}]  {}", target.name, line);
+                info!(logger, &format!("[{:>12}]  {}", target.name, line));
             } else {
-                tracing::info!("{}", line);
+                info!(logger, line);
             }
         }
     }
@@ -52,7 +53,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_log(args, false, None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_log(&logger, args, false, None)).unwrap();
     }
 
     #[test]
@@ -65,7 +67,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_log(args, true, None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_log(&logger, args, true, None)).unwrap();
     }
 
     #[test]
@@ -79,7 +82,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_log(args, true, Some(1))).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_log(&logger, args, true, Some(1))).unwrap();
     }
 
     #[test]
@@ -100,6 +104,7 @@ mod tests {
             repo: None,
             all: true,
         };
-        futures::executor::block_on(cmd_log(args, true, None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_log(&logger, args, true, None)).unwrap();
     }
 }

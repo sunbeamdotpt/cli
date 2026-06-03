@@ -1,7 +1,9 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git, run_git_output_lines};
 
 pub async fn cmd_branch(
+    logger: &crate::logger::Logger,
     args: VcsArgs,
     _list: bool,
     create: Option<String>,
@@ -13,14 +15,14 @@ pub async fn cmd_branch(
     if let Some(ref name) = create {
         for target in targets {
             run_git(&target.path, &["branch", name])?;
-            tracing::info!("Created branch '{}' in {}", name, target.name);
+            info!(logger, "Created branch", branch = name, repo = target.name);
         }
         return Ok(());
     }
     if let Some(ref name) = delete {
         for target in targets {
             run_git(&target.path, &["branch", "-D", name])?;
-            tracing::info!("Deleted branch '{}' in {}", name, target.name);
+            info!(logger, "Deleted branch", branch = name, repo = target.name);
         }
         return Ok(());
     }
@@ -30,9 +32,9 @@ pub async fn cmd_branch(
             run_git_output_lines(&target.path, &["branch", "--format=%(refname:short)"])?;
         for line in &lines {
             if multi {
-                tracing::info!("[{:>12}]  {}", target.name, line);
+                info!(logger, &format!("[{:>12}]  {}", target.name, line));
             } else {
-                tracing::info!("{}", line);
+                info!(logger, line);
             }
         }
     }
@@ -55,7 +57,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_branch(args, true, None, None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_branch(&logger, args, true, None, None)).unwrap();
     }
 
     #[test]
@@ -68,7 +71,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_branch(args, false, Some("feature".into()), None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_branch(&logger, args, false, Some("feature".into()), None)).unwrap();
         let branches = run_git_output_lines(tmp.path(), &["branch", "--format=%(refname:short)"]).unwrap();
         assert!(branches.iter().any(|b| b == "feature"));
     }
@@ -84,7 +88,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_branch(args, false, None, Some("tmp-branch".into()))).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_branch(&logger, args, false, None, Some("tmp-branch".into()))).unwrap();
         let branches = run_git_output_lines(tmp.path(), &["branch", "--format=%(refname:short)"]).unwrap();
         assert!(!branches.iter().any(|b| b == "tmp-branch"));
     }

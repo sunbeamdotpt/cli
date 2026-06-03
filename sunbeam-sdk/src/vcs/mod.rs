@@ -36,30 +36,30 @@ pub struct RepoTarget {
 }
 
 /// Top-level dispatch.
-pub async fn dispatch(action: VcsAction) -> Result<()> {
+pub async fn dispatch(logger: &crate::logger::Logger, action: VcsAction) -> Result<()> {
     match action {
-        VcsAction::Status { args } => status::cmd_status(args).await,
+        VcsAction::Status { args } => status::cmd_status(logger, args).await,
         VcsAction::Log {
             args,
             oneline,
             limit,
-        } => log::cmd_log(args, oneline, limit).await,
+        } => log::cmd_log(logger, args, oneline, limit).await,
         VcsAction::Branch {
             args,
             list,
             create,
             delete,
-        } => branch::cmd_branch(args, list, create, delete).await,
-        VcsAction::Commit { args, message, all } => commit::cmd_commit(args, message, all).await,
+        } => branch::cmd_branch(logger, args, list, create, delete).await,
+        VcsAction::Commit { args, message, all } => commit::cmd_commit(logger, args, message, all).await,
         VcsAction::Push {
             args,
             remote,
             set_upstream,
-        } => push::cmd_push(args, remote, set_upstream).await,
-        VcsAction::Fetch { args, remote } => fetch::cmd_fetch(args, remote).await,
-        VcsAction::Pull { args, remote } => pull::cmd_pull(args, remote).await,
-        VcsAction::Clone { url, name } => clone::cmd_clone(url, name).await,
-        VcsAction::Init { url, name } => init::cmd_init(url, name).await,
+        } => push::cmd_push(logger, args, remote, set_upstream).await,
+        VcsAction::Fetch { args, remote } => fetch::cmd_fetch(logger, args, remote).await,
+        VcsAction::Pull { args, remote } => pull::cmd_pull(logger, args, remote).await,
+        VcsAction::Clone { url, name } => clone::cmd_clone(logger, url, name).await,
+        VcsAction::Init { url, name } => init::cmd_init(logger, url, name).await,
     }
 }
 
@@ -469,7 +469,7 @@ mod tests {
     fn test_resolve_workspace_all_skips_non_git() {
         let root = TempDir::new().unwrap();
         let repo_a = root.path().join("a");
-        let not_git = root.path().join("not-git");
+        let not_git = root.path().join("b");
         std::fs::create_dir(&repo_a).unwrap();
         std::fs::create_dir(&not_git).unwrap();
         git_init(&repo_a);

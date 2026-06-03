@@ -13,9 +13,9 @@ use kube::api::{Api, DynamicObject, ListParams, LogParams};
 // ---------------------------------------------------------------------------
 
 /// Discover the service registry from the cluster.
-async fn get_registry() -> Result<ServiceRegistry> {
+async fn get_registry(logger: &crate::logger::Logger) -> Result<ServiceRegistry> {
     let client = get_client().await?;
-    registry::discover(&client)
+    registry::discover(logger, &client)
         .await
         .map_err(|e| SunbeamError::Other(format!("service discovery failed: {e}")))
 }
@@ -176,12 +176,12 @@ async fn vso_sync_status() -> Result<()> {
 
 /// Show pod health, optionally filtered by service name, category, namespace,
 /// or legacy namespace/service syntax.
-#[tracing::instrument(skip(target))]
-pub async fn cmd_status(target: Option<&str>) -> Result<()> {
+#[tracing::instrument(skip(logger, target))]
+pub async fn cmd_status(logger: &crate::logger::Logger, target: Option<&str>) -> Result<()> {
     tracing::info!("Pod health across all namespaces...");
 
     let client = get_client().await?;
-    let reg = get_registry().await?;
+    let reg = get_registry(logger).await?;
 
     let mut pods: Vec<PodRow> = Vec::new();
 
@@ -372,10 +372,10 @@ pub async fn cmd_status(target: Option<&str>) -> Result<()> {
 
 /// Stream logs for a service. Accepts a service name (e.g. "hydra") or legacy
 /// namespace/name syntax (e.g. "ory/kratos").
-#[tracing::instrument(skip(target))]
-pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
+#[tracing::instrument(skip(logger, target))]
+pub async fn cmd_logs(logger: &crate::logger::Logger, target: &str, follow: bool) -> Result<()> {
     // Try registry first for exact service name match
-    let reg = get_registry().await?;
+    let reg = get_registry(logger).await?;
     let (ns, name) = if let Some(svc) = reg.get(target) {
         if svc.deployments.is_empty() {
             bail!("{target} has no deployments to show logs for");
@@ -450,8 +450,8 @@ pub async fn cmd_logs(target: &str, follow: bool) -> Result<()> {
 }
 
 /// Print raw pod output in YAML or JSON format.
-#[tracing::instrument(skip(target, output))]
-pub async fn cmd_get(target: &str, output: &str) -> Result<()> {
+#[tracing::instrument(skip(logger, target, output))]
+pub async fn cmd_get(logger: &crate::logger::Logger, target: &str, output: &str) -> Result<()> {
     let (ns_opt, name_opt) = parse_target(Some(target))?;
     let ns = match ns_opt {
         Some(n) if !n.is_empty() => n,
@@ -481,11 +481,11 @@ pub async fn cmd_get(target: &str, output: &str) -> Result<()> {
 /// Restart deployments. Accepts service names, categories, namespaces, or
 /// legacy namespace/name syntax. None restarts all non-infra services with
 /// deployments.
-#[tracing::instrument(skip(target))]
-pub async fn cmd_restart(target: Option<&str>) -> Result<()> {
+#[tracing::instrument(skip(logger, target))]
+pub async fn cmd_restart(logger: &crate::logger::Logger, target: Option<&str>) -> Result<()> {
     tracing::info!("Restarting services...");
 
-    let reg = get_registry().await?;
+    let reg = get_registry(logger).await?;
 
     // Collect (namespace, deployment) pairs to restart.
     let pairs: Vec<(String, String)> = match target {

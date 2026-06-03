@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Args;
 use wfe_server_protos::wfe::v1::GetWorkflowRequest;
 
+use crate::info;
 use super::client::AuthClient;
 use super::output::{OutputFormat, fmt_proto_time, render_kv, render_table};
 use super::struct_util::prost_struct_to_json;
@@ -17,9 +18,9 @@ pub struct GetArgs {
 }
 
 /// Run.
-#[tracing::instrument]
-pub async fn run(args: GetArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
-    tracing::info!("wfectl get workflow {id}", id = args.workflow_id);
+#[tracing::instrument(skip(logger))]
+pub async fn run(logger: &crate::logger::Logger, args: GetArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+    info!(logger, "wfectl get workflow", id = args.workflow_id);
     let resp = client
         .get_workflow(GetWorkflowRequest {
             workflow_id: args.workflow_id.clone(),

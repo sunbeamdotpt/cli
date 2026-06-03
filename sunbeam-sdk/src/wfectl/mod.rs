@@ -37,6 +37,7 @@ pub mod validate;
 pub mod watch;
 
 use output::OutputFormat;
+use crate::info;
 
 #[derive(Debug, clap::Subcommand)]
 /// Workflowscommand.
@@ -84,13 +85,14 @@ pub fn resolve_token(domain: &str) -> anyhow::Result<String> {
 }
 
 /// Dispatch a workflows subcommand.
-#[tracing::instrument]
+#[tracing::instrument(skip(logger))]
 pub async fn dispatch(
+    logger: &crate::logger::Logger,
     cmd: WorkflowsCommand,
     format: OutputFormat,
     domain: &str,
 ) -> anyhow::Result<()> {
-    tracing::info!("wfectl dispatch: {cmd:?}");
+    info!(logger, "wfectl dispatch", cmd = format!("{:?}", cmd));
     // Validate doesn't need a server connection.
     if let WorkflowsCommand::Validate(args) = cmd {
         return validate::run(args, format).await;
@@ -98,20 +100,20 @@ pub async fn dispatch(
 
     let token = resolve_token(domain)?;
     let server_url = format!("https://builds.{domain}:443");
-    let client = client::build(&server_url, &token).await?;
+    let client = client::build(logger, &server_url, &token).await?;
 
     match cmd {
         WorkflowsCommand::Register(args) => register::run(args, client, format).await,
         WorkflowsCommand::Definitions(args) => definitions::run(args, client, format).await,
-        WorkflowsCommand::Run(args) => run::run(args, client, format).await,
-        WorkflowsCommand::Get(args) => get::run(args, client, format).await,
-        WorkflowsCommand::List(args) => list::run(args, client, format).await,
-        WorkflowsCommand::Cancel(args) => cancel::run(args, client).await,
-        WorkflowsCommand::Suspend(args) => suspend::run(args, client).await,
-        WorkflowsCommand::Resume(args) => resume::run(args, client).await,
+        WorkflowsCommand::Run(args) => run::run(logger, args, client, format).await,
+        WorkflowsCommand::Get(args) => get::run(logger, args, client, format).await,
+        WorkflowsCommand::List(args) => list::run(logger, args, client, format).await,
+        WorkflowsCommand::Cancel(args) => cancel::run(logger, args, client).await,
+        WorkflowsCommand::Suspend(args) => suspend::run(logger, args, client).await,
+        WorkflowsCommand::Resume(args) => resume::run(logger, args, client).await,
         WorkflowsCommand::Publish(args) => publish::run(args, client, format).await,
         WorkflowsCommand::Watch(args) => watch::run(args, client).await,
-        WorkflowsCommand::Logs(args) => logs::run(args, client).await,
+        WorkflowsCommand::Logs(args) => logs::run(logger, args, client).await,
         WorkflowsCommand::SearchLogs(args) => search_logs::run(args, client, format).await,
         WorkflowsCommand::Validate(_) => unreachable!(),
     }

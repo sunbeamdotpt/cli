@@ -1,6 +1,7 @@
 //! Self-update from Gitea CI artifacts.
 
 use crate::error::{Result, ResultExt};
+use crate::{debug, info, trace};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -21,7 +22,7 @@ fn artifact_name() -> String {
     format!("sunbeam-{TARGET}")
 }
 
-/// Resolve the forge URL (Gitea instance).
+/// Resolve the forge url (Gitea instance).
 ///
 /// Derives from SUNBEAM_FORGE_URL env var or the active context's domain.
 fn forge_url() -> String {
@@ -92,8 +93,8 @@ pub fn cmd_version() {
 }
 
 /// Self-update from the latest mainline commit via Gitea CI artifacts.
-#[tracing::instrument]
-pub async fn cmd_update() -> Result<()> {
+#[tracing::instrument(skip(logger))]
+pub async fn cmd_update(logger: &crate::logger::Logger) -> Result<()> {
     let base = forge_url();
     if base.is_empty() {
         bail!(
@@ -102,7 +103,7 @@ pub async fn cmd_update() -> Result<()> {
         );
     }
 
-    tracing::info!("Checking for updates...");
+    info!(logger, "Checking for updates...");
 
     let client = reqwest::Client::new();
 
@@ -110,18 +111,18 @@ pub async fn cmd_update() -> Result<()> {
     let latest_commit = fetch_latest_commit(&client, &base).await?;
     let short_latest = &latest_commit[..std::cmp::min(8, latest_commit.len())];
 
-    tracing::info!("Current: {COMMIT}");
-    tracing::info!("Latest:  {short_latest}");
+    info!(logger, "Current version", commit = COMMIT);
+    info!(logger, "Latest version", short_latest = short_latest);
 
     if latest_commit.starts_with(COMMIT)
         || COMMIT.starts_with(&latest_commit[..std::cmp::min(COMMIT.len(), latest_commit.len())])
     {
-        tracing::info!("Already up to date.");
+        info!(logger, "Already up to date.");
         return Ok(());
     }
 
     // 2. Find the CI artifact for our platform
-    tracing::info!("Downloading update...");
+    info!(logger, "Downloading update...");
     let wanted = artifact_name();
 
     let artifacts = fetch_artifacts(&client, &base).await?;
@@ -148,7 +149,7 @@ pub async fn cmd_update() -> Result<()> {
         .bytes()
         .await?;
 
-    tracing::info!("Downloaded {} bytes", binary_bytes.len());
+    info!(logger, "Downloaded bytes", size = binary_bytes.len());
 
     // 4. Verify SHA256 if checksums artifact exists
     if let Some(checksums) = checksums_artifact {
@@ -166,17 +167,17 @@ pub async fn cmd_update() -> Result<()> {
             .await?;
 
         verify_checksum(&binary_bytes, &wanted, &checksums_text)?;
-        tracing::info!("SHA256 checksum verified.");
+        info!(logger, "SHA256 checksum verified.");
     } else {
-        tracing::warn!("No checksums artifact found; skipping verification.");
+        info!(logger, "No checksums artifact found; skipping verification.");
     }
 
     // 5. Atomic self-replace
-    tracing::info!("Installing update...");
+    info!(logger, "Installing update...");
     let current_exe = std::env::current_exe().ctx("Failed to determine current executable path")?;
     atomic_replace(&current_exe, &binary_bytes)?;
 
-    tracing::info!("Updated sunbeam {COMMIT} -> {short_latest}");
+    info!(logger, "Updated sunbeam", old = COMMIT, new = short_latest);
 
     // Update the cache so background check knows we are current
     let _ = write_cache(&UpdateCache {
@@ -193,8 +194,8 @@ pub async fn cmd_update() -> Result<()> {
 ///
 /// This function never blocks for long and never returns errors — it silently
 /// returns None on any failure.
-#[tracing::instrument]
-pub async fn check_update_background() -> Option<String> {
+#[tracing::instrument(skip(logger))]
+pub async fn check_update_background(logger: &crate::logger::Logger) -> Option<String> {
     // Read cache
     let cache_path = update_cache_path();
     if let Ok(data) = fs::read_to_string(&cache_path)
@@ -420,7 +421,8 @@ mod tests {
         // Clear the env var to ensure we hit the empty-URL path.
         // SAFETY: This test is not run concurrently with other tests that depend on this env var.
         unsafe { std::env::remove_var("SUNBEAM_FORGE_URL") };
-        let result = check_update_background().await;
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+        let result = check_update_background(&logger).await;
         // Either None (empty forge URL or network error) — never panics.
         // The key property: this completes quickly without hanging.
         drop(result);

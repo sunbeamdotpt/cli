@@ -28,6 +28,7 @@ use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
+use crate::{info, trace};
 
 use crate::workflows::data::UpData;
 
@@ -46,12 +47,22 @@ const KEY_EXPIRATION: &str = "8760h";
 /// Mint Headscale pre-auth keys for the subnet router and for the
 /// current user. Idempotent: re-running is a no-op when both sinks
 /// already have a usable key.
-#[derive(Default)]
-pub struct MintVpnPreAuthKeys;
+pub struct MintVpnPreAuthKeys {
+    logger: crate::logger::Logger,
+}
+
+impl Default for MintVpnPreAuthKeys {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for MintVpnPreAuthKeys {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let logger = &self.logger;
         let _data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
@@ -62,11 +73,11 @@ impl StepBody for MintVpnPreAuthKeys {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         if skip_namespaces.contains(&HEADSCALE_NS.to_string()) {
-            tracing::info!("Skipping VPN pre-auth keys (profile skip list)");
+            info!(logger, "Skipping VPN pre-auth keys (profile skip list)");
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!("VPN pre-auth keys...");
+        info!(logger, "VPN pre-auth keys...");
 
         // Both sinks already populated, nothing to do.
         let router_secret_ok = router_secret_has_key()
@@ -75,7 +86,7 @@ impl StepBody for MintVpnPreAuthKeys {
         let user_key_ok = user_config_has_key();
 
         if router_secret_ok && user_key_ok {
-            tracing::info!("VPN pre-auth keys already present - skipping.");
+            info!(logger, "VPN pre-auth keys already present - skipping.");
             return Ok(ExecutionResult::next());
         }
 
@@ -104,9 +115,9 @@ impl StepBody for MintVpnPreAuthKeys {
             write_router_secret(&key).await.map_err(|e| {
                 wfe_core::WfeError::StepExecution(format!("write router secret: {e}"))
             })?;
-            tracing::info!("Minted router pre-auth key -> Secret vpn/subnet-router-authkey");
+            info!(logger, "Minted router pre-auth key -> Secret vpn/subnet-router-authkey");
         } else {
-            tracing::info!("Router Secret already present - skipping mint.");
+            info!(logger, "Router Secret already present - skipping mint.");
         }
 
         // User key -> ~/.sunbeam/config.json.
@@ -119,9 +130,9 @@ impl StepBody for MintVpnPreAuthKeys {
                     "Failed to persist user key to config: {e}"
                 ))
             })?;
-            tracing::info!("Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
+            info!(logger, "Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
         } else {
-            tracing::info!("User vpn-auth-key already present - skipping mint.");
+            info!(logger, "User vpn-auth-key already present - skipping mint.");
         }
 
         Ok(ExecutionResult::next())
@@ -326,7 +337,9 @@ mod tests {
 
     #[test]
     fn mint_vpn_preauth_keys_is_default() {
-        let _ = MintVpnPreAuthKeys;
+        let _ = MintVpnPreAuthKeys {
+            logger: crate::logger::Logger::new(crate::logger::NoopSink),
+        };
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use crate::error::Result;
+use crate::info;
 use crate::vcs::{VcsArgs, resolve_targets, run_git};
 
 pub async fn cmd_push(
+    logger: &crate::logger::Logger,
     args: VcsArgs,
     remote: String,
     set_upstream: Option<String>,
@@ -14,7 +16,7 @@ pub async fn cmd_push(
             git_args.push(branch);
         }
         run_git(&target.path, &git_args)?;
-        tracing::info!("Pushed {} to {}", target.name, remote);
+        info!(logger, "Pushed", repo = target.name, remote = remote);
     }
     Ok(())
 }
@@ -41,7 +43,8 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_push(args, "origin".into(), None)).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_push(&logger, args, "origin".into(), None)).unwrap();
     }
 
     #[test]
@@ -60,6 +63,7 @@ mod tests {
             repo: None,
             all: false,
         };
-        futures::executor::block_on(cmd_push(args, "origin".into(), Some("main".into()))).unwrap();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        futures::executor::block_on(cmd_push(&logger, args, "origin".into(), Some("main".into()))).unwrap();
     }
 }

@@ -6,6 +6,8 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
+use crate::debug;
+
 use wfe_server_protos::wfe::v1::wfe_client::WfeClient as GeneratedWfeClient;
 
 /// Type alias for the fully-instantiated wfe client with auth interceptor.
@@ -45,9 +47,9 @@ impl Interceptor for BearerAuth {
 
 /// Build a tonic channel for the given server URL, configuring TLS automatically
 /// when the URL scheme is `https`.
-#[tracing::instrument]
-pub async fn connect(server: &str) -> Result<Channel> {
-    tracing::debug!("wfectl client connecting to {server}");
+#[tracing::instrument(skip(logger))]
+pub async fn connect(logger: &crate::logger::Logger, server: &str) -> Result<Channel> {
+    debug!(logger, "wfectl client connecting to", server = server);
     let mut endpoint = Endpoint::from_shared(server.to_string())
         .with_context(|| format!("invalid server URL: {server}"))?;
 
@@ -64,10 +66,10 @@ pub async fn connect(server: &str) -> Result<Channel> {
 }
 
 /// Build an authenticated wfe client.
-#[tracing::instrument]
-pub async fn build(server: &str, token: &str) -> Result<AuthClient> {
-    tracing::debug!("wfectl client connecting to {server}");
-    let channel = connect(server).await?;
+#[tracing::instrument(skip(logger))]
+pub async fn build(logger: &crate::logger::Logger, server: &str, token: &str) -> Result<AuthClient> {
+    debug!(logger, "wfectl client connecting to", server = server);
+    let channel = connect(logger, server).await?;
     let auth = BearerAuth::new(token)?;
     Ok(GeneratedWfeClient::with_interceptor(channel, auth))
 }
@@ -102,13 +104,15 @@ mod tests {
 
     #[tokio::test]
     async fn connect_invalid_url_returns_error() {
-        let result = connect("not a valid url").await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = connect(&logger, "not a valid url").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn connect_to_unreachable_address_fails() {
-        let result = connect("http://127.0.0.1:1").await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = connect(&logger, "http://127.0.0.1:1").await;
         assert!(result.is_err());
     }
 }

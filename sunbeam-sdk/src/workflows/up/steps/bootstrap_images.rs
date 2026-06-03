@@ -16,7 +16,7 @@ use kube::api::{Api, DeleteParams, ListParams, PostParams};
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-
+use crate::{debug, error, info, trace};
 use crate::workflows::data::UpData;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -24,12 +24,22 @@ fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
 }
 
 /// Build critical infrastructure images and import into k3s containerd.
-#[derive(Default)]
-pub struct BootstrapCriticalImages;
+pub struct BootstrapCriticalImages {
+    logger: crate::logger::Logger,
+}
+
+impl Default for BootstrapCriticalImages {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for BootstrapCriticalImages {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let logger = &self.logger;
         let profile = ctx
             .workflow
             .data
@@ -38,7 +48,7 @@ impl StepBody for BootstrapCriticalImages {
             .unwrap_or("");
 
         if profile != "lima" {
-            tracing::info!("Profile is not 'lima' — skipping critical image bootstrap (Lima-specific).");
+            info!(logger, "Profile is not 'lima' — skipping critical image bootstrap (Lima-specific).");
             return Ok(ExecutionResult::next());
         }
 
@@ -56,25 +66,25 @@ impl StepBody for BootstrapCriticalImages {
             &data.domain
         };
 
-        tracing::info!("Bootstrapping critical images...");
+        info!(logger, "Bootstrapping critical images...");
 
         // 1. Check if proxy image already exists in k3s
         let proxy_tag = "579e975983";
         let proxy_image = format!("oci.{domain}/studio/proxy:{proxy_tag}");
-        if image_exists_in_k3s(&proxy_image).await? {
-            tracing::info!("Proxy image already present in k3s.");
+        if image_exists_in_k3s(logger, &proxy_image).await? {
+            info!(logger, "Proxy image already present in k3s.");
             return Ok(ExecutionResult::next());
         }
 
         // 2. Build proxy image using host Docker
-        tracing::info!("Building proxy image...");
-        let tar_path = build_proxy_image().await?;
+        info!(logger, "Building proxy image...");
+        let tar_path = build_proxy_image(logger).await?;
 
         // 3. Import into k3s containerd
-        tracing::info!("Importing proxy image into k3s...");
+        info!(logger, "Importing proxy image into k3s...");
         import_image_into_k3s(&tar_path, &proxy_image).await?;
 
-        tracing::info!("Proxy image bootstrapped.");
+        info!(logger, "Proxy image bootstrapped.");
         Ok(ExecutionResult::next())
     }
 }
@@ -230,14 +240,14 @@ async fn delete_ctr_pod(pod_name: &str) {
 }
 
 /// Check if an image reference already exists in k3s containerd.
-async fn image_exists_in_k3s(image_ref: &str) -> wfe_core::Result<bool> {
+async fn image_exists_in_k3s(logger: &crate::logger::Logger, image_ref: &str) -> wfe_core::Result<bool> {
     let node = get_node_name().await?;
     let pod_name = "sunbeam-ctr-check";
 
     // Spawn a temporary pod on the node.
     if let Err(e) = spawn_ctr_pod(&node, pod_name).await {
         // If pod creation fails, assume image doesn't exist.
-        tracing::warn!("Could not spawn ctr pod: {e}");
+        info!(logger, "Could not spawn ctr pod: {}", err = e.to_string());
         return Ok(false);
     }
 
@@ -268,7 +278,7 @@ async fn image_exists_in_k3s(image_ref: &str) -> wfe_core::Result<bool> {
 /// BuildKit endpoint for the Lima VM's host-level BuildKit daemon.
 const BUILDKIT_ENDPOINT: &str = "tcp://127.0.0.1:1234";
 
-async fn build_proxy_image() -> wfe_core::Result<PathBuf> {
+async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<PathBuf> {
     // Discover the workspace root (where sunbeam.workspace.yaml lives) rather
     // than assuming cwd is the workspace root. This step may be invoked from
     // anywhere (e.g. platform/cli when running `cargo run --bin sunbeam`).
@@ -302,10 +312,10 @@ async fn build_proxy_image() -> wfe_core::Result<PathBuf> {
         Ok(output) if output.status.success() => return Ok(tar_path),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("buildctl failed, falling back to docker buildx: {stderr}");
+            info!(logger, "buildctl failed, falling back to docker buildx: {}", err = stderr.to_string());
         }
         Err(e) => {
-            tracing::warn!("buildctl not available, falling back to docker buildx: {e}");
+            info!(logger, "buildctl not available, falling back to docker buildx: {}", err = e.to_string());
         }
     }
 

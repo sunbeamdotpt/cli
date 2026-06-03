@@ -1,15 +1,15 @@
 //! Initialize workspace repos from a manifest.
 
-use std::path::Path;
-
 use crate::discovery::WORKSPACE_FILE;
 use crate::error::{Result, SunbeamError};
+use crate::info;
+use crate::error;
 use crate::operations::config::WorkspaceConfig;
 use crate::vcs::run_git;
 
 /// Initialize a workspace by cloning the root repo (if a URL is given) and then
 /// cloning every sub-repo that has an `upstream` in the workspace manifest.
-pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
+pub async fn cmd_init(logger: &crate::logger::Logger, url: Option<String>, name: Option<String>) -> Result<()> {
     let (ws_root, ws) = if let Some(url) = url {
         let repo_name = name
             .or_else(|| extract_name_from_url(&url))
@@ -27,12 +27,12 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
             )));
         }
 
-        tracing::info!("Cloning workspace root into {repo_name}...");
+        info!(logger, "Cloning workspace root", repo_name = repo_name);
         run_git(&cwd, &["clone", &url, &repo_name])?;
 
         let manifest_path = dest.join(WORKSPACE_FILE);
         if !manifest_path.exists() {
-            tracing::info!("No {WORKSPACE_FILE} found in cloned repo; done.");
+            info!(logger, "No workspace file found in cloned repo; done.", workspace_file = WORKSPACE_FILE);
             return Ok(());
         }
 
@@ -50,9 +50,10 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         (cwd, ws)
     };
 
-    tracing::info!(
-        "Workspace '{}' found. Initializing repos...",
-        ws.workspace.name
+    info!(
+        logger,
+        "Workspace found. Initializing repos...",
+        workspace = ws.workspace.name.as_str()
     );
 
     let mut cloned = 0usize;
@@ -62,21 +63,24 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         let repo_path = ws_root.join(&entry.repo.path);
 
         if repo_path.exists() {
-            tracing::info!("  [{}] already exists, skipping", entry.name);
+            info!(logger, "already exists, skipping", entry = entry.name);
             skipped += 1;
             continue;
         }
 
         let Some(upstream) = &entry.repo.upstream else {
-            tracing::info!("  [{}] no upstream, skipping", entry.name);
+            info!(logger, "no upstream, skipping", entry = entry.name);
             skipped += 1;
             continue;
         };
 
         let git_url = upstream_to_git_url(upstream);
-        tracing::info!(
-            "  [{}] cloning {} -> {}",
-            entry.name, git_url, entry.repo.path
+        info!(
+            logger,
+            "cloning repo",
+            entry = entry.name,
+            git_url = git_url,
+            path = entry.repo.path
         );
 
         // Ensure parent directories exist so nested paths work.
@@ -87,13 +91,13 @@ pub async fn cmd_init(url: Option<String>, name: Option<String>) -> Result<()> {
         match run_git(&ws_root, &["clone", &git_url, &entry.repo.path]) {
             Ok(_) => cloned += 1,
             Err(e) => {
-                tracing::warn!("  [{}] clone failed: {e}", entry.name);
+                error!(logger, "clone failed", entry = entry.name, error = format!("{e}"));
                 skipped += 1;
             }
         }
     }
 
-    tracing::info!("Done: {cloned} cloned, {skipped} skipped.");
+    info!(logger, "Done", cloned = cloned, skipped = skipped);
     Ok(())
 }
 
@@ -222,8 +226,10 @@ repos:
         run_git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]).unwrap();
 
         let _env = TestEnv::new(root.path());
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
 
         futures::executor::block_on(cmd_init(
+            &logger,
             Some(format!("file://{}", bare.display())),
             Some("ws-root".into()),
         ))
@@ -263,8 +269,9 @@ repos:
         .unwrap();
 
         let _env = TestEnv::new(root.path());
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
 
-        futures::executor::block_on(cmd_init(None, None)).unwrap();
+        futures::executor::block_on(cmd_init(&logger, None, None)).unwrap();
 
         assert!(root.path().join("forks/svc/.git").exists());
     }
@@ -273,7 +280,8 @@ repos:
     fn test_cmd_init_no_manifest_no_url() {
         let tmp = TempDir::new().unwrap();
         let _env = TestEnv::new(tmp.path());
-        let err = futures::executor::block_on(cmd_init(None, None)).unwrap_err();
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let err = futures::executor::block_on(cmd_init(&logger, None, None)).unwrap_err();
         assert!(format!("{err}").contains("no sunbeam.workspace.yaml"));
     }
 
@@ -288,7 +296,9 @@ repos:
         std::fs::create_dir(root.path().join("ws")).unwrap();
 
         let _env = TestEnv::new(root.path());
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let err = futures::executor::block_on(cmd_init(
+            &logger,
             Some(format!("file://{}", bare.display())),
             None,
         ))
@@ -317,9 +327,10 @@ repos:
 
         // Do NOT create a bare repo for badsvc — clone will fail.
         let _env = TestEnv::new(root.path());
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
 
         // Should succeed overall even though the sub-repo clone fails.
-        futures::executor::block_on(cmd_init(None, None)).unwrap();
+        futures::executor::block_on(cmd_init(&logger, None, None)).unwrap();
 
         assert!(!root.path().join("forks/badsvc").exists());
     }

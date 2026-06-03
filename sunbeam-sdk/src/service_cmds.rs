@@ -5,22 +5,22 @@
 
 use crate::cli::{SecretsAction, ServiceAction};
 use crate::error::{Result, SunbeamError};
-use crate::logger::{Logger, TracingSink};
-use crate::{debug, info};
+use crate::logger::Logger;
+use crate::{debug, error, info, trace};
 use tracing::Instrument;
 use crate::registry::{self, ServiceRegistry};
 
 /// Discover the service registry from the cluster.
-async fn get_registry() -> Result<ServiceRegistry> {
+async fn get_registry(logger: &crate::logger::Logger) -> Result<ServiceRegistry> {
     let client = crate::kube::get_client().await?;
-    registry::discover(&client)
+    registry::discover(logger, &client)
         .await
         .map_err(|e| SunbeamError::Other(format!("service discovery failed: {e}")))
 }
 
 /// Resolve a service by name, returning (namespace, first deployment name).
-async fn resolve_service(name: &str) -> Result<(String, String)> {
-    let reg = get_registry().await?;
+async fn resolve_service(logger: &crate::logger::Logger, name: &str) -> Result<(String, String)> {
+    let reg = get_registry(logger).await?;
     let svc = reg
         .get(name)
         .ok_or_else(|| SunbeamError::Other(format!("Unknown service: '{name}'")))?;
@@ -96,6 +96,7 @@ fn merge_overrides(
 ///
 /// Returns (profile_name_and_obj, merged_overrides, skip_namespaces).
 async fn build_profile_context(
+    logger: &Logger,
     profile_flag: Option<String>,
     set: &[String],
     disable: &[String],
@@ -121,12 +122,12 @@ async fn build_profile_context(
                         return Ok((profile, overrides, skip_namespaces));
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to resolve profile overrides: {e}");
+                        info!(logger, "Failed to resolve profile overrides", error = e.to_string());
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to discover manifests for profile resolution: {e}");
+                info!(logger, "Failed to discover manifests for profile resolution", error = e.to_string());
             }
         }
     }
@@ -138,11 +139,11 @@ async fn build_profile_context(
 pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> Result<()> {
     debug!(logger, "service dispatch", action = format!("{:?}", action));
     match action {
-        ServiceAction::Status { target } => crate::services::cmd_status(target.as_deref()).await,
-        ServiceAction::Logs { target, follow } => crate::services::cmd_logs(&target, follow).await,
-        ServiceAction::Get { target, output } => crate::services::cmd_get(&target, &output).await,
-        ServiceAction::Restart { target } => crate::services::cmd_restart(target.as_deref()).await,
-        ServiceAction::Check { target } => crate::checks::cmd_check(target.as_deref()).await,
+        ServiceAction::Status { target } => crate::services::cmd_status(logger, target.as_deref()).await,
+        ServiceAction::Logs { target, follow } => crate::services::cmd_logs(logger, &target, follow).await,
+        ServiceAction::Get { target, output } => crate::services::cmd_get(logger, &target, &output).await,
+        ServiceAction::Restart { target } => crate::services::cmd_restart(logger, target.as_deref()).await,
+        ServiceAction::Check { target } => crate::checks::cmd_check(logger, target.as_deref()).await,
         ServiceAction::Deploy { target, all, profile } => match target {
             Some(t) if !all => {
                 let span = tracing::info_span!("deploy", target = %t);
@@ -150,7 +151,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
             }
             _ => {
                 let (maybe_profile, overrides, skip_namespaces) =
-                    build_profile_context(profile, &[], &[], &[]).await?;
+                    build_profile_context(logger, profile, &[], &[], &[]).await?;
 
                 if !skip_namespaces.is_empty() && maybe_profile.is_none() {
                     // No profile loaded but we have skips — impossible path, but be defensive
@@ -165,7 +166,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
                 Ok(())
             }
         },
-        ServiceAction::List { format } => cmd_list(format).await,
+        ServiceAction::List { format } => cmd_list(logger, format).await,
         ServiceAction::Apply {
             namespace,
             apply_all,
@@ -177,7 +178,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
             ..
         } => {
             let (maybe_profile, overrides, skip_namespaces) =
-                build_profile_context(profile, &set, &disable, &enable).await?;
+                build_profile_context(logger, profile, &set, &disable, &enable).await?;
 
             let ns = namespace.unwrap_or_default();
 
@@ -225,25 +226,25 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
             Ok(())
         }
         ServiceAction::Verify => {
-            tracing::info!("Verifying VSO -> OpenBao integration...");
-            run_workflow("verify", 1, 300, |i| {
+            info!(logger, "Verifying VSO -> OpenBao integration...");
+            run_workflow(logger, "verify", 1, 300, |i| {
                 crate::workflows::verify::print_summary(i)
             })
             .await
         }
-        ServiceAction::Secrets { service, action } => cmd_secrets(&service, action).await,
-        ServiceAction::Shell { service } => cmd_shell(&service).await,
-        ServiceAction::Describe { service } => cmd_describe(&service).await,
+        ServiceAction::Secrets { service, action } => cmd_secrets(logger, &service, action).await,
+        ServiceAction::Shell { service } => cmd_shell(logger, &service).await,
+        ServiceAction::Describe { service } => cmd_describe(logger, &service).await,
         ServiceAction::Exec {
             service,
             container,
             command,
-        } => cmd_exec(&service, container.as_deref(), &command).await,
-        ServiceAction::PortForward { service, ports } => cmd_port_forward(&service, &ports).await,
-        ServiceAction::Scale { service, replicas } => cmd_scale(&service, replicas).await,
-        ServiceAction::Top { service } => cmd_top(&service).await,
-        ServiceAction::Edit { service } => cmd_edit(&service).await,
-        ServiceAction::DeleteJob { target } => cmd_delete_job(&target).await,
+        } => cmd_exec(logger, &service, container.as_deref(), &command).await,
+        ServiceAction::PortForward { service, ports } => cmd_port_forward(logger, &service, &ports).await,
+        ServiceAction::Scale { service, replicas } => cmd_scale(logger, &service, replicas).await,
+        ServiceAction::Top { service } => cmd_top(logger, &service).await,
+        ServiceAction::Edit { service } => cmd_edit(logger, &service).await,
+        ServiceAction::DeleteJob { target } => cmd_delete_job(logger, &target).await,
     }
 }
 
@@ -253,7 +254,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
 /// be updated, so re-applying a changed Job manifest is a no-op until the old
 /// Job is deleted. This wraps that delete so operators don't have to drop to
 /// raw kubectl + manual SOCKS proxy plumbing.
-async fn cmd_delete_job(target: &str) -> Result<()> {
+async fn cmd_delete_job(logger: &Logger, target: &str) -> Result<()> {
     use k8s_openapi::api::batch::v1::Job;
     use kube::api::{Api, DeleteParams};
 
@@ -265,7 +266,7 @@ async fn cmd_delete_job(target: &str) -> Result<()> {
     let jobs: Api<Job> = Api::namespaced(client, ns);
     match jobs.delete(name, &DeleteParams::default()).await {
         Ok(_) => {
-            tracing::info!("deleted job {ns}/{name}");
+            info!(logger, "deleted job", job = format!("{ns}/{name}"));
             Ok(())
         }
         Err(kube::Error::Api(e)) if e.code == 404 => {
@@ -280,6 +281,7 @@ async fn cmd_delete_job(target: &str) -> Result<()> {
 
 /// Helper: run a named workflow via the in-process engine.
 async fn run_workflow(
+    logger: &Logger,
     name: &str,
     version: u32,
     timeout_secs: u64,
@@ -299,7 +301,7 @@ async fn run_workflow(
     // Register the workflow definition
     match name {
         "seed" => {
-            tracing::warn!("The seed workflow has been merged into `up`. Use `sunbeam up` instead.");
+            info!(logger, "The seed workflow has been merged into up. Use sunbeam up instead.");
         }
         "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
@@ -332,15 +334,15 @@ async fn run_workflow(
 }
 
 /// List available services from the infrastructure directory.
-#[tracing::instrument(skip(format))]
-async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
-    tracing::info!("Discovering services...");
+#[tracing::instrument(skip(logger, format))]
+async fn cmd_list(logger: &Logger, format: crate::output::OutputFormat) -> Result<()> {
+    info!(logger, "Discovering services...");
     let infra_dir = crate::config::get_infra_dir();
     let services = crate::manifests::discover_services(&infra_dir)?;
-    tracing::info!(count = services.len(), "Found services");
+    info!(logger, "Found services", count = services.len());
 
     if services.is_empty() {
-        tracing::warn!("No services found in the infrastructure directory.");
+        info!(logger, "No services found in the infrastructure directory");
         return Ok(());
     }
 
@@ -364,8 +366,8 @@ async fn cmd_deploy(
     profile_flag: Option<String>,
 ) -> Result<()> {
     let (maybe_profile, overrides, skip_namespaces) =
-        build_profile_context(profile_flag, &[], &[], &[]).await?;
-    let reg = get_registry().await?;
+        build_profile_context(logger, profile_flag, &[], &[], &[]).await?;
+    let reg = get_registry(logger).await?;
     let resolved = reg.resolve(target);
 
     if resolved.is_empty() {
@@ -429,8 +431,8 @@ async fn cmd_deploy(
 }
 
 /// View or get secrets for a service from OpenBao.
-async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()> {
-    let reg = get_registry().await?;
+async fn cmd_secrets(logger: &Logger, service: &str, action: Option<SecretsAction>) -> Result<()> {
+    let reg = get_registry(logger).await?;
     let svc = reg
         .get(service)
         .ok_or_else(|| SunbeamError::Other(format!("Unknown service: '{service}'")))?;
@@ -456,7 +458,7 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
     match action {
         None => match bao.kv_get("secret", kv_path).await? {
             Some(data) => {
-                tracing::info!("Secrets for {service} (secret/{kv_path}):");
+                info!(logger, "Secrets for service", service = service, path = format!("secret/{kv_path}"));
                 let mut keys: Vec<&String> = data.keys().collect();
                 keys.sort();
                 for key in keys {
@@ -470,13 +472,13 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
                 }
             }
             None => {
-                tracing::warn!("No secrets found at secret/{kv_path}");
+                info!(logger, "No secrets found", path = format!("secret/{kv_path}"));
             }
         },
         Some(SecretsAction::Get { key }) => {
             let value = bao.kv_get_field("secret", kv_path, &key).await?;
             if value.is_empty() {
-                tracing::warn!("Field '{key}' not found in secret/{kv_path}");
+                info!(logger, "Field not found", key = key, path = format!("secret/{kv_path}"));
             } else {
                 println!("{value}");
             }
@@ -491,11 +493,11 @@ async fn cmd_secrets(service: &str, action: Option<SecretsAction>) -> Result<()>
 /// Pod lookup uses `sunbeam.pt/pod-selector` annotation when present, otherwise
 /// falls back to `app=<first deployment>`. The command run inside the pod comes
 /// from `sunbeam.pt/shell-command` annotation, defaulting to `/bin/sh`.
-async fn cmd_shell(service: &str) -> Result<()> {
+async fn cmd_shell(logger: &Logger, service: &str) -> Result<()> {
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::Api;
 
-    let reg = get_registry().await?;
+    let reg = get_registry(logger).await?;
     let svc = reg
         .get(service)
         .ok_or_else(|| SunbeamError::Other(format!("Unknown service: '{service}'")))?;
@@ -523,19 +525,19 @@ async fn cmd_shell(service: &str) -> Result<()> {
         bail!("Service '{service}' has an empty shell-command annotation");
     }
 
-    tracing::info!("Connecting to {service} ({pod})...");
+    info!(logger, "Connecting to service", service = service, pod = pod);
     let client = crate::kube::get_client().await?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &svc.namespace);
     let code = crate::exec::pod_exec_interactive(&pods, &pod, None, &argv).await?;
     if code != 0 {
-        tracing::warn!("shell exited with code {code}");
+        info!(logger, "shell exited with code", code = code);
     }
     Ok(())
 }
 
 /// Describe a service's deployment.
-async fn cmd_describe(service: &str) -> Result<()> {
-    let (ns, deploy) = resolve_service(service).await?;
+async fn cmd_describe(logger: &Logger, service: &str) -> Result<()> {
+    let (ns, deploy) = resolve_service(logger, service).await?;
     let client = crate::kube::get_client().await?;
     let text = crate::describe::describe_deployment(client.clone(), &ns, &deploy).await?;
     println!("{text}");
@@ -543,11 +545,11 @@ async fn cmd_describe(service: &str) -> Result<()> {
 }
 
 /// Exec into a service pod with an optional command.
-async fn cmd_exec(service: &str, container: Option<&str>, command: &[String]) -> Result<()> {
+async fn cmd_exec(logger: &Logger, service: &str, container: Option<&str>, command: &[String]) -> Result<()> {
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::Api;
 
-    let (ns, deploy) = resolve_service(service).await?;
+    let (ns, deploy) = resolve_service(logger, service).await?;
     let pod = crate::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
         .await
         .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
@@ -562,18 +564,18 @@ async fn cmd_exec(service: &str, container: Option<&str>, command: &[String]) ->
     let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
     let code = crate::exec::pod_exec_interactive(&pods, &pod, container, &argv).await?;
     if code != 0 {
-        tracing::warn!("exec exited with code {code}");
+        info!(logger, "exec exited with code", code = code);
     }
     Ok(())
 }
 
 /// Port-forward to a service pod. Parses `"local:remote"` or `"port"` mappings
 /// and serves each on 127.0.0.1 until Ctrl-C.
-async fn cmd_port_forward(service: &str, ports: &[String]) -> Result<()> {
+async fn cmd_port_forward(logger: &Logger, service: &str, ports: &[String]) -> Result<()> {
     if ports.is_empty() {
         bail!("At least one port mapping required (e.g. '8080:80' or '8080')");
     }
-    let (ns, deploy) = resolve_service(service).await?;
+    let (ns, deploy) = resolve_service(logger, service).await?;
     let pod = crate::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
         .await
         .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
@@ -593,17 +595,17 @@ async fn cmd_port_forward(service: &str, ports: &[String]) -> Result<()> {
         mappings.push((local, remote));
     }
 
-    tracing::info!("Port-forwarding to {service} ({pod})...");
-    crate::port_forward::serve_port_forward(ns, pod, mappings).await
+    info!(logger, "Port-forwarding to service", service = service, pod = pod);
+    crate::port_forward::serve_port_forward(logger, ns, pod, mappings).await
 }
 
 /// Scale a service deployment.
-async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
+async fn cmd_scale(logger: &Logger, service: &str, replicas: u32) -> Result<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use kube::api::{Api, Patch, PatchParams};
 
-    let (ns, deploy) = resolve_service(service).await?;
-    tracing::info!("Scaling {service} to {replicas} replica(s)...");
+    let (ns, deploy) = resolve_service(logger, service).await?;
+    info!(logger, "Scaling service to replicas", service = service, replicas = replicas);
 
     let client = crate::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
@@ -612,16 +614,16 @@ async fn cmd_scale(service: &str, replicas: u32) -> Result<()> {
         .await
         .map_err(|e| SunbeamError::Other(format!("scale patch failed: {e}")))?;
 
-    tracing::info!("{service} scaled to {replicas}.");
+    info!(logger, "scaled to replicas", service = service, replicas = replicas);
     Ok(())
 }
 
 /// Show resource usage for a service's pods via metrics.k8s.io.
-async fn cmd_top(service: &str) -> Result<()> {
+async fn cmd_top(logger: &Logger, service: &str) -> Result<()> {
     use comfy_table::{Cell, Table};
     use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, ListParams};
 
-    let (ns, deploy) = resolve_service(service).await?;
+    let (ns, deploy) = resolve_service(logger, service).await?;
     let client = crate::kube::get_client().await?;
 
     let gvk = GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", "PodMetrics");
@@ -721,11 +723,11 @@ fn format_bytes(b: u64) -> String {
 }
 
 /// Edit a service's deployment in-cluster: fetch → $EDITOR → replace.
-async fn cmd_edit(service: &str) -> Result<()> {
+async fn cmd_edit(logger: &Logger, service: &str) -> Result<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use kube::api::{Api, PostParams};
 
-    let (ns, deploy) = resolve_service(service).await?;
+    let (ns, deploy) = resolve_service(logger, service).await?;
     let client = crate::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
 
@@ -765,7 +767,7 @@ async fn cmd_edit(service: &str) -> Result<()> {
     let after = std::fs::read_to_string(tmp.path())
         .map_err(|e| SunbeamError::Other(format!("read tempfile failed: {e}")))?;
     if after == before {
-        tracing::info!("No changes.");
+        info!(logger, "No changes.");
         return Ok(());
     }
 
@@ -776,7 +778,7 @@ async fn cmd_edit(service: &str) -> Result<()> {
         .await
         .map_err(|e| SunbeamError::Other(format!("failed to replace deployment: {e}")))?;
 
-    tracing::info!("{service} updated.");
+    info!(logger, "updated", service = service);
     Ok(())
 }
 

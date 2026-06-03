@@ -17,6 +17,7 @@ use crate::project::config::ProjectConfig;
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{Graph, sort};
 use crate::workflows::StepContext;
+use crate::{debug, error, info, trace};
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -30,6 +31,7 @@ pub struct BuildProjectImages;
 #[async_trait::async_trait]
 impl StepBody for BuildProjectImages {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let logger = crate::logger::Logger::new(crate::logger::TracingSink);
         let skip_namespaces: Vec<String> = ctx
             .workflow
             .data
@@ -37,7 +39,7 @@ impl StepBody for BuildProjectImages {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         if skip_namespaces.contains(&"oci".to_string()) {
-            tracing::info!("Skipping project image builds (profile skip list)");
+            info!(logger, "Skipping project image builds (profile skip list)");
             return Ok(ExecutionResult::next());
         }
 
@@ -56,7 +58,7 @@ impl StepBody for BuildProjectImages {
             .unwrap_or(&step_ctx.domain)
             .to_string();
 
-        tracing::info!("Building project images...");
+        info!(logger, "Building project images...");
 
         // 1. Discover workspace root from current directory.
         let cwd = std::env::current_dir()
@@ -97,7 +99,7 @@ impl StepBody for BuildProjectImages {
         }
 
         if entries.is_empty() {
-            tracing::info!("No projects with package targets — skipping image build.");
+            info!(logger, "No projects with package targets — skipping image build.");
             return Ok(ExecutionResult::next());
         }
 
@@ -137,14 +139,14 @@ impl StepBody for BuildProjectImages {
                 let opts = opts.clone();
                 let project_name = project_name.clone();
 
-                tracing::info!("Building {project_name}...");
-                match crate::project::runner::run(&cfg, &project_root, "package", &opts).await {
-                    Ok(RunOutcome::Ran) => tracing::info!("Built {project_name}"),
+                info!(logger, "Building project", project = project_name);
+                match crate::project::runner::run(&logger, &cfg, &project_root, "package", &opts).await {
+                    Ok(RunOutcome::Ran) => info!(logger, "Built project", project = project_name),
                     Ok(RunOutcome::Skipped) => {
-                        tracing::info!("{project_name}: skipped (no package target)");
+                        info!(logger, "skipped (no package target)", project = project_name);
                     }
                     Err(e) => {
-                        tracing::warn!("Image build failed for {project_name}: {e}");
+                        info!(logger, "Image build failed", project = project_name, error = e.to_string());
                         // With strict failures enabled, we propagate the error so
                         // the workflow terminates. Remove this return if you prefer
                         // best-effort builds.
@@ -156,7 +158,7 @@ impl StepBody for BuildProjectImages {
             }
         }
 
-        tracing::info!("Project images build pass complete.");
+        info!(logger, "Project images build pass complete.");
         Ok(ExecutionResult::next())
     }
 }

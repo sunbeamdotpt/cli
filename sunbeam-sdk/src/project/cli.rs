@@ -12,41 +12,41 @@ use crate::config::get_infra_dir;
 use crate::discovery::{find_project_root, find_workspace_root, WORKSPACE_FILE};
 use crate::error::{Result, SunbeamError};
 use crate::operations::config::WorkspaceConfig;
+use crate::{debug, error, info, trace};
 
 use crate::project::config::{is_standard_verb, ProjectConfig, STANDARD_VERBS};
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{sort, Graph};
 
 /// Dispatch.
-#[tracing::instrument]
-pub async fn dispatch(action: ProjectAction) -> Result<()> {
-    tracing::debug!("project dispatch: {action:?}");
-    tracing::info!("project dispatch: {action:?}");
+#[tracing::instrument(skip(logger))]
+pub async fn dispatch(logger: &crate::logger::Logger, action: ProjectAction) -> Result<()> {
+    debug!(logger, "project dispatch", action = format!("{:?}", action));
+    info!(logger, "project dispatch", action = format!("{:?}", action));
     match action {
-        ProjectAction::Build(args) => run_verb("build", args).await,
-        ProjectAction::Test(args) => run_verb("test", args).await,
-        ProjectAction::Lint(args) => run_verb("lint", args).await,
-        ProjectAction::Fmt(args) => run_verb("fmt", args).await,
-        ProjectAction::Package(args) => run_verb("package", args).await,
-        ProjectAction::Deploy(args) => run_verb("deploy", args).await,
-        ProjectAction::Dev(args) => run_verb("dev", args).await,
-        ProjectAction::Clean(args) => run_verb("clean", args).await,
-        ProjectAction::Doc(args) => run_verb("doc", args).await,
+        ProjectAction::Build(args) => run_verb(logger, "build", args).await,
+        ProjectAction::Test(args) => run_verb(logger, "test", args).await,
+        ProjectAction::Lint(args) => run_verb(logger, "lint", args).await,
+        ProjectAction::Fmt(args) => run_verb(logger, "fmt", args).await,
+        ProjectAction::Package(args) => run_verb(logger, "package", args).await,
+        ProjectAction::Deploy(args) => run_verb(logger, "deploy", args).await,
+        ProjectAction::Dev(args) => run_verb(logger, "dev", args).await,
+        ProjectAction::Clean(args) => run_verb(logger, "clean", args).await,
+        ProjectAction::Doc(args) => run_verb(logger, "doc", args).await,
         ProjectAction::Info => cmd_info().await,
-        ProjectAction::Order { verb } => cmd_order(&verb).await,
-        ProjectAction::Run { verb, args } => run_verb(&verb, args).await,
+        ProjectAction::Order { verb } => cmd_order(logger, &verb).await,
+        ProjectAction::Run { verb, args } => run_verb(logger, &verb, args).await,
         ProjectAction::Graph { all } => cmd_graph(all).await,
-        ProjectAction::Check { all } => cmd_check(all).await,
+        ProjectAction::Check { all } => cmd_check(logger, all).await,
         ProjectAction::PreseedImage { image_ref, timeout } => {
-            cmd_preseed_image(&image_ref, timeout).await
+            cmd_preseed_image(logger, &image_ref, timeout).await
         }
     }
 }
 
-async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
-    let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+async fn cmd_preseed_image(logger: &crate::logger::Logger, image_ref: &str, timeout: u64) -> Result<()> {
     // 1. Apply the puller Job and wait for the node pull to complete.
-    crate::proxy::cmd_preseed_image(&logger, image_ref, timeout).await?;
+    crate::proxy::cmd_preseed_image(logger, image_ref, timeout).await?;
 
     // 2. Extract the tag from the image ref and bump the kustomization.
     let tag = image_ref.rsplit(':').next().unwrap_or(image_ref);
@@ -70,14 +70,12 @@ async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
         }
     })?;
 
-    tracing::info!(
-        "Bumped infra/sbbb/base/ingress/kustomization.yaml → newTag: {tag}"
-    );
-    tracing::info!("Run `sunbeam service apply ingress` to roll out the new proxy image.");
+    info!(logger, "Bumped kustomization newTag", tag = tag);
+    info!(logger, "Run sunbeam service apply ingress to roll out the new proxy image");
     Ok(())
 }
 
-async fn run_verb(verb: &str, args: ProjectRunArgs) -> Result<()> {
+async fn run_verb(logger: &crate::logger::Logger, verb: &str, args: ProjectRunArgs) -> Result<()> {
     let opts = RunOptions {
         extra_env: BTreeMap::new(),
         verbose: args.echo,
@@ -85,30 +83,31 @@ async fn run_verb(verb: &str, args: ProjectRunArgs) -> Result<()> {
     };
 
     if args.all || !args.projects.is_empty() {
-        run_workspace(verb, &args, opts).await
+        run_workspace(logger, verb, &args, opts).await
     } else {
-        run_single(verb, opts).await
+        run_single(logger, verb, opts).await
     }
 }
 
-async fn run_single(verb: &str, opts: RunOptions) -> Result<()> {
+async fn run_single(logger: &crate::logger::Logger, verb: &str, opts: RunOptions) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let project_root = find_project_root(&cwd)?;
     let cfg = ProjectConfig::load(&project_root.join("sunbeam.yaml"))?;
-    let outcome = crate::project::runner::run(&cfg, &project_root, verb, &opts).await?;
+    let outcome = crate::project::runner::run(logger, &cfg, &project_root, verb, &opts).await?;
     if matches!(outcome, RunOutcome::Skipped) {
-        tracing::warn!("  skipped (no {verb} target)");
+        info!(logger, "skipped (no target)", verb = verb);
     }
     Ok(())
 }
 
-async fn run_workspace(verb: &str, args: &ProjectRunArgs, opts: RunOptions) -> Result<()> {
+async fn run_workspace(logger: &crate::logger::Logger, verb: &str, args: &ProjectRunArgs, opts: RunOptions) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    run_workspace_at(&cwd, verb, args, opts).await
+    run_workspace_at(logger, &cwd, verb, args, opts).await
 }
 
 /// Inner `run_workspace` that takes an explicit cwd for testability.
 async fn run_workspace_at(
+    logger: &crate::logger::Logger,
     cwd: &std::path::Path,
     verb: &str,
     args: &ProjectRunArgs,
@@ -199,9 +198,10 @@ async fn run_workspace_at(
             };
             let project_name = project_name.clone();
             let sem = semaphore.clone();
+            let logger = logger.clone();
             set.spawn(async move {
                 let outcome = throttled(sem, async move {
-                    crate::project::runner::run(&cfg, &project_root, &verb_s, &task_opts).await
+                    crate::project::runner::run(&logger, &cfg, &project_root, &verb_s, &task_opts).await
                 })
                 .await?;
                 Ok((project_name, outcome))
@@ -212,7 +212,7 @@ async fn run_workspace_at(
             let (name, outcome) = res
                 .map_err(|e| SunbeamError::Other(format!("task join error: {e}")))??;
             if matches!(outcome, RunOutcome::Skipped) {
-                tracing::warn!("  {name}: skipped (no {verb} target)");
+                info!(logger, "skipped (no target)", name = name, verb = verb);
             }
         }
     }
@@ -273,13 +273,13 @@ async fn cmd_info_at(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_order(verb: &str) -> Result<()> {
+async fn cmd_order(logger: &crate::logger::Logger, verb: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    cmd_order_at(&cwd, verb).await
+    cmd_order_at(logger, &cwd, verb).await
 }
 
 /// Inner `cmd_order` that takes an explicit cwd for testability.
-async fn cmd_order_at(cwd: &std::path::Path, verb: &str) -> Result<()> {
+async fn cmd_order_at(logger: &crate::logger::Logger, cwd: &std::path::Path, verb: &str) -> Result<()> {
     let ws_root = find_workspace_root(cwd)?;
     let ws = WorkspaceConfig::load(&ws_root.join(WORKSPACE_FILE))?;
 
@@ -317,7 +317,7 @@ async fn cmd_order_at(cwd: &std::path::Path, verb: &str) -> Result<()> {
                 }
             })
             .collect();
-        tracing::info!("group {i}: {}", tokens.join("  "));
+        info!(logger, "group", index = i, projects = tokens.join("  "));
     }
 
     Ok(())
@@ -436,14 +436,14 @@ fn render_children(
     path.pop();
 }
 
-async fn cmd_check(all: bool) -> Result<()> {
+async fn cmd_check(logger: &crate::logger::Logger, all: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    cmd_check_at(&cwd, all).await
+    cmd_check_at(logger, &cwd, all).await
 }
 
 /// Inner `cmd_check` that takes an explicit cwd. Exposed so tests can target
 /// a tempdir without racing on the process-global cwd.
-async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
+async fn cmd_check_at(logger: &crate::logger::Logger, cwd: &std::path::Path, all: bool) -> Result<()> {
     let ws_root = find_workspace_root(cwd)?;
     let ws = WorkspaceConfig::load(&ws_root.join(WORKSPACE_FILE))?;
     let owned = load_owned_projects(&ws, &ws_root);
@@ -471,15 +471,15 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
 
     let mut failed = false;
     for (name, cfg) in &targets {
-        tracing::info!("check {name}");
+        info!(logger, "check", name = name);
 
-        tracing::info!("✓ schema {} parsed", cfg.schema);
+        info!(logger, "schema parsed", schema = cfg.schema);
 
         // Project name uniqueness in workspace.
         if owned_names.contains(name) {
-            tracing::info!("✓ name registered in workspace manifest");
+            info!(logger, "name registered in workspace manifest");
         } else {
-            tracing::warn!("✗ project name {name:?} not in workspace.owned");
+            info!(logger, "project name not in workspace.owned", name = name);
             failed = true;
         }
 
@@ -491,9 +491,9 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             }
         }
         if bad_proj_deps.is_empty() {
-            tracing::info!("✓ deps.projects ({} entries) all resolve", cfg.deps.projects.len());
+            info!(logger, "deps.projects all resolve", count = cfg.deps.projects.len());
         } else {
-            tracing::warn!("✗ deps.projects: unknown {bad_proj_deps:?}");
+            info!(logger, "deps.projects unknown", deps = format!("{bad_proj_deps:?}"));
             failed = true;
         }
 
@@ -505,9 +505,9 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             }
         }
         if bad_svc_deps.is_empty() {
-            tracing::info!("✓ deps.services ({} entries) all resolve", cfg.deps.services.len());
+            info!(logger, "deps.services all resolve", count = cfg.deps.services.len());
         } else {
-            tracing::warn!("✗ deps.services: unknown {bad_svc_deps:?}");
+            info!(logger, "deps.services unknown", deps = format!("{bad_svc_deps:?}"));
             failed = true;
         }
 
@@ -518,15 +518,18 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
             .filter(|v| !is_standard_verb(v))
             .collect();
         if custom.is_empty() {
-            tracing::info!(
-                "✓ targets: all standard ({} of {} defined)",
-                cfg.targets.len(),
-                STANDARD_VERBS.len()
+            info!(
+                logger,
+                "targets all standard",
+                count = cfg.targets.len(),
+                total = STANDARD_VERBS.len()
             );
         } else {
-            tracing::info!(
-                "✓ targets: {} standard + custom: {custom:?}",
-                cfg.targets.len() - custom.len()
+            info!(
+                logger,
+                "targets standard plus custom",
+                standard = cfg.targets.len() - custom.len(),
+                custom = format!("{custom:?}")
             );
         }
     }
@@ -534,11 +537,11 @@ async fn cmd_check_at(cwd: &std::path::Path, all: bool) -> Result<()> {
     // Cycle check at the end (workspace-wide, reported once).
     match &cycle_err {
         Some(e) => {
-            tracing::warn!("✗ workspace dep graph has cycle: {e}");
+            info!(logger, "workspace dep graph has cycle", error = e);
             failed = true;
         }
         None => {
-            tracing::info!("✓ workspace dep graph is acyclic");
+            info!(logger, "workspace dep graph is acyclic");
         }
     }
 
@@ -871,7 +874,8 @@ targets:
         )
         .expect("write foo sunbeam.yaml");
 
-        let result = cmd_check_at(&ws_root.join("foo"), false).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_check_at(&logger, &ws_root.join("foo"), false).await;
 
         assert!(result.is_ok(), "clean workspace check should pass");
     }
@@ -897,7 +901,8 @@ targets:
         )
         .expect("write foo sunbeam.yaml");
 
-        let result = cmd_check_at(&ws_root.join("foo"), false).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_check_at(&logger, &ws_root.join("foo"), false).await;
 
         assert!(result.is_err(), "check should fail for unknown project dep");
     }
@@ -923,7 +928,8 @@ targets:
         )
         .expect("write foo sunbeam.yaml");
 
-        let result = cmd_check_at(&ws_root.join("foo"), false).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_check_at(&logger, &ws_root.join("foo"), false).await;
 
         assert!(result.is_err(), "check should fail for unknown service dep");
     }
@@ -987,7 +993,8 @@ targets:
         )
         .expect("write bar sunbeam.yaml");
 
-        let result = cmd_check_at(&ws_root.join("foo"), true).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_check_at(&logger, &ws_root.join("foo"), true).await;
 
         assert!(result.is_err(), "check should fail when cycle is detected");
     }
@@ -1173,7 +1180,8 @@ targets:
             "SUNBEAM_WORKSPACE",
             tmp.path().to_str().expect("ws_root utf8"),
         );
-        let result = cmd_order_at(tmp.path(), "build").await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_order_at(&logger, tmp.path(), "build").await;
         assert!(result.is_ok(), "cmd_order_at should succeed");
     }
 
@@ -1186,7 +1194,8 @@ targets:
             tmp.path().to_str().expect("ws_root utf8"),
         );
         // 'test' isn't defined in any project → all marked (skip), still Ok.
-        let result = cmd_order_at(tmp.path(), "test").await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = cmd_order_at(&logger, tmp.path(), "test").await;
         assert!(result.is_ok(), "cmd_order_at handles verbs that no project defines");
     }
 
@@ -1245,7 +1254,8 @@ targets:
             ..Default::default()
         };
         let opts = RunOptions::default();
-        let result = run_workspace_at(tmp.path(), "build", &args, opts).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = run_workspace_at(&logger, tmp.path(), "build", &args, opts).await;
         assert!(result.is_ok(), "run_workspace_at --all should succeed: {result:?}");
     }
 
@@ -1269,7 +1279,8 @@ targets:
             ..Default::default()
         };
         let opts = RunOptions::default();
-        let result = run_workspace_at(tmp.path(), "build", &args, opts).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = run_workspace_at(&logger, tmp.path(), "build", &args, opts).await;
         assert!(result.is_ok(), "with_deps run should succeed: {result:?}");
     }
 
@@ -1294,7 +1305,8 @@ targets:
             ..Default::default()
         };
         let opts = RunOptions::default();
-        let result = run_workspace_at(tmp.path(), "build", &args, opts).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = run_workspace_at(&logger, tmp.path(), "build", &args, opts).await;
         assert!(result.is_ok(), "run_workspace_at with --jobs should succeed: {result:?}");
     }
 
@@ -1322,7 +1334,8 @@ targets:
         .expect("write proj");
 
         let args = ProjectRunArgs { all: true, ..Default::default() };
-        let result = run_workspace_at(ws_root, "build", &args, RunOptions::default()).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let result = run_workspace_at(&logger, ws_root, "build", &args, RunOptions::default()).await;
         assert!(result.is_err(), "failing build should bubble up as Err");
     }
 
@@ -1380,9 +1393,10 @@ targets:
 
         // run_workspace_at from inside the worktree's foo/ should resolve the
         // worktree's manifest, not the outer one (which has no `foo`).
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let args = ProjectRunArgs { all: true, ..Default::default() };
         let result =
-            run_workspace_at(&worktree_root.join("foo"), "build", &args, RunOptions::default())
+            run_workspace_at(&logger, &worktree_root.join("foo"), "build", &args, RunOptions::default())
                 .await;
         assert!(
             result.is_ok(),
@@ -1390,7 +1404,8 @@ targets:
         );
 
         // cmd_check_at should also succeed against the worktree's manifest.
-        let check_result = cmd_check_at(&worktree_root.join("foo"), true).await;
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        let check_result = cmd_check_at(&logger, &worktree_root.join("foo"), true).await;
         assert!(
             check_result.is_ok(),
             "cmd_check_at should validate the worktree-rooted workspace: {check_result:?}"

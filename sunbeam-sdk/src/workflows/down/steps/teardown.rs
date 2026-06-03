@@ -226,7 +226,8 @@ impl StepBody for ForceDeleteStuckNamespaces {
 
         for ns in remaining {
             tracing::info!("Force-deleting stuck namespace {ns}...");
-            if let Err(e) = crate::down::force_delete_namespace(client.clone(), ns).await {
+            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+            if let Err(e) = crate::down::force_delete_namespace(&logger, client.clone(), ns).await {
                 tracing::warn!("  Force-delete failed for {ns}: {e}");
             }
         }

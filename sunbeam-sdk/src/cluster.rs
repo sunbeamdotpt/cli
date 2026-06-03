@@ -1,9 +1,14 @@
 //! Cluster lifecycle helpers.
 
 use crate::error::{Result, SunbeamError};
+use crate::{debug, info, trace};
 
 /// Poll deployment rollout status (approximate: check Available condition).
-pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) -> Result<()> {
+pub(crate) async fn wait_rollout(
+    ns: &str,
+    deployment: &str,
+    timeout_secs: u64,
+) -> Result<()> {
     use k8s_openapi::api::apps::v1::Deployment;
     use std::time::{Duration, Instant};
 
@@ -39,8 +44,8 @@ pub(crate) async fn wait_rollout(ns: &str, deployment: &str, timeout_secs: u64) 
                         "Too many consecutive transient errors waiting for {ns}/{deployment}: {e}"
                     )));
                 }
-                tracing::warn!(
-                    "Transient error waiting for {ns}/{deployment} ({consecutive_transient_errors}/10): {e}, retrying in 3s..."
+                tracing::info!(
+                    "Transient error waiting for deployment {ns}/{deployment}, retrying in 3s... ({consecutive_transient_errors} consecutive errors: {e})"
                 );
             }
         }
@@ -67,5 +72,3 @@ async fn try_rollout_check(ns: &str, deployment: &str) -> Result<bool> {
 
     Ok(false)
 }
-
-

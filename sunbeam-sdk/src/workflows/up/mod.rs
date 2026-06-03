@@ -5,6 +5,7 @@ pub mod definition;
 pub mod steps;
 
 use crate::output;
+use crate::info;
 
 /// Register all up workflow steps and the workflow definition with a host.
 #[tracing::instrument(skip(host))]
@@ -70,8 +71,8 @@ pub async fn register(host: &wfe::WorkflowHost) {
 }
 
 /// Print a summary of the completed up workflow.
-pub fn print_summary(instance: &wfe_core::models::WorkflowInstance) {
-    tracing::info!("Up workflow summary:");
+pub fn print_summary(logger: &crate::logger::Logger, instance: &wfe_core::models::WorkflowInstance) {
+    info!(logger, "Up workflow summary:");
     for ep in &instance.execution_pointers {
         let fallback = format!("step-{}", ep.step_id);
         let name = ep.step_name.as_deref().unwrap_or(&fallback);
@@ -83,7 +84,8 @@ pub fn print_summary(instance: &wfe_core::models::WorkflowInstance) {
             }
             _ => "-".to_string(),
         };
-        tracing::info!("  {name:<40} {status:<12} {duration}");
+        let line = format!("  {name:<40} {status:<12} {duration}");
+        info!(logger, &line);
     }
 }
 
@@ -113,7 +115,8 @@ mod tests {
         ep.start_time = Some(chrono::Utc::now());
         ep.end_time = Some(chrono::Utc::now());
         instance.execution_pointers.push(ep);
-        print_summary(&instance);
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        print_summary(&logger, &instance);
     }
 
     #[tokio::test]
@@ -126,6 +129,7 @@ mod tests {
         ep.start_time = None;
         ep.end_time = None;
         instance.execution_pointers.push(ep);
-        print_summary(&instance);
+        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
+        print_summary(&logger, &instance);
     }
 }

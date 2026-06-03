@@ -4,12 +4,12 @@
 //! in sequence, reporting pass/fail for each.
 
 use crate::error::Result;
-
+use crate::{debug, info, trace};
 
 /// Cmd doctor.
-#[tracing::instrument]
-pub async fn cmd_doctor() -> Result<()> {
-    tracing::info!("Running diagnostics...");
+#[tracing::instrument(skip(logger))]
+pub async fn cmd_doctor(logger: &crate::logger::Logger) -> Result<()> {
+    info!(logger, "Running diagnostics...");
     println!();
 
     let mut failures = 0u32;
@@ -17,10 +17,10 @@ pub async fn cmd_doctor() -> Result<()> {
     // 1. Kube context
     let context = crate::kube::context();
     if context.is_empty() {
-        tracing::warn!("kube context: not set");
+        info!(logger, "kube context: not set");
         failures += 1;
     } else {
-        tracing::info!("kube context: {context}");
+        info!(logger, "kube context: configured", context = context);
     }
 
     // 3. K8s API reachability
@@ -30,19 +30,20 @@ pub async fn cmd_doctor() -> Result<()> {
             let ns: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(client.clone());
             match ns.list(&Default::default()).await {
                 Ok(list) => {
-                    tracing::info!(
-                        "k8s API: reachable ({} namespaces)",
-                        list.items.len()
+                    info!(
+                        logger,
+                        "k8s API: reachable",
+                        namespace_count = list.items.len()
                     );
                 }
                 Err(e) => {
-                    tracing::warn!("k8s API: connected but list failed: {e}");
+                    info!(logger, "k8s API: connected but list failed", error = e);
                     failures += 1;
                 }
             }
         }
         Err(e) => {
-            tracing::warn!("k8s API: unreachable ({e})");
+            info!(logger, "k8s API: unreachable", error = e);
             failures += 1;
         }
     }
@@ -52,21 +53,22 @@ pub async fn cmd_doctor() -> Result<()> {
         .map(|d| d.join("daemon.sock"))
         .unwrap_or_default();
     if vpn_sock.exists() {
-        tracing::info!(
-            "VPN daemon: socket exists at {}",
-            vpn_sock.display()
+        info!(
+            logger,
+            "VPN daemon: socket exists",
+            path = vpn_sock.display()
         );
     } else {
-        tracing::warn!("VPN daemon: not running (no socket)");
+        info!(logger, "VPN daemon: not running (no socket)");
     }
 
     // 5. Domain config
     let domain = crate::config::domain();
     if domain.is_empty() {
-        tracing::warn!("domain: not configured -- run `sunbeam config set --domain <domain>`");
+        info!(logger, "domain: not configured -- run `sunbeam config set --domain <domain>`");
         failures += 1;
     } else {
-        tracing::info!("domain: {domain}");
+        info!(logger, "domain: configured", domain = domain);
     }
 
     // 6. OpenBao
@@ -85,31 +87,31 @@ pub async fn cmd_doctor() -> Result<()> {
                     .and_then(|v| v.get("sealed")?.as_bool())
                     .unwrap_or(true);
                 if sealed {
-                    tracing::warn!("OpenBao{label_note}: sealed");
+                    info!(logger, &format!("OpenBao{label_note}: sealed"));
                     failures += 1;
                 } else {
-                    tracing::info!("OpenBao{label_note}: unsealed");
+                    info!(logger, &format!("OpenBao{label_note}: unsealed"));
                 }
             }
             _ => {
-                tracing::warn!("OpenBao{label_note}: status check failed");
+                info!(logger, &format!("OpenBao{label_note}: status check failed"));
                 failures += 1;
             }
         }
     } else {
-        tracing::warn!("OpenBao: pod not found");
+        info!(logger, "OpenBao: pod not found");
         failures += 1;
     }
 
     // 8. Service registry
     if let Ok(client) = crate::kube::get_client().await {
-        match crate::registry::discover(&client).await {
+        match crate::registry::discover(logger, &client).await {
             Ok(reg) => {
                 let count = reg.all().len();
-                tracing::info!("service registry: {count} service(s) discovered");
+                info!(logger, "service registry: services discovered", count = count);
             }
             Err(e) => {
-                tracing::warn!("service registry: discovery failed ({e})");
+                info!(logger, "service registry: discovery failed", error = e);
                 failures += 1;
             }
         }
@@ -118,9 +120,9 @@ pub async fn cmd_doctor() -> Result<()> {
     // Summary
     println!();
     if failures == 0 {
-        tracing::info!("All checks passed.");
+        info!(logger, "All checks passed.");
     } else {
-        tracing::warn!("{failures} check(s) failed.");
+        info!(logger, "check(s) failed.", failures = failures);
     }
 
     Ok(())

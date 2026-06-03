@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Args;
 use wfe_server_protos::wfe::v1::SuspendWorkflowRequest;
 
+use crate::info;
 use super::client::AuthClient;
 
 #[derive(Debug, Args)]
@@ -14,9 +15,9 @@ pub struct SuspendArgs {
 }
 
 /// Run.
-#[tracing::instrument]
-pub async fn run(args: SuspendArgs, mut client: AuthClient) -> Result<()> {
-    tracing::info!("wfectl suspend workflow {id}", id = args.workflow_id);
+#[tracing::instrument(skip(logger))]
+pub async fn run(logger: &crate::logger::Logger, args: SuspendArgs, mut client: AuthClient) -> Result<()> {
+    info!(logger, "wfectl suspend workflow", id = args.workflow_id);
     client
         .suspend_workflow(SuspendWorkflowRequest {
             workflow_id: args.workflow_id.clone(),
