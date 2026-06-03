@@ -1,4 +1,4 @@
-//! Local workflow CLI actions (list, status, retry, cancel).
+//! Workflow CLI actions — local WFE host, remote wfe-server, and target management.
 
 use clap::Subcommand;
 
@@ -8,14 +8,35 @@ use crate::output;
 use super::host;
 
 #[derive(Subcommand, Debug)]
-/// Workflowaction.
+/// Workflow action.
 pub enum WorkflowAction {
+    // ------------------------------------------------------------------
+    // Commands that work on both local and remote targets
+    // ------------------------------------------------------------------
     /// List workflow instances.
     List {
         /// Filter by status (runnable, complete, terminated, suspended).
         #[arg(long, default_value = "")]
         status: String,
+        /// Free-text query (remote only).
+        #[arg(long)]
+        query: Option<String>,
+        /// Maximum results (remote only).
+        #[arg(long, default_value_t = 50)]
+        limit: u64,
+        /// Skip N results (remote only).
+        #[arg(long, default_value_t = 0)]
+        skip: u64,
     },
+    /// Cancel a running workflow.
+    Cancel {
+        /// Workflow instance ID.
+        id: String,
+    },
+
+    // ------------------------------------------------------------------
+    // Local-only commands
+    // ------------------------------------------------------------------
     /// Show status of a workflow instance.
     Status {
         /// Workflow instance ID.
@@ -26,43 +47,366 @@ pub enum WorkflowAction {
         /// Workflow instance ID.
         id: String,
     },
-    /// Cancel a running workflow.
-    Cancel {
-        /// Workflow instance ID.
-        id: String,
-    },
-    /// Run a YAML-defined workflow.
+    /// Run a YAML-defined workflow locally.
     Run {
         /// Path to workflow YAML file (default: ./workflows.yaml).
         #[arg(default_value = "")]
         file: String,
     },
+
+    // ------------------------------------------------------------------
+    // Remote-only commands (wfe-server)
+    // ------------------------------------------------------------------
+    /// Register a workflow definition from a YAML file.
+    Register(crate::wfectl::register::RegisterArgs),
+    /// Locally validate a workflow YAML file (no server round-trip).
+    Validate(crate::wfectl::validate::ValidateArgs),
+    /// Manage registered workflow definitions.
+    Definitions(crate::wfectl::definitions::DefinitionsArgs),
+    /// Start a registered workflow instance on the server.
+    #[command(name = "start")]
+    Start(crate::wfectl::run::RunArgs),
+    /// Get a workflow instance by ID or name.
+    Get(crate::wfectl::get::GetArgs),
+    /// Suspend a running workflow.
+    Suspend(crate::wfectl::suspend::SuspendArgs),
+    /// Resume a suspended workflow.
+    Resume(crate::wfectl::resume::ResumeArgs),
+    /// Publish an event to waiting workflows.
+    Publish(crate::wfectl::publish::PublishArgs),
+    /// Stream lifecycle events.
+    Watch(crate::wfectl::watch::WatchArgs),
+    /// Stream step logs.
+    Logs(crate::wfectl::logs::LogsArgs),
+    /// Full-text search log lines.
+    SearchLogs(crate::wfectl::search_logs::SearchLogsArgs),
+
+    // ------------------------------------------------------------------
+    // Target management
+    // ------------------------------------------------------------------
+    /// Authenticate with and save a remote workflow server target.
+    Login {
+        /// Target name.
+        #[arg(short, long)]
+        name: String,
+        /// Server URL (e.g. https://builds.sunbeam.pt).
+        #[arg(short, long)]
+        url: String,
+    },
+    /// Remove a saved target.
+    Logout {
+        /// Target name.
+        #[arg(short, long)]
+        name: String,
+    },
+    /// List saved workflow targets.
+    Targets,
+}
+
+/// Resolve the effective target name and optional config.
+fn resolve_target(target: Option<&str>) -> Result<(String, Option<crate::config::WorkflowTarget>)> {
+    let cfg = crate::config::load_config();
+
+    let name = target
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .or_else(|| {
+            if cfg.default_workflow_target.is_empty() {
+                None
+            } else {
+                Some(cfg.default_workflow_target.clone())
+            }
+        })
+        .unwrap_or_else(|| "local".to_string());
+
+    if name == "local" {
+        return Ok((name, None));
+    }
+
+    match cfg.workflow_targets.get(&name) {
+        Some(t) => Ok((name, Some(t.clone()))),
+        None => Err(SunbeamError::Config(format!(
+            "workflow target '{name}' not found — run `sunbeam workflow login --name {name} --url <url>`"
+        ))),
+    }
 }
 
 /// Dispatch a `sunbeam workflow <action>` command.
-#[tracing::instrument(skip(action), fields(context = context_name))]
-pub async fn dispatch(context_name: &str, action: WorkflowAction) -> Result<()> {
-    if let WorkflowAction::Run { file } = action {
-        return run_workflow(&file).await;
+#[tracing::instrument(skip(action), fields(target = tracing::field::Empty))]
+pub async fn dispatch(
+    target: Option<&str>,
+    action: WorkflowAction,
+    output: crate::wfectl::output::OutputFormat,
+) -> Result<()> {
+    let (target_name, target_cfg) = resolve_target(target)?;
+    tracing::Span::current().record("target", &target_name);
+
+    // Target management commands work regardless of target.
+    match action {
+        WorkflowAction::Login { name, url } => {
+            return login_target(&name, &url);
+        }
+        WorkflowAction::Logout { name } => {
+            return logout_target(&name);
+        }
+        WorkflowAction::Targets => {
+            return list_targets();
+        }
+        _ => {}
     }
 
-    let h = host::create_host(context_name).await?;
-    let result = dispatch_with_host(&h, action).await;
-    host::shutdown_host(h).await;
-    result
+    if target_name == "local" {
+        dispatch_local(action).await
+    } else {
+        let t = target_cfg.expect("remote target resolved");
+        dispatch_remote(action, output, &t).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local dispatch
+// ---------------------------------------------------------------------------
+
+async fn dispatch_local(action: WorkflowAction) -> Result<()> {
+    match action {
+        WorkflowAction::List { status, .. } => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            let h = host::create_host(&ctx_name).await?;
+            let result = list_workflows(&h, &status).await;
+            host::shutdown_host(h).await;
+            result
+        }
+        WorkflowAction::Status { id } => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            let h = host::create_host(&ctx_name).await?;
+            let result = show_workflow_status(&h, &id).await;
+            host::shutdown_host(h).await;
+            result
+        }
+        WorkflowAction::Retry { id } => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            let h = host::create_host(&ctx_name).await?;
+            let result = retry_workflow(&h, &id).await;
+            host::shutdown_host(h).await;
+            result
+        }
+        WorkflowAction::Cancel { id } => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            let h = host::create_host(&ctx_name).await?;
+            let result = cancel_workflow(&h, &id).await;
+            host::shutdown_host(h).await;
+            result
+        }
+        WorkflowAction::Run { file } => run_workflow(&file).await,
+        _ => Err(SunbeamError::Other(format!(
+            "command '{action:?}' is not supported for local target — use a remote target with `-t <name>`"
+        ))),
+    }
 }
 
 /// Inner dispatch that operates on an already-created host. Testable.
 #[tracing::instrument(skip(h))]
 pub async fn dispatch_with_host(h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
     match action {
-        WorkflowAction::List { status } => list_workflows(h, &status).await,
+        WorkflowAction::List { status, .. } => list_workflows(h, &status).await,
         WorkflowAction::Status { id } => show_workflow_status(h, &id).await,
         WorkflowAction::Retry { id } => retry_workflow(h, &id).await,
         WorkflowAction::Cancel { id } => cancel_workflow(h, &id).await,
         WorkflowAction::Run { .. } => unreachable!("handled above"),
+        _ => Err(SunbeamError::Other(format!(
+            "command '{action:?}' is not supported for local target"
+        ))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Remote dispatch
+// ---------------------------------------------------------------------------
+
+async fn dispatch_remote(
+    action: WorkflowAction,
+    output: crate::wfectl::output::OutputFormat,
+    target: &crate::config::WorkflowTarget,
+) -> Result<()> {
+    use crate::wfectl::output::OutputFormat;
+
+    // Derive domain from URL for token resolution.
+    let domain = extract_domain(&target.url)?;
+
+    // Validate is the only command that doesn't need a server connection.
+    if let WorkflowAction::Validate(args) = action {
+        return crate::wfectl::validate::run(args, output)
+            .await
+            .map_err(|e| SunbeamError::Other(format!("{e:#}")));
+    }
+
+    let token = crate::wfectl::resolve_token(&domain)
+        .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
+    let client = crate::wfectl::client::build(&target.url, &token)
+        .await
+        .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
+
+    let result = match action {
+        WorkflowAction::List { query, status, limit, skip } => {
+            let args = crate::wfectl::list::ListArgs {
+                query,
+                status: parse_status_filter(&status),
+                limit,
+                skip,
+            };
+            crate::wfectl::list::run(args, client, output).await
+        }
+        WorkflowAction::Cancel { id } => {
+            let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
+            crate::wfectl::cancel::run(args, client).await
+        }
+        WorkflowAction::Register(args) => {
+            crate::wfectl::register::run(args, client, output).await
+        }
+        WorkflowAction::Definitions(args) => {
+            crate::wfectl::definitions::run(args, client, output).await
+        }
+        WorkflowAction::Start(args) => {
+            crate::wfectl::run::run(args, client, output).await
+        }
+        WorkflowAction::Get(args) => {
+            crate::wfectl::get::run(args, client, output).await
+        }
+        WorkflowAction::Suspend(args) => {
+            crate::wfectl::suspend::run(args, client).await
+        }
+        WorkflowAction::Resume(args) => {
+            crate::wfectl::resume::run(args, client).await
+        }
+        WorkflowAction::Publish(args) => {
+            crate::wfectl::publish::run(args, client, output).await
+        }
+        WorkflowAction::Watch(args) => {
+            crate::wfectl::watch::run(args, client).await
+        }
+        WorkflowAction::Logs(args) => {
+            crate::wfectl::logs::run(args, client).await
+        }
+        WorkflowAction::SearchLogs(args) => {
+            crate::wfectl::search_logs::run(args, client, output).await
+        }
+        WorkflowAction::Validate(_) => unreachable!(),
+        _ => {
+            return Err(SunbeamError::Other(format!(
+                "command '{action:?}' is not supported for remote target — use `-t local`"
+            )));
+        }
+    };
+
+    result.map_err(|e| SunbeamError::Other(format!("{e:#}")))
+}
+
+fn extract_domain(url: &str) -> Result<String> {
+    // Strip scheme if present.
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
+    // Strip path/port if present.
+    let host = rest.split('/').next().unwrap_or(rest);
+    Ok(host.to_string())
+}
+
+fn parse_status_filter(status: &str) -> Option<crate::wfectl::list::StatusFilter> {
+    match status.to_lowercase().as_str() {
+        "runnable" => Some(crate::wfectl::list::StatusFilter::Runnable),
+        "suspended" => Some(crate::wfectl::list::StatusFilter::Suspended),
+        "complete" => Some(crate::wfectl::list::StatusFilter::Complete),
+        "terminated" => Some(crate::wfectl::list::StatusFilter::Terminated),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Target management
+// ---------------------------------------------------------------------------
+
+fn login_target(name: &str, url: &str) -> Result<()> {
+    let mut cfg = crate::config::load_config();
+    cfg.workflow_targets.insert(
+        name.to_string(),
+        crate::config::WorkflowTarget {
+            url: url.to_string(),
+            token: String::new(),
+        },
+    );
+    crate::config::save_config(&cfg)?;
+    tracing::info!("saved workflow target '{name}' -> {url}");
+    Ok(())
+}
+
+fn logout_target(name: &str) -> Result<()> {
+    let mut cfg = crate::config::load_config();
+    if cfg.workflow_targets.remove(name).is_some() {
+        crate::config::save_config(&cfg)?;
+        tracing::info!("removed workflow target '{name}'");
+    } else {
+        tracing::warn!("workflow target '{name}' not found");
+    }
+    Ok(())
+}
+
+fn target_row(r: &TargetRow) -> Vec<String> {
+    vec![r.name.clone(), r.url.clone()]
+}
+
+#[derive(serde::Serialize)]
+struct TargetRow {
+    name: String,
+    url: String,
+}
+
+fn list_targets() -> Result<()> {
+    let cfg = crate::config::load_config();
+
+    let mut rows = vec![TargetRow {
+        name: "local".to_string(),
+        url: "(implicit)".to_string(),
+    }];
+    for (name, target) in &cfg.workflow_targets {
+        rows.push(TargetRow {
+            name: name.clone(),
+            url: target.url.clone(),
+        });
+    }
+
+    output::render_list(&rows, &["NAME", "URL"], target_row, crate::output::OutputFormat::Table)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Local command implementations
+// ---------------------------------------------------------------------------
 
 /// List workflow instances.
 #[tracing::instrument(skip(h))]
@@ -311,6 +655,9 @@ mod tests {
             &h,
             WorkflowAction::List {
                 status: String::new(),
+                query: None,
+                limit: 50,
+                skip: 0,
             },
         )
         .await;

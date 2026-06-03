@@ -140,6 +140,14 @@ pub struct SunbeamConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub presets: HashMap<String, Preset>,
 
+    /// Named workflow targets (local is implicit; these are remote wfe-servers).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub workflow_targets: HashMap<String, WorkflowTarget>,
+
+    /// Default workflow target name. Empty means "local".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_workflow_target: String,
+
     // --- Legacy fields (migrated on load) ---
     #[serde(default, skip_serializing_if = "String::is_empty")]
     /// Infra directory.
@@ -241,6 +249,16 @@ pub struct Context {
     )]
     /// Vpn dns search.
     pub vpn_dns_search: String,
+}
+
+/// A named workflow target — a remote wfe-server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkflowTarget {
+    /// Server URL (e.g. https://builds.sunbeam.pt).
+    pub url: String,
+    /// SSO access token (empty until login).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
 }
 
 fn is_false(b: &bool) -> bool {

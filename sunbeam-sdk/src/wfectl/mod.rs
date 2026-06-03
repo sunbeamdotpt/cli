@@ -70,7 +70,7 @@ pub enum WorkflowsCommand {
 }
 
 /// Resolve the SSO access token from the sunbeam auth cache.
-fn resolve_token(domain: &str) -> anyhow::Result<String> {
+pub fn resolve_token(domain: &str) -> anyhow::Result<String> {
     let path = dirs::home_dir()
         .unwrap_or_default()
         .join(format!(".sunbeam/auth/{domain}.json"));

@@ -109,19 +109,16 @@ pub enum Verb {
         action: Option<AuthAction>,
     },
 
-    /// Local workflow management (list, status, retry, cancel, run).
+    /// Workflow management — local WFE host, remote wfe-server, and target management.
     Workflow {
-        #[command(subcommand)]
-        action: crate::workflows::cmd::WorkflowAction,
-    },
-
-    /// Remote workflow management (via wfe-server).
-    Workflows {
+        /// Workflow target (default: local).
+        #[arg(short, long, default_value = "local", global = true)]
+        target: String,
         /// Output format.
         #[arg(short, long, value_enum, default_value_t = crate::wfectl::output::OutputFormat::Table, global = true)]
         output: crate::wfectl::output::OutputFormat,
         #[command(subcommand)]
-        action: crate::wfectl::WorkflowsCommand,
+        action: crate::workflows::cmd::WorkflowAction,
     },
 
     /// Service operations (deploy, logs, restart, exec, secrets, ...).
@@ -195,7 +192,6 @@ impl Verb {
             Verb::User { .. } => "user",
             Verb::Auth { .. } => "auth",
             Verb::Workflow { .. } => "workflow",
-            Verb::Workflows { .. } => "workflows",
             Verb::Service { .. } => "service",
             Verb::Vpn { .. } => "vpn",
             Verb::Bao { .. } => "bao",
@@ -1302,30 +1298,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         },
 
 
-        Some(Verb::Workflow { action }) => {
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
-            };
-            crate::workflows::cmd::dispatch(&ctx_name, action).await
-        }
-
-        Some(Verb::Workflows { output, action }) => {
-            let domain = crate::config::domain();
-            if domain.is_empty() {
-                return Err(SunbeamError::Config(
-                    "domain not set — run `sunbeam config set --domain <domain>` first".into(),
-                ));
-            }
-            if let Err(e) = crate::wfectl::dispatch(action, output, domain).await {
-                eprintln!("error: {e:#}");
-                std::process::exit(1);
-            }
-            Ok(())
+        Some(Verb::Workflow { target, output, action }) => {
+            crate::workflows::cmd::dispatch(
+                Some(&target),
+                action,
+                output,
+            )
+            .await
         }
 
         Some(Verb::Vpn { action }) => match action {
@@ -1807,7 +1786,7 @@ mod tests {
     fn test_workflow_list() {
         let cli = parse(&["sunbeam", "workflow", "list"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => {
+            Some(Verb::Workflow { action, .. }) => {
                 assert!(matches!(
                     action,
                     crate::workflows::cmd::WorkflowAction::List { .. }
@@ -1821,8 +1800,8 @@ mod tests {
     fn test_workflow_list_with_status_filter() {
         let cli = parse(&["sunbeam", "workflow", "list", "--status", "complete"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
-                crate::workflows::cmd::WorkflowAction::List { status } => {
+            Some(Verb::Workflow { action, .. }) => match action {
+                crate::workflows::cmd::WorkflowAction::List { status, .. } => {
                     assert_eq!(status, "complete");
                 }
                 _ => panic!("expected List"),
@@ -1835,7 +1814,7 @@ mod tests {
     fn test_workflow_status() {
         let cli = parse(&["sunbeam", "workflow", "status", "abc-123"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
+            Some(Verb::Workflow { action, .. }) => match action {
                 crate::workflows::cmd::WorkflowAction::Status { id } => {
                     assert_eq!(id, "abc-123");
                 }
@@ -1849,7 +1828,7 @@ mod tests {
     fn test_workflow_retry() {
         let cli = parse(&["sunbeam", "workflow", "retry", "wf-456"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
+            Some(Verb::Workflow { action, .. }) => match action {
                 crate::workflows::cmd::WorkflowAction::Retry { id } => {
                     assert_eq!(id, "wf-456");
                 }
@@ -1863,7 +1842,7 @@ mod tests {
     fn test_workflow_cancel() {
         let cli = parse(&["sunbeam", "workflow", "cancel", "wf-789"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
+            Some(Verb::Workflow { action, .. }) => match action {
                 crate::workflows::cmd::WorkflowAction::Cancel { id } => {
                     assert_eq!(id, "wf-789");
                 }
@@ -1877,7 +1856,7 @@ mod tests {
     fn test_workflow_run_default_file() {
         let cli = parse(&["sunbeam", "workflow", "run"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
+            Some(Verb::Workflow { action, .. }) => match action {
                 crate::workflows::cmd::WorkflowAction::Run { file } => {
                     assert_eq!(file, "");
                 }
@@ -1891,7 +1870,7 @@ mod tests {
     fn test_workflow_run_with_file() {
         let cli = parse(&["sunbeam", "workflow", "run", "deploy.yaml"]);
         match cli.verb {
-            Some(Verb::Workflow { action }) => match action {
+            Some(Verb::Workflow { action, .. }) => match action {
                 crate::workflows::cmd::WorkflowAction::Run { file } => {
                     assert_eq!(file, "deploy.yaml");
                 }
