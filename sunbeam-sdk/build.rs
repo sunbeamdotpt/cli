@@ -12,7 +12,7 @@ fn main() {
     let lima_yaml_src = manifest_dir.join("../lima-sunbeam.yaml");
     let lima_yaml_dst = out_dir.join("lima-sunbeam.yaml");
     fs::copy(&lima_yaml_src, &lima_yaml_dst)
-        .expect(&format!("lima-sunbeam.yaml not found at {}", lima_yaml_src.display()));
+        .unwrap_or_else(|_| panic!("lima-sunbeam.yaml not found at {}", lima_yaml_src.display()));
     println!("cargo:rerun-if-changed={}", lima_yaml_src.display());
 
     // Set version info from git

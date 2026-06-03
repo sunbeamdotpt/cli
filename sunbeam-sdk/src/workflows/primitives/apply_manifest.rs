@@ -41,8 +41,9 @@ fn build_skip_patterns(step_config: &serde_json::Value, domain: &str) -> Vec<Str
     skip_patterns
 }
 
-/// True if the error looks like a transient connection failure to the
-/// Kubernetes API server (e.g. during k3s overload on a single-node Lima VM).
+/// True if the error looks like a transient failure we can recover from by
+/// retrying: connection issues (k3s overload) or 404s from API endpoints that
+/// aren't registered yet (CRD registration race).
 fn is_transient_connection_err(e: &crate::error::SunbeamError) -> bool {
     let msg = e.to_string().to_lowercase();
     msg.contains("connect")
@@ -50,6 +51,8 @@ fn is_transient_connection_err(e: &crate::error::SunbeamError) -> bool {
         || msg.contains("broken pipe")
         || msg.contains("reset by peer")
         || msg.contains("timeout")
+        || msg.contains("404")
+        || msg.contains("not found")
 }
 
 /// Compute a small stagger delay (0–2 s) from a namespace name so that

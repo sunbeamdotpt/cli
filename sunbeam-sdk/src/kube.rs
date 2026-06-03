@@ -247,9 +247,11 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
     }
 
     // If we applied any CRDs, refresh discovery so the new APIs are known.
+    // Even on fast baremetal, etcd propagation + API server endpoint
+    // registration can take >2 s. We wait 5 s before refreshing discovery.
     if !crd_docs.is_empty() {
-        tracing::info!("CRDs applied — refreshing API discovery...");
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tracing::info!("CRDs applied — refreshing API discovery in 5s...");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         match discovery::Discovery::new(client.clone())
             .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>())
             .run()
@@ -304,7 +306,9 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
     // Pass 2: apply everything else
     // Webhooks (cert-manager, CNPG, etc.) may not be ready immediately after
-    // their deployments are applied. Retry on webhook errors with backoff.
+    // their deployments are applied. CRD endpoints may also need time to
+    // register even after discovery refresh. Retry on both webhook errors
+    // and 404s (which usually mean the API endpoint isn't ready yet).
     for doc in &other_docs {
         let mut last_err = None;
         for attempt in 0..12 {
@@ -316,11 +320,18 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
                     last_err = None;
                     break;
                 }
-                Err(e) if is_webhook_error(&e) && attempt < 11 => {
-                    tracing::info!(
-                        "Webhook not ready for doc (attempt {}), retrying in 10s...",
-                        attempt + 1
-                    );
+                Err(e) if is_retryable_error(&e) && attempt < 11 => {
+                    if is_404_error(&e) {
+                        tracing::info!(
+                            "API endpoint not ready for doc (attempt {}): {e}. Retrying in 10s...",
+                            attempt + 1
+                        );
+                    } else {
+                        tracing::info!(
+                            "Webhook not ready for doc (attempt {}): {e}. Retrying in 10s...",
+                            attempt + 1
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     last_err = Some(e);
                 }
@@ -504,6 +515,17 @@ fn is_webhook_error(err: &str) -> bool {
         || err.contains("no endpoints available for service")
         || err.contains("connection refused")
         || err.contains("context deadline exceeded")
+}
+
+/// Returns true if the error looks like a 404 from an API endpoint that isn't
+/// registered yet (common after CRD apply before the API server opens the path).
+fn is_404_error(err: &str) -> bool {
+    err.contains("404") || err.to_lowercase().contains("not found")
+}
+
+/// True for errors we should retry rather than fail immediately.
+fn is_retryable_error(err: &str) -> bool {
+    is_webhook_error(err) || is_404_error(err)
 }
 
 /// Resolve an API resource from apiVersion and kind using a pre-built discovery.
