@@ -178,6 +178,11 @@ pub enum Verb {
         action: OperationsAction,
     },
 
+    /// Version control — multi-repo git operations.
+    Vcs {
+        #[command(subcommand)]
+        action: VcsAction,
+    },
 
     /// Build the current project (shortcut for `sunbeam project build`).
     Build {
@@ -247,6 +252,7 @@ impl Verb {
             Verb::Version => "version",
             Verb::Project { .. } => "project",
             Verb::Operations { .. } => "operations",
+            Verb::Vcs { .. } => "vcs",
             Verb::Build { .. } => "build",
             Verb::Test { .. } => "test",
             Verb::Lint { .. } => "lint",
@@ -1425,6 +1431,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
         Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
 
+        Some(Verb::Vcs { action }) => crate::vcs::dispatch(action).await,
 
         Some(Verb::Build { args }) => {
             crate::project::cli::dispatch(ProjectAction::Build(args)).await
