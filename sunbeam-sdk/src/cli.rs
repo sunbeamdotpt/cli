@@ -183,52 +183,6 @@ pub enum Verb {
         #[command(subcommand)]
         action: VcsAction,
     },
-
-    /// Build the current project (shortcut for `sunbeam project build`).
-    Build {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Run the current project's tests (shortcut for `sunbeam project test`).
-    Test {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Lint the current project (shortcut for `sunbeam project lint`).
-    Lint {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Format the current project (shortcut for `sunbeam project fmt`).
-    Fmt {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Package the current project (shortcut for `sunbeam project package`).
-    Package {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Deploy the current project (shortcut for `sunbeam project deploy`).
-    Deploy {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Run the current project's dev server (shortcut for `sunbeam project dev`).
-    Dev {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Clean the current project's build artifacts (shortcut for `sunbeam project clean`).
-    Clean {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Generate the current project's docs (shortcut for `sunbeam project doc`).
-    Doc {
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
 }
 
 impl Verb {
@@ -253,15 +207,6 @@ impl Verb {
             Verb::Project { .. } => "project",
             Verb::Operations { .. } => "operations",
             Verb::Vcs { .. } => "vcs",
-            Verb::Build { .. } => "build",
-            Verb::Test { .. } => "test",
-            Verb::Lint { .. } => "lint",
-            Verb::Fmt { .. } => "fmt",
-            Verb::Package { .. } => "package",
-            Verb::Deploy { .. } => "deploy",
-            Verb::Dev { .. } => "dev",
-            Verb::Clean { .. } => "clean",
-            Verb::Doc { .. } => "doc",
         }
     }
 }
@@ -1433,23 +1378,15 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
         Some(Verb::Vcs { action }) => crate::vcs::dispatch(action).await,
 
-        Some(Verb::Build { args }) => {
-            crate::project::cli::dispatch(ProjectAction::Build(args)).await
-        }
-        Some(Verb::Test { args }) => crate::project::cli::dispatch(ProjectAction::Test(args)).await,
-        Some(Verb::Lint { args }) => crate::project::cli::dispatch(ProjectAction::Lint(args)).await,
-        Some(Verb::Fmt { args }) => crate::project::cli::dispatch(ProjectAction::Fmt(args)).await,
-        Some(Verb::Package { args }) => {
-            crate::project::cli::dispatch(ProjectAction::Package(args)).await
-        }
-        Some(Verb::Deploy { args }) => {
-            crate::project::cli::dispatch(ProjectAction::Deploy(args)).await
-        }
-        Some(Verb::Dev { args }) => crate::project::cli::dispatch(ProjectAction::Dev(args)).await,
-        Some(Verb::Clean { args }) => {
-            crate::project::cli::dispatch(ProjectAction::Clean(args)).await
-        }
-        Some(Verb::Doc { args }) => crate::project::cli::dispatch(ProjectAction::Doc(args)).await,
+
+
+
+
+
+
+
+
+
     }
 }
 
@@ -2220,56 +2157,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_top_level_build_alias() {
-        let cli = parse(&["sunbeam", "build"]);
-        match cli.verb {
-            Some(Verb::Build { args }) => {
-                assert!(!args.all);
-                assert!(args.projects.is_empty());
-                assert!(!args.with_deps);
-                assert!(args.jobs.is_none());
-            }
-            _ => panic!("expected top-level Build alias"),
-        }
-    }
 
-    #[test]
-    fn test_top_level_test_alias_with_flags() {
-        let cli = parse(&["sunbeam", "test", "--all", "--dry-run", "--jobs", "4"]);
-        match cli.verb {
-            Some(Verb::Test { args }) => {
-                assert!(args.all);
-                assert!(args.dry_run);
-                assert_eq!(args.jobs, Some(4));
-            }
-            _ => panic!("expected top-level Test alias"),
-        }
-    }
 
-    #[test]
-    fn test_top_level_aliases_all_present() {
-        for verb in [
-            "build", "test", "lint", "fmt", "package", "deploy", "dev", "clean", "doc",
-        ] {
-            let cli = parse(&["sunbeam", verb]);
-            assert!(
-                matches!(
-                    cli.verb,
-                    Some(Verb::Build { .. })
-                        | Some(Verb::Test { .. })
-                        | Some(Verb::Lint { .. })
-                        | Some(Verb::Fmt { .. })
-                        | Some(Verb::Package { .. })
-                        | Some(Verb::Deploy { .. })
-                        | Some(Verb::Dev { .. })
-                        | Some(Verb::Clean { .. })
-                        | Some(Verb::Doc { .. })
-                ),
-                "verb {verb} did not parse to a top-level alias"
-            );
-        }
-    }
 
     #[test]
     fn test_project_run_custom_verb() {
@@ -2311,15 +2200,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_with_deps_flag() {
-        let cli = parse(&["sunbeam", "build", "-p", "sol", "--with-deps"]);
-        match cli.verb {
-            Some(Verb::Build { args }) => {
-                assert_eq!(args.projects, vec!["sol"]);
-                assert!(args.with_deps);
-            }
-            _ => panic!("expected Build with --with-deps"),
-        }
-    }
 }
