@@ -178,11 +178,6 @@ pub enum Verb {
         action: OperationsAction,
     },
 
-    /// Shortcut for `sunbeam ops worktree` — per-branch git worktree lifecycle.
-    Wt {
-        #[command(subcommand)]
-        action: WorktreeAction,
-    },
 
     /// Build the current project (shortcut for `sunbeam project build`).
     Build {
@@ -252,7 +247,6 @@ impl Verb {
             Verb::Version => "version",
             Verb::Project { .. } => "project",
             Verb::Operations { .. } => "operations",
-            Verb::Wt { .. } => "wt",
             Verb::Build { .. } => "build",
             Verb::Test { .. } => "test",
             Verb::Lint { .. } => "lint",
@@ -764,154 +758,12 @@ pub enum OperationsAction {
         #[command(subcommand)]
         action: StackAction,
     },
-    /// Per-branch git worktree lifecycle (alias: `sunbeam wt`).
-    Worktree {
-        #[command(subcommand)]
-        action: WorktreeAction,
-    },
     /// Print resolved workspace config.
     Info,
     /// List all repos in the workspace (by bucket).
     Repos,
 }
 
-/// Git worktree lifecycle subcommands.
-#[derive(Subcommand, Debug)]
-pub enum WorktreeAction {
-    /// Create a new worktree rooted at `.worktrees/<sanitized-branch>`.
-    New {
-        /// Branch name (will be sanitized for the filesystem path).
-        branch: String,
-        /// Base ref to branch from (default: current HEAD).
-        #[arg(long)]
-        from: Option<String>,
-        /// Skip running `.hooks/setup` after creation.
-        #[arg(long)]
-        no_setup: bool,
-    },
-    /// List all worktrees with dirty-file counts.
-    List,
-    /// Merge a worktree branch into the current HEAD.
-    ///
-    /// Default strategy: rebase the branch onto current HEAD, then fast-forward
-    /// HEAD to the rebased tip (preserves linear history). Must be run from
-    /// the main checkout (not from inside a worktree).
-    Merge {
-        /// Branch to merge.
-        branch: String,
-        /// Use classic `git merge` (creates a merge commit instead of rebasing).
-        #[arg(long, conflicts_with = "squash")]
-        merge_commit: bool,
-        /// Use `git merge --squash` (single squashed commit, no rebase).
-        #[arg(long, conflicts_with = "merge_commit")]
-        squash: bool,
-    },
-    /// Rebase a branch onto current HEAD (or `--onto <ref>`) without merging.
-    ///
-    /// Useful for keeping a feature branch current with mainline. Operates in
-    /// the branch's worktree if one exists.
-    Rebase {
-        /// Branch to rebase.
-        branch: String,
-        /// Rebase onto this ref (default: current HEAD of the main checkout).
-        #[arg(long)]
-        onto: Option<String>,
-    },
-    /// Remove a worktree (and optionally delete its branch).
-    Rm {
-        /// Branch whose worktree should be removed.
-        branch: String,
-        /// Force removal even if the worktree is dirty.
-        #[arg(long)]
-        force: bool,
-        /// Also delete the local branch after removing the worktree.
-        #[arg(long)]
-        prune_branch: bool,
-    },
-    /// Re-run `.hooks/setup` for a named worktree (or the current cwd).
-    Setup {
-        /// Branch whose worktree to run setup in (defaults to cwd).
-        branch: Option<String>,
-    },
-    /// Drop into an interactive shell inside the worktree.
-    ///
-    /// Spawns `$SHELL` with its cwd set to the worktree path. Exiting that
-    /// shell returns you to your original cwd. Aliases: `enter`, `cd`, `shell`.
-    ///
-    /// To `cd` in the *current* shell instead of spawning a subshell, source
-    /// the wrapper from `sunbeam wt shell-init <shell>` — that turns this
-    /// subcommand into a function that does a real `cd`.
-    #[command(alias = "enter", alias = "shell")]
-    Use {
-        /// Branch whose worktree to enter.
-        branch: String,
-    },
-    /// Print the absolute path of a worktree (for shell wrappers / scripts).
-    Path {
-        /// Branch whose worktree path to print.
-        branch: String,
-    },
-    /// Emit a shell init script that makes `sunbeam wt use` `cd` in the
-    /// current shell instead of spawning a subshell. Source from your rc:
-    /// `eval "$(sunbeam wt shell-init zsh)"`.
-    ShellInit {
-        /// Shell flavor.
-        #[arg(value_enum)]
-        shell: WtShell,
-    },
-    /// Install the shell integration into your rc file (idempotent).
-    ///
-    /// Auto-detects shell from `$SHELL`, picks the matching rc file
-    /// (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`), and appends
-    /// the eval line if not already present. Re-run safely.
-    ShellInstall {
-        /// Shell flavor (default: detect from `$SHELL`).
-        #[arg(long, value_enum)]
-        shell: Option<WtShell>,
-        /// Override the rc file path.
-        #[arg(long)]
-        rc_file: Option<std::path::PathBuf>,
-        /// Print what would be added without writing.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Cherry-pick commits from another worktree's branch into the destination.
-    ///
-    /// Default destination is the current cwd's worktree; override with
-    /// `--into <branch>`. Worktrees share `.git`, so any branch is reachable
-    /// by name — no fetch needed. Refs starting with `~` or `^` and ranges
-    /// without an explicit branch prefix are expanded against `--from`
-    /// (`~3..` → `<from>~3..<from>`, `~3..~1` → `<from>~3..<from>~1`).
-    ///
-    /// Always passes `--signoff` to `git cherry-pick`.
-    #[command(name = "cherry-pick", alias = "pick")]
-    CherryPick {
-        /// Source branch to pick commits from.
-        #[arg(long)]
-        from: String,
-        /// Commit refs or ranges (e.g. `abc123`, `~3..`, `<from>~5..<from>~2`).
-        #[arg(required = true)]
-        refs: Vec<String>,
-        /// Destination worktree branch (default: current cwd's worktree).
-        #[arg(long)]
-        into: Option<String>,
-        /// Edit each commit message before committing (`-e`).
-        #[arg(short = 'e', long)]
-        edit: bool,
-        /// Stage changes but don't commit (`-n`).
-        #[arg(short = 'n', long)]
-        no_commit: bool,
-        /// Append `(cherry picked from commit ...)` to the message (`-x`).
-        #[arg(short = 'x')]
-        annotate: bool,
-        /// Mainline parent number when picking a merge commit.
-        #[arg(short = 'm', long)]
-        mainline: Option<u32>,
-        /// Allow picking into a dirty destination worktree.
-        #[arg(long)]
-        force: bool,
-    },
-}
 
 /// Version control subcommands.
 #[derive(Subcommand, Debug)]
@@ -1002,17 +854,6 @@ pub enum VcsAction {
         name: Option<String>,
     },
 }
-/// Supported shell flavors for worktree integration.
-#[derive(clap::ValueEnum, Debug, Clone, Copy)]
-pub enum WtShell {
-    /// Bash.
-    Bash,
-    /// Zsh.
-    Zsh,
-    /// Fish.
-    Fish,
-}
-
 /// Docker Compose subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ComposeAction {
@@ -1584,7 +1425,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
         Some(Verb::Operations { action }) => crate::operations::cli::dispatch(action).await,
 
-        Some(Verb::Wt { action }) => crate::operations::cli::dispatch_worktree(action).await,
 
         Some(Verb::Build { args }) => {
             crate::project::cli::dispatch(ProjectAction::Build(args)).await

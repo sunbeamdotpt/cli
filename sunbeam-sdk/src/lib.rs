@@ -39,7 +39,7 @@ pub mod manifest_params;
 pub mod manifests;
 /// OpenBao (HashiCorp Vault fork) API client.
 pub mod openbao;
-/// Workspace-level operations (compose, stack, worktree).
+/// Workspace-level operations (compose, stack).
 pub mod operations;
 /// CLI output helpers (tables, JSON, YAML, step banners).
 pub mod output;

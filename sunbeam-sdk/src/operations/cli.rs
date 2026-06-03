@@ -1,6 +1,6 @@
 //! Dispatch for `sunbeam operations` subcommands.
 
-use crate::cli::{ComposeAction, OperationsAction, StackAction, WorktreeAction};
+use crate::cli::{ComposeAction, OperationsAction, StackAction};
 use crate::discovery::{find_workspace_root, WORKSPACE_FILE};
 use crate::error::Result;
 use crate::operations::compose::ComposeOptions;
@@ -21,7 +21,6 @@ pub async fn dispatch(action: OperationsAction) -> Result<()> {
             let (ws, ws_root) = load_workspace().await?;
             dispatch_stack(action, ws, ws_root).await
         }
-        OperationsAction::Worktree { action } => dispatch_worktree(action).await,
         OperationsAction::Info => {
             let (ws, _) = load_workspace().await?;
             print!("{}", serde_yaml::to_string(&ws)?);
@@ -189,148 +188,4 @@ fn print_diff(entries: Vec<crate::operations::stack::StackDiffEntry>) {
     }
 }
 
-/// Dispatch worktree.
-#[tracing::instrument]
-pub async fn dispatch_worktree(action: WorktreeAction) -> Result<()> {
-    tracing::debug!("worktree dispatch: {action:?}");
-    tracing::info!("worktree dispatch: {action:?}");
-    match action {
-        WorktreeAction::New {
-            branch,
-            from,
-            no_setup,
-        } => {
-            let path = crate::operations::worktree::new(
-                &branch,
-                from.as_deref(),
-                !no_setup,
-            )?;
-            tracing::info!("created worktree at {}", path.display());
-            Ok(())
-        }
-        WorktreeAction::List => {
-            let entries = crate::operations::worktree::list()?;
-            print_worktree_table(entries);
-            Ok(())
-        }
-        WorktreeAction::Merge {
-            branch,
-            merge_commit,
-            squash,
-        } => {
-            use crate::operations::worktree::MergeStrategy;
-            let strategy = if squash {
-                MergeStrategy::Squash
-            } else if merge_commit {
-                MergeStrategy::MergeCommit
-            } else {
-                MergeStrategy::Rebase
-            };
-            crate::operations::worktree::merge(&branch, strategy)
-        }
-        WorktreeAction::Rebase { branch, onto } => {
-            crate::operations::worktree::rebase(&branch, onto.as_deref())
-        }
-        WorktreeAction::Rm {
-            branch,
-            force,
-            prune_branch,
-        } => crate::operations::worktree::remove(&branch, force, prune_branch),
-        WorktreeAction::Setup { branch } => {
-            crate::operations::worktree::setup(branch.as_deref())
-        }
-        WorktreeAction::Use { branch } => {
-            crate::operations::worktree::use_shell(&branch)
-        }
-        WorktreeAction::Path { branch } => {
-            let p = crate::operations::worktree::path_of(&branch)?;
-            println!("{}", p.display());
-            Ok(())
-        }
-        WorktreeAction::ShellInit { shell } => {
-            print!("{}", crate::operations::worktree::shell_init_script(shell));
-            Ok(())
-        }
-        WorktreeAction::ShellInstall {
-            shell,
-            rc_file,
-            dry_run,
-        } => crate::operations::worktree::shell_install(
-            shell,
-            rc_file.as_deref(),
-            dry_run,
-        ),
-        WorktreeAction::CherryPick {
-            from,
-            refs,
-            into,
-            edit,
-            no_commit,
-            annotate,
-            mainline,
-            force,
-        } => crate::operations::worktree::cherry_pick(
-            crate::operations::worktree::CherryPickOpts {
-                from: &from,
-                refs: &refs,
-                into: into.as_deref(),
-                edit,
-                no_commit,
-                annotate,
-                mainline,
-                force,
-            },
-        ),
-    }
-}
 
-fn print_worktree_table(entries: Vec<crate::operations::worktree::WorktreeEntry>) {
-    use comfy_table::{Cell, ContentArrangement, Table, presets::UTF8_FULL};
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("NAME").fg(comfy_table::Color::Cyan),
-            Cell::new("PATH").fg(comfy_table::Color::Cyan),
-            Cell::new("STATUS").fg(comfy_table::Color::Cyan),
-        ]);
-    for e in entries {
-        let name = if e.branch.is_empty() {
-            if e.is_detached {
-                "(detached)".to_string()
-            } else if e.is_bare {
-                "(bare)".to_string()
-            } else {
-                "(unknown)".to_string()
-            }
-        } else {
-            e.branch
-        };
-        let mut status_parts: Vec<String> = Vec::new();
-        if e.is_bare {
-            status_parts.push("bare".into());
-        }
-        if e.is_detached {
-            status_parts.push("detached".into());
-        }
-        if e.is_locked {
-            status_parts.push("locked".into());
-        }
-        let status_cell = if e.dirty > 0 {
-            status_parts.push(format!("dirty({})", e.dirty));
-            Cell::new(status_parts.join(", ")).fg(comfy_table::Color::Yellow)
-        } else {
-            if status_parts.is_empty() {
-                status_parts.push("clean".into());
-            }
-            Cell::new(status_parts.join(", "))
-        };
-        table.add_row(vec![
-            Cell::new(name),
-            Cell::new(e.path.display().to_string()),
-            status_cell,
-        ]);
-    }
-    println!("{table}");
-}

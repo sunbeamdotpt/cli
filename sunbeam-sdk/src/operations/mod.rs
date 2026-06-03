@@ -13,9 +13,6 @@ pub mod compose;
 pub mod config;
 /// Stack.
 pub mod stack;
-/// Worktree.
-pub mod worktree;
-
 pub use config::{
     Repo, RepoBucket, RepoEntry, Repos, Stack, WorkspaceConfig, WorkspaceMeta, SCHEMA_VERSION,
 };
