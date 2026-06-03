@@ -33,6 +33,8 @@ pub mod exec;
 pub mod kube;
 /// Unified tracing-based logging subsystem.
 pub mod logging;
+/// Structured logger with inherited fields.
+pub mod logger;
 /// Runtime manifest parameter discovery and override application.
 pub mod manifest_params;
 /// Kustomize build, apply, and namespace filtering.

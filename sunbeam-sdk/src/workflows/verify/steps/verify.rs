@@ -5,6 +5,7 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 use crate::openbao::BaoClient;
+use crate::info;
 
 use crate::secrets;
 use crate::workflows::data::VerifyData;
@@ -125,15 +126,24 @@ impl StepBody for WriteSentinel {
 // ── ApplyVaultAuth ─────────────────────────────────────────────────────────
 
 /// Create the VaultAuth CRD for the test.
-#[derive(Default)]
-pub struct ApplyVaultAuth;
+pub struct ApplyVaultAuth {
+    logger: crate::logger::Logger,
+}
+
+impl Default for ApplyVaultAuth {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultAuth {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("apply_vault_auth");
-        tracing::info!("Creating VaultAuth {TEST_NS}/{TEST_NAME}...");
-        k::kube_apply(&format!(
+        let logger = &self.logger;
+        info!(logger, "Creating VaultAuth", namespace = TEST_NS, name = TEST_NAME);
+        k::kube_apply(logger, &format!(
             r#"
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultAuth
@@ -158,15 +168,24 @@ spec:
 // ── ApplyVaultStaticSecret ─────────────────────────────────────────────────
 
 /// Create the VaultStaticSecret CRD that VSO will sync.
-#[derive(Default)]
-pub struct ApplyVaultStaticSecret;
+pub struct ApplyVaultStaticSecret {
+    logger: crate::logger::Logger,
+}
+
+impl Default for ApplyVaultStaticSecret {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for ApplyVaultStaticSecret {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("apply_vault_static_secret");
-        tracing::info!("Creating VaultStaticSecret {TEST_NS}/{TEST_NAME}...");
-        k::kube_apply(&format!(
+        let logger = &self.logger;
+        info!(logger, "Creating VaultStaticSecret", namespace = TEST_NS, name = TEST_NAME);
+        k::kube_apply(logger, &format!(
             r#"
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultStaticSecret
@@ -403,12 +422,12 @@ mod tests {
 
     #[test]
     fn apply_vault_auth_is_default() {
-        let _ = ApplyVaultAuth;
+        let _ = ApplyVaultAuth::default();
     }
 
     #[test]
     fn apply_vault_static_secret_is_default() {
-        let _ = ApplyVaultStaticSecret;
+        let _ = ApplyVaultStaticSecret::default();
     }
 
     #[test]

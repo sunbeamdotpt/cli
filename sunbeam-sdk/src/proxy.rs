@@ -6,6 +6,7 @@
 //! independently.
 
 use crate::error::{Result, ResultExt, SunbeamError};
+use crate::{debug, info};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -17,8 +18,11 @@ use crate::error::{Result, ResultExt, SunbeamError};
 /// The template file lives at
 /// `<infra_dir>/base/build/image-puller-job.template.yaml` and uses the
 /// literal string `IMAGE_REF` as the substitution target.
-#[tracing::instrument]
-pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()> {
+pub async fn cmd_preseed_image(
+    logger: &crate::logger::Logger,
+    image_ref: &str,
+    timeout_secs: u64,
+) -> Result<()> {
     let infra_dir = crate::config::get_infra_dir();
     let template_path = infra_dir
         .join("base")
@@ -35,14 +39,14 @@ pub async fn cmd_preseed_image(image_ref: &str, timeout_secs: u64) -> Result<()>
     // Delete any previous run of this Job so the apply is idempotent.
     delete_puller_job_if_exists().await;
 
-    tracing::info!("Applying image-puller Job for {image_ref}...");
-    crate::kube::kube_apply(&manifest).await?;
+    info!(logger, "Applying image-puller Job", image_ref = image_ref);
+    crate::kube::kube_apply(logger, &manifest).await?;
 
-    tracing::info!("Job applied — waiting for completion...");
+    info!(logger, "Job applied — waiting for completion...");
     wait_for_job("build", "proxy-image-puller", timeout_secs).await?;
 
-    tracing::info!("Node has pulled {image_ref}.");
-    tracing::debug!("preseed_image completed in {timeout_secs}s");
+    info!(logger, "Node has pulled image", image_ref = image_ref);
+    debug!(logger, "preseed_image completed", timeout_secs = timeout_secs);
     Ok(())
 }
 

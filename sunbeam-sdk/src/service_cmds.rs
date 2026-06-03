@@ -5,6 +5,8 @@
 
 use crate::cli::{SecretsAction, ServiceAction};
 use crate::error::{Result, SunbeamError};
+use crate::logger::{Logger, TracingSink};
+use crate::{debug, info};
 use tracing::Instrument;
 use crate::registry::{self, ServiceRegistry};
 
@@ -133,9 +135,8 @@ async fn build_profile_context(
 }
 
 /// Top-level dispatcher for `sunbeam service <action>`.
-#[tracing::instrument]
-pub async fn dispatch(action: ServiceAction) -> Result<()> {
-    tracing::debug!("service dispatch: action={action:?}");
+pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> Result<()> {
+    debug!(logger, "service dispatch", action = format!("{:?}", action));
     match action {
         ServiceAction::Status { target } => crate::services::cmd_status(target.as_deref()).await,
         ServiceAction::Logs { target, follow } => crate::services::cmd_logs(&target, follow).await,
@@ -145,7 +146,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
         ServiceAction::Deploy { target, all, profile } => match target {
             Some(t) if !all => {
                 let span = tracing::info_span!("deploy", target = %t);
-                cmd_deploy(&t, profile).instrument(span).await
+                cmd_deploy(logger, &t, profile).instrument(span).await
             }
             _ => {
                 let (maybe_profile, overrides, skip_namespaces) =
@@ -160,7 +161,7 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
                     skip_namespaces,
                     ..Default::default()
                 };
-                crate::manifests::apply_manifests(&opts).await?;
+                crate::manifests::apply_manifests(logger, &opts).await?;
                 Ok(())
             }
         },
@@ -188,11 +189,12 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
 
             if !dry_run && ns.is_empty() && !apply_all {
                 if skip_namespaces.is_empty() {
-                    tracing::warn!("This will apply ALL namespaces.");
+                    info!(logger, "This will apply ALL namespaces.");
                 } else {
-                    tracing::warn!(
-                        "This will apply all namespaces except: {}",
-                        skip_namespaces.join(", ")
+                    info!(
+                        logger,
+                        "This will apply all namespaces except",
+                        namespaces = skip_namespaces.join(", ")
                     );
                 }
                 eprint!("  Continue? [y/N] ");
@@ -212,14 +214,14 @@ pub async fn dispatch(action: ServiceAction) -> Result<()> {
                 domain: None,
                 skip_namespaces,
             };
-            let rendered = crate::manifests::apply_manifests(&opts).await?;
+            let rendered = crate::manifests::apply_manifests(logger, &opts).await?;
             if dry_run {
                 print!("{rendered}");
             }
             Ok(())
         }
         ServiceAction::Seed => {
-            tracing::warn!("`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
+            info!(logger, "`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
             Ok(())
         }
         ServiceAction::Verify => {
@@ -356,7 +358,11 @@ async fn cmd_list(format: crate::output::OutputFormat) -> Result<()> {
 }
 
 /// Deploy service(s) by name, category, or namespace.
-async fn cmd_deploy(target: &str, profile_flag: Option<String>) -> Result<()> {
+async fn cmd_deploy(
+    logger: &crate::logger::Logger,
+    target: &str,
+    profile_flag: Option<String>,
+) -> Result<()> {
     let (maybe_profile, overrides, skip_namespaces) =
         build_profile_context(profile_flag, &[], &[], &[]).await?;
     let reg = get_registry().await?;
@@ -387,12 +393,12 @@ async fn cmd_deploy(target: &str, profile_flag: Option<String>) -> Result<()> {
         }
     }
 
-    // Warn about skipped services
+    // Info about skipped services
     if !skip_namespaces.is_empty() {
         let all_resolved = reg.resolve(target);
         let skipped_count = all_resolved.len() - resolved.len();
         if skipped_count > 0 {
-            tracing::warn!("Skipped {skipped_count} service(s) in excluded namespaces");
+            info!(logger, "Skipped services in excluded namespaces", count = skipped_count);
         }
     }
 
@@ -401,24 +407,24 @@ async fn cmd_deploy(target: &str, profile_flag: Option<String>) -> Result<()> {
     namespaces.dedup();
 
     for ns in &namespaces {
-        tracing::info!("Applying manifests for {ns}...");
+        info!(logger, "Applying manifests for namespace", namespace = ns);
         let opts = crate::manifests::ApplyOptions {
             namespace: ns.to_string(),
             overrides: Some(overrides.clone()),
             skip_namespaces: skip_namespaces.clone(),
             ..Default::default()
         };
-        crate::manifests::apply_manifests(&opts).await?;
+        crate::manifests::apply_manifests(logger, &opts).await?;
     }
 
     for svc in &resolved {
         for deploy in &svc.deployments {
-            tracing::info!("Restarting {}/{}...", svc.namespace, deploy);
+            info!(logger, "Restarting deployment", namespace = svc.namespace.as_str(), deployment = deploy.as_str());
             crate::kube::kube_rollout_restart(&svc.namespace, deploy).await?;
         }
     }
 
-    tracing::info!("Deploy complete.");
+    info!(logger, "Deploy complete.");
     Ok(())
 }
 

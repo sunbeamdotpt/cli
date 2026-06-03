@@ -1,6 +1,7 @@
 //! Kubernetes client initialization and manifest operations.
 
 use crate::error::{Result, ResultExt, SunbeamError};
+use crate::{debug, error, info};
 use base64::Engine;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
@@ -155,8 +156,7 @@ fn job_spec_hash(doc_json: &serde_json::Value) -> String {
 ///    applying so the new spec takes effect (Jobs are immutable once created).
 /// 4. After a successful apply, patch the annotation onto the Job so future
 ///    runs can detect whether a re-apply is actually needed.
-#[tracing::instrument(skip(manifest))]
-pub async fn kube_apply(manifest: &str) -> Result<()> {
+pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Result<()> {
     // Throttle concurrent manifest applications to protect single-node
     // k3s from being overwhelmed (especially SQLite-backed control planes).
     let _permit = apply_semaphore()
@@ -178,10 +178,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
         .await
         .unwrap_or_default();
     if !broken_groups.is_empty() {
-        tracing::info!(
-            "Excluding broken API groups from discovery: {}",
-            broken_groups.join(", ")
-        );
+        info!(logger, "Excluding broken API groups from discovery", groups = broken_groups.join(", "));
     }
 
     let mut disc = None;
@@ -195,7 +192,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
                 break;
             }
             Err(e) => {
-                tracing::warn!("API discovery attempt {attempt} failed: {e}");
+                error!(logger, "API discovery attempt failed", attempt = attempt, error = e);
                 last_err = Some(e);
                 if attempt < 20 {
                     // Exponential backoff capped at 10 s — total wait ~130 s.
@@ -237,11 +234,16 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 
     // Pass 1: apply CRDs
     for doc in &crd_docs {
-        match apply_one_doc(&client, &ssapply, &disc, doc).await {
+        let summary = doc_summary(doc);
+        info!(logger, "Applying CRD", summary = summary);
+        match apply_one_doc(logger, &client, &ssapply, &disc, doc).await {
             Ok(name) if !name.is_empty() => {
-                tracing::info!("  Applied {name}");
+                info!(logger, "Applied CRD", name = name);
             }
-            Err(e) => errors.push(e),
+            Err(e) => {
+                error!(logger, "Failed to apply CRD", summary = summary, error = e);
+                errors.push(e);
+            }
             _ => {}
         }
     }
@@ -250,7 +252,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
     // Even on fast baremetal, etcd propagation + API server endpoint
     // registration can take >2 s. We wait 5 s before refreshing discovery.
     if !crd_docs.is_empty() {
-        tracing::info!("CRDs applied — refreshing API discovery in 5s...");
+        info!(logger, "CRDs applied — refreshing API discovery in 5s...");
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         match discovery::Discovery::new(client.clone())
             .exclude(&broken_groups.iter().map(|s| s.as_str()).collect::<Vec<_>>())
@@ -289,7 +291,11 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
             }
         }
     }
+    if !seen_ns.is_empty() {
+        info!(logger, "Ensuring namespaces", namespaces = seen_ns.iter().cloned().collect::<Vec<_>>().join(", "));
+    }
     for ns in seen_ns {
+        debug!(logger, "Ensuring namespace", namespace = ns);
         ns_api
             .patch(
                 &ns,
@@ -310,32 +316,41 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
     // register even after discovery refresh. Retry on both webhook errors
     // and 404s (which usually mean the API endpoint isn't ready yet).
     for doc in &other_docs {
+        let summary = doc_summary(doc);
+        info!(logger, "Applying", summary = summary);
         let mut last_err = None;
         for attempt in 0..12 {
-            match apply_one_doc(&client, &ssapply, &disc, doc).await {
+            match apply_one_doc(logger, &client, &ssapply, &disc, doc).await {
                 Ok(name) => {
                     if !name.is_empty() {
-                        tracing::info!("  Applied {name}");
+                        info!(logger, "Applied", name = name);
                     }
                     last_err = None;
                     break;
                 }
                 Err(e) if is_retryable_error(&e) && attempt < 11 => {
                     if is_404_error(&e) {
-                        tracing::info!(
-                            "API endpoint not ready for doc (attempt {}): {e}. Retrying in 10s...",
-                            attempt + 1
+                        info!(
+                            logger,
+                            "API endpoint not ready — retrying in 10s",
+                            summary = summary,
+                            attempt = attempt + 1,
+                            error = e
                         );
                     } else {
-                        tracing::info!(
-                            "Webhook not ready for doc (attempt {}): {e}. Retrying in 10s...",
-                            attempt + 1
+                        info!(
+                            logger,
+                            "Webhook not ready — retrying in 10s",
+                            summary = summary,
+                            attempt = attempt + 1,
+                            error = e
                         );
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     last_err = Some(e);
                 }
                 Err(e) => {
+                    error!(logger, "Failed to apply", summary = summary, error = e);
                     last_err = Some(e);
                     break;
                 }
@@ -360,6 +375,7 @@ pub async fn kube_apply(manifest: &str) -> Result<()> {
 /// Apply a single YAML document using pre-built discovery.
 /// Returns a display string like "ingress/ConfigMap/pingora-config" on success.
 async fn apply_one_doc(
+    logger: &crate::logger::Logger,
     client: &Client,
     ssapply: &PatchParams,
     disc: &discovery::Discovery,
@@ -379,7 +395,7 @@ async fn apply_one_doc(
         .and_then(|m| m.get("namespace"))
         .and_then(|v| v.as_str());
 
-    tracing::debug!("kube_apply {kind}/{name} namespace={namespace:?}");
+    debug!(logger, "kube_apply", api_version = api_version, kind = kind, name = name, namespace = format!("{:?}", namespace));
 
     if name.is_empty() || kind.is_empty() {
         return Ok(String::new()); // skip incomplete documents
@@ -406,8 +422,11 @@ async fn apply_one_doc(
                 .unwrap_or("");
 
             if live_hash != new_hash {
-                tracing::info!(
-                    "Job {job_ns}/{name} spec changed — deleting before re-apply..."
+                info!(
+                    logger,
+                    "Job spec changed — deleting before re-apply",
+                    namespace = job_ns,
+                    name = name
                 );
                 let dp = DeleteParams::default();
                 let _ = jobs.delete(name, &dp).await;
@@ -526,6 +545,30 @@ fn is_404_error(err: &str) -> bool {
 /// True for errors we should retry rather than fail immediately.
 fn is_retryable_error(err: &str) -> bool {
     is_webhook_error(err) || is_404_error(err)
+}
+
+/// Extract a human-readable summary from a YAML document for logging.
+/// Returns strings like `Deployment/nginx (namespace=default)` or
+/// `ClusterRole/my-role`.
+fn doc_summary(doc: &str) -> String {
+    let obj: serde_yaml::Value = match serde_yaml::from_str(doc) {
+        Ok(v) => v,
+        Err(_) => return "(unparseable document)".to_string(),
+    };
+    let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+    let name = obj
+        .get("metadata")
+        .and_then(|m| m.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let ns = obj
+        .get("metadata")
+        .and_then(|m| m.get("namespace"))
+        .and_then(|v| v.as_str());
+    match ns {
+        Some(ns) => format!("{kind}/{name} (namespace={ns})"),
+        None => format!("{kind}/{name}"),
+    }
 }
 
 /// Resolve an API resource from apiVersion and kind using a pre-built discovery.

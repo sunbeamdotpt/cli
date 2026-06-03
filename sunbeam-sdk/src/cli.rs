@@ -1095,7 +1095,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         Some(Verb::Service { action }) => {
-            crate::service_cmds::dispatch(action).await
+            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+            crate::service_cmds::dispatch(&logger, action).await
         }
 
         Some(Verb::Config { action }) => match action {

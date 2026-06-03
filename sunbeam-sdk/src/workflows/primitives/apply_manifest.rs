@@ -6,6 +6,9 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
+use crate::logger::{Logger, TracingSink};
+use crate::info;
+
 /// Global mutex that serializes ApplyManifest steps when running in serial mode.
 /// Single-node k3s cannot handle the pod-startup storm from many
 /// namespaces applied in parallel, even with a kube_apply semaphore.
@@ -71,11 +74,21 @@ fn stagger_millis_for(name: &str) -> u64 {
 ///
 /// Domain/email are taken from `config::active_context()` (resolved once at
 /// the CLI boundary). Overrides are read from `workflow.data.manifest_overrides`.
-#[derive(Default)]
-pub struct ApplyManifest;
+pub struct ApplyManifest {
+    logger: Logger,
+}
+
+impl Default for ApplyManifest {
+    fn default() -> Self {
+        Self {
+            logger: Logger::new(TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for ApplyManifest {
+    #[tracing::instrument(skip(self, ctx), fields(step = "ApplyManifest"))]
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let config = ctx
             .step
@@ -106,7 +119,8 @@ impl StepBody for ApplyManifest {
             .unwrap_or_default();
 
         if skip_namespaces.contains(&namespace.to_string()) {
-            tracing::info!("Skipping {namespace} namespace apply (profile skip list)");
+            self.logger
+                .info(&format!("Skipping {namespace} namespace apply (profile skip list)"), &[]);
             return Ok(ExecutionResult::next());
         }
 
@@ -129,7 +143,8 @@ impl StepBody for ApplyManifest {
 
         let _serial_guard = if serial_mode {
             let lock = SERIAL_APPLY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-            tracing::info!("Applying {namespace} (serial mode)...");
+            self.logger
+                .info(&format!("Applying {namespace} (serial mode)..."), &[]);
             let guard = lock.lock().await;
             // Give single-node k3s a moment to breathe between namespace
             // applications — pod startup storms from previous namespaces can
@@ -145,10 +160,12 @@ impl StepBody for ApplyManifest {
             // Stagger parallel steps to avoid thundering-herd against k3s API.
             let stagger = stagger_millis_for(namespace);
             if stagger > 0 {
-                tracing::info!("Applying {namespace} (staggering {stagger}ms)...");
+                self.logger
+                    .info(&format!("Applying {namespace} (staggering {stagger}ms)..."), &[]);
                 tokio::time::sleep(std::time::Duration::from_millis(stagger)).await;
             } else {
-                tracing::info!("Applying {namespace}...");
+                self.logger
+                    .info(&format!("Applying {namespace}..."), &[]);
             }
             None
         };
@@ -157,12 +174,13 @@ impl StepBody for ApplyManifest {
         // become unresponsive when many namespaces are applied in parallel.
         let mut last_err = None;
         for attempt in 1..=5 {
-            match crate::manifests::apply_manifests(&opts).await {
+            match crate::manifests::apply_manifests(&self.logger, &opts).await {
                 Ok(_) => {
                     if attempt > 1 {
-                        tracing::info!("Applied {namespace} on attempt {attempt}");
+                        self.logger
+                            .info(&format!("Applied {namespace} on attempt {attempt}"), &[]);
                     } else {
-                        tracing::info!(msg = "Manifests applied.", namespace = %namespace);
+                        info!(self.logger, "Manifests applied.", namespace = namespace);
                     }
                     return Ok(ExecutionResult::next());
                 }
@@ -173,8 +191,11 @@ impl StepBody for ApplyManifest {
                             break;
                         }
                         let backoff = 1u64 << attempt; // 2, 4, 8, 16 s
-                        tracing::warn!(
-                            "Apply {namespace} attempt {attempt} failed (transient), retrying in {backoff}s..."
+                        self.logger.info(
+                            &format!(
+                                "Apply {namespace} attempt {attempt} failed (transient), retrying in {backoff}s..."
+                            ),
+                            &[],
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                     }
@@ -196,7 +217,7 @@ mod tests {
 
     #[test]
     fn apply_manifest_is_default() {
-        let _ = ApplyManifest;
+        let _ = ApplyManifest::default();
     }
 
     #[test]

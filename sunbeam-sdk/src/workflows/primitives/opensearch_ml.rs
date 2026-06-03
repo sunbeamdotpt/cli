@@ -5,6 +5,7 @@
 
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
+use crate::info;
 
 
 
@@ -28,15 +29,25 @@ impl StepBody for EnsureOpenSearchML {
 /// Inject the OpenSearch model_id into the matrix/opensearch-ml-config ConfigMap.
 ///
 /// Should run after both the ML model is deployed AND matrix manifests are applied.
-#[derive(Default)]
-pub struct InjectOpenSearchModelId;
+pub struct InjectOpenSearchModelId {
+    logger: crate::logger::Logger,
+}
+
+impl Default for InjectOpenSearchModelId {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for InjectOpenSearchModelId {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::info!(msg = "Injecting OpenSearch model ID...");
-        crate::manifests::inject_opensearch_model_id().await;
-        tracing::info!(msg = "OpenSearch model ID injected.");
+        let logger = &self.logger;
+        info!(logger, "Injecting OpenSearch model ID...");
+        crate::manifests::inject_opensearch_model_id(logger).await;
+        info!(logger, "OpenSearch model ID injected.");
         Ok(ExecutionResult::next())
     }
 }
@@ -52,6 +63,6 @@ mod tests {
 
     #[test]
     fn inject_opensearch_model_id_is_default() {
-        let _ = InjectOpenSearchModelId;
+        let _ = InjectOpenSearchModelId::default();
     }
 }

@@ -44,8 +44,9 @@ pub async fn dispatch(action: ProjectAction) -> Result<()> {
 }
 
 async fn cmd_preseed_image(image_ref: &str, timeout: u64) -> Result<()> {
+    let logger = crate::logger::Logger::new(crate::logger::TracingSink);
     // 1. Apply the puller Job and wait for the node pull to complete.
-    crate::proxy::cmd_preseed_image(image_ref, timeout).await?;
+    crate::proxy::cmd_preseed_image(&logger, image_ref, timeout).await?;
 
     // 2. Extract the tag from the image ref and bump the kustomization.
     let tag = image_ref.rsplit(':').next().unwrap_or(image_ref);

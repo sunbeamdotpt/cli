@@ -1,6 +1,7 @@
 //! Kustomize build, apply, and namespace filtering.
 
 use crate::error::{Result, ResultExt};
+use crate::{debug, error, info};
 
 /// Return only the YAML documents that belong to the given namespace.
 ///
@@ -145,8 +146,7 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
 ///
 /// Domain and email are read from `config::active_context()`, which is
 /// guaranteed to be fully resolved by the time this is called.
-#[tracing::instrument(skip(opts))]
-pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
+pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions) -> Result<String> {
     let ctx = crate::config::active_context();
     let resolved_domain = opts
         .domain
@@ -167,7 +167,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     } else {
         format!(" [{namespace}]")
     };
-    tracing::info!("Applying manifests (domain: {resolved_domain}){scope}...");
+    info!(logger, "Applying manifests", domain = resolved_domain, scope = scope);
 
     // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
     clean_partial_chart_extracts(&infra_dir);
@@ -185,7 +185,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
     if !namespace.is_empty() {
         manifests = filter_by_namespace(&manifests, namespace, &opts.skip_patterns);
         if manifests.trim().is_empty() {
-            tracing::warn!("No resources found for namespace '{namespace}' -- check the name and try again.");
+            error!(logger, "No resources found for namespace -- check the name and try again", namespace = namespace);
             return Ok(String::new());
         }
     }
@@ -203,7 +203,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
 
     let before = snapshot_configmaps().await;
 
-    crate::kube::kube_apply(&manifests).await?;
+    crate::kube::kube_apply(logger, &manifests).await?;
 
     // If cert-manager is in the overlay, wait for its webhook then re-apply
     let cert_manager_present = overlay.join("../../base/cert-manager").exists();
@@ -212,13 +212,13 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
         && namespace.is_empty()
         && wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await
     {
-        tracing::info!("Running convergence pass for cert-manager resources...");
+        info!(logger, "Running convergence pass for cert-manager resources...");
         let mut manifests2 =
             crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
         if let Some(ov) = &opts.overrides {
             manifests2 = crate::manifest_params::apply_overrides(&manifests2, ov)?;
         }
-        crate::kube::kube_apply(&manifests2).await?;
+        crate::kube::kube_apply(logger, &manifests2).await?;
     }
 
     restart_for_changed_configmaps(&before, &snapshot_configmaps().await).await;
@@ -228,7 +228,7 @@ pub async fn apply_manifests(opts: &ApplyOptions) -> Result<String> {
         patch_tuwunel_oauth2_redirect(resolved_domain).await;
     }
 
-    tracing::info!("Applied.");
+    info!(logger, "Applied.");
     Ok(manifests)
 }
 
@@ -616,14 +616,14 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
 }
 
 /// Inject OpenSearch model_id into matrix/opensearch-ml-config ConfigMap.
-#[tracing::instrument]
-pub async fn inject_opensearch_model_id() {
+pub async fn inject_opensearch_model_id(logger: &crate::logger::Logger) {
     let pipe_resp = match os_api("/_ingest/pipeline/tuwunel_embedding_pipeline", "GET", None).await
     {
         Some(r) => r,
         None => {
-            tracing::warn!(
-                "OpenSearch ingest pipeline not found -- skipping model_id injection.",
+            info!(
+                logger,
+                "OpenSearch ingest pipeline not found -- skipping model_id injection",
             );
             return;
         }
@@ -645,7 +645,7 @@ pub async fn inject_opensearch_model_id() {
         });
 
     let Some(model_id) = model_id else {
-        tracing::warn!("No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
+        info!(logger, "No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
         return;
     };
 
@@ -665,11 +665,13 @@ pub async fn inject_opensearch_model_id() {
     });
 
     let manifest = serde_json::to_string(&cm).unwrap_or_default();
-    if let Err(e) = crate::kube::kube_apply(&manifest).await {
-        tracing::warn!("Failed to inject OpenSearch model_id: {e}");
+    if let Err(e) = crate::kube::kube_apply(logger, &manifest).await {
+        info!(logger, "Failed to inject OpenSearch model_id", error = e);
     } else {
-        tracing::info!(
-            "Injected OpenSearch model_id ({model_id}) into matrix/opensearch-ml-config."
+        info!(
+            logger,
+            "Injected OpenSearch model_id into matrix/opensearch-ml-config",
+            model_id = model_id
         );
     }
 }
