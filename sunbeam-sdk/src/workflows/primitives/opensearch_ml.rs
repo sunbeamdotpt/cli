@@ -18,9 +18,9 @@ pub struct EnsureOpenSearchML;
 #[async_trait::async_trait]
 impl StepBody for EnsureOpenSearchML {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("opensearch_ml");
-        tracing::info!("OpenSearch ML model...");
+        tracing::info!(msg = "Ensuring OpenSearch ML model...");
         crate::manifests::ensure_opensearch_ml().await;
+        tracing::info!(msg = "OpenSearch ML model ready.");
         Ok(ExecutionResult::next())
     }
 }
@@ -34,9 +34,9 @@ pub struct InjectOpenSearchModelId;
 #[async_trait::async_trait]
 impl StepBody for InjectOpenSearchModelId {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("opensearch_ml");
-        tracing::info!("OpenSearch model ID injection...");
+        tracing::info!(msg = "Injecting OpenSearch model ID...");
         crate::manifests::inject_opensearch_model_id().await;
+        tracing::info!(msg = "OpenSearch model ID injected.");
         Ok(ExecutionResult::next())
     }
 }

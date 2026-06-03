@@ -24,11 +24,11 @@ pub struct PrintURLs;
 #[async_trait::async_trait]
 impl StepBody for PrintURLs {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("print_urls");
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
         let domain = resolve_domain(&data);
+        tracing::info!(msg = "Stack is up.", domain = %domain);
 
         let sep = "\u{2500}".repeat(60);
         println!("\n{sep}");

@@ -34,6 +34,7 @@ impl StepBody for WriteKVPath {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping KV write (skip_seed).");
             return Ok(ExecutionResult::next());
         }
 
@@ -46,7 +47,7 @@ impl StepBody for WriteKVPath {
             .get("service")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WriteKVPath: missing service"))?;
-        tracing::debug!("write_kv_path {service}");
+        tracing::info!(msg = "Writing KV path...", service = %service);
 
         let dirty_key = format!("dirty_{service}");
         let is_dirty = data

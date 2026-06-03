@@ -46,6 +46,7 @@ impl StepBody for CreateK8sSecret {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping K8s secret creation (skip_seed).");
             return Ok(ExecutionResult::next());
         }
 
@@ -88,11 +89,12 @@ impl StepBody for CreateK8sSecret {
             secret_data.insert(secret_key.clone(), value);
         }
 
+        tracing::info!(msg = "Creating K8s secret...", namespace = %namespace, name = %name);
         k::create_secret(namespace, name, secret_data)
             .await
             .map_err(|e| step_err(format!("CreateK8sSecret({namespace}/{name}): {e}")))?;
 
-        tracing::info!("K8s secret: {namespace}/{name}");
+        tracing::info!(msg = "K8s secret created.", namespace = %namespace, name = %name);
         Ok(ExecutionResult::next())
     }
 }

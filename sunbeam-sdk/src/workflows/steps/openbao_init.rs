@@ -82,13 +82,18 @@ impl StepBody for WaitPodRunning {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping OpenBao pod wait (skip_seed).");
             return Ok(ExecutionResult::next());
         }
 
         let ob_pod = match ctx.workflow.data.get("ob_pod").and_then(|v| v.as_str()) {
             Some(p) => p.to_string(),
-            None => return Ok(ExecutionResult::next()),
+            None => {
+                tracing::info!(msg = "Skipping OpenBao pod wait (no ob_pod).");
+                return Ok(ExecutionResult::next());
+            }
         };
+        tracing::info!(msg = "Waiting for OpenBao pod...", pod = %ob_pod);
 
         // Ensure openbao-keys secret exists (even as placeholder) so the pod
         // can mount it. InitOrUnsealOpenBao will overwrite with real values.
@@ -104,6 +109,7 @@ impl StepBody for WaitPodRunning {
         }
 
         let _ = secrets::wait_pod_running("data", &ob_pod, 300).await;
+        tracing::info!(msg = "OpenBao pod is running.", pod = %ob_pod);
 
         Ok(ExecutionResult::next())
     }

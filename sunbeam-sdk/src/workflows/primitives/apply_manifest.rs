@@ -158,6 +158,8 @@ impl StepBody for ApplyManifest {
                 Ok(_) => {
                     if attempt > 1 {
                         tracing::info!("Applied {namespace} on attempt {attempt}");
+                    } else {
+                        tracing::info!(msg = "Manifests applied.", namespace = %namespace);
                     }
                     return Ok(ExecutionResult::next());
                 }

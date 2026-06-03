@@ -52,9 +52,11 @@ impl StepBody for EnableVaultAuth {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
         if should_skip(data) {
+            tracing::info!(msg = "Skipping vault auth enable (skip_seed).");
             return Ok(ExecutionResult::next());
         }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
+            tracing::info!(msg = "Skipping vault auth enable (missing ob_pod or root_token).");
             return Ok(ExecutionResult::next());
         }
 
@@ -89,9 +91,11 @@ impl StepBody for WriteVaultAuthConfig {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
         if should_skip(data) {
+            tracing::info!(msg = "Skipping vault auth config (skip_seed).");
             return Ok(ExecutionResult::next());
         }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
+            tracing::info!(msg = "Skipping vault auth config (missing ob_pod or root_token).");
             return Ok(ExecutionResult::next());
         }
 
@@ -130,9 +134,11 @@ impl StepBody for WriteVaultPolicy {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
         if should_skip(data) {
+            tracing::info!(msg = "Skipping vault policy write (skip_seed).");
             return Ok(ExecutionResult::next());
         }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
+            tracing::info!(msg = "Skipping vault policy write (missing ob_pod or root_token).");
             return Ok(ExecutionResult::next());
         }
 
@@ -172,9 +178,11 @@ impl StepBody for WriteVaultRole {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let data = &ctx.workflow.data;
         if should_skip(data) {
+            tracing::info!(msg = "Skipping vault role write (skip_seed).");
             return Ok(ExecutionResult::next());
         }
         if get_str(data, "ob_pod").is_none() || get_str(data, "root_token").is_none() {
+            tracing::info!(msg = "Skipping vault role write (missing ob_pod or root_token).");
             return Ok(ExecutionResult::next());
         }
 

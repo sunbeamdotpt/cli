@@ -28,9 +28,11 @@ impl StepBody for EnsureNamespace {
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("EnsureNamespace: missing namespace in step_config"))?;
 
+        tracing::info!(msg = "Ensuring namespace...", namespace = %namespace);
         k::ensure_ns(namespace)
             .await
             .map_err(|e| step_err(format!("EnsureNamespace({namespace}): {e}")))?;
+        tracing::info!(msg = "Namespace ready.", namespace = %namespace);
 
         Ok(ExecutionResult::next())
     }

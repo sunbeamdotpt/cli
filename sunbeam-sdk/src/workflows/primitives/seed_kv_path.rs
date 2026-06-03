@@ -77,6 +77,7 @@ impl StepBody for SeedKVPath {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping KV seed (skip_seed).");
             return Ok(ExecutionResult::next());
         }
 
@@ -98,7 +99,7 @@ impl StepBody for SeedKVPath {
             .get("service")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("SeedKVPath: missing service"))?;
-        tracing::debug!("seed_kv_path {service}");
+        tracing::info!(msg = "Seeding KV path...", service = %service);
         let fields = config
             .get("fields")
             .and_then(|v| v.as_array())

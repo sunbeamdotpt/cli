@@ -65,7 +65,6 @@ pub struct CollectCredentials;
 #[async_trait::async_trait]
 impl StepBody for CollectCredentials {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("collect_credentials");
         let data = &ctx.workflow.data;
 
         if data
@@ -73,8 +72,10 @@ impl StepBody for CollectCredentials {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping credential collection (skip_seed).");
             return Ok(ExecutionResult::next());
         }
+        tracing::info!(msg = "Collecting credentials...");
 
         let mut creds: HashMap<String, String> = HashMap::new();
         let mut dirty_paths: Vec<String> = Vec::new();

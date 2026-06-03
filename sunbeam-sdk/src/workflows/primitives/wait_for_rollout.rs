@@ -65,6 +65,7 @@ impl StepBody for WaitForRollout {
         crate::cluster::wait_rollout(namespace, deployment, timeout_secs)
             .await
             .map_err(|e| step_err(format!("WaitForRollout({namespace}/{deployment}): {e}")))?;
+        tracing::info!(msg = "Rollout complete.", namespace = %namespace, deployment = %deployment);
 
         Ok(ExecutionResult::next())
     }

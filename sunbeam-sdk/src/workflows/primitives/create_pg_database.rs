@@ -31,12 +31,16 @@ impl StepBody for CreatePGDatabase {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::info!(msg = "Skipping PG database creation (skip_seed).");
             return Ok(ExecutionResult::next());
         }
 
         let pg_pod = match data.get("pg_pod").and_then(|v| v.as_str()) {
             Some(p) if !p.is_empty() => p,
-            _ => return Ok(ExecutionResult::next()),
+            _ => {
+                tracing::info!(msg = "Skipping PG database creation (no pg_pod).");
+                return Ok(ExecutionResult::next());
+            }
         };
 
         let config = ctx

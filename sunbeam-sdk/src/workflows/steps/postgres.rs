@@ -150,12 +150,13 @@ pub struct ConfigureDatabaseEngine;
 #[async_trait::async_trait]
 impl StepBody for ConfigureDatabaseEngine {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        tracing::debug!("configure_db_engine");
         let data = &ctx.workflow.data;
 
         if json_bool(data, "skip_seed") {
+            tracing::info!(msg = "Skipping DB engine config (skip_seed).");
             return Ok(ExecutionResult::next());
         }
+        tracing::info!(msg = "Configuring OpenBao database engine...");
 
         let _pg_pod = match json_str(data, "pg_pod") {
             Some(p) if !p.is_empty() => p,
@@ -186,6 +187,7 @@ impl StepBody for ConfigureDatabaseEngine {
         secrets::configure_db_engine(&bao)
             .await
             .map_err(|e| step_err(format!("DB engine config failed: {e}")))?;
+        tracing::info!(msg = "OpenBao database engine configured.");
 
         Ok(ExecutionResult::next())
     }
