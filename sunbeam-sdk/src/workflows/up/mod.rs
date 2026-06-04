@@ -4,7 +4,6 @@ pub mod definition;
 /// Steps.
 pub mod steps;
 
-use crate::output;
 use crate::info;
 
 /// Register all up workflow steps and the workflow definition with a host.

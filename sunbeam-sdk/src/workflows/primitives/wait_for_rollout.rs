@@ -5,7 +5,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-
+use crate::{debug, info};
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -16,12 +16,22 @@ fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
 /// **step_config:** `{"namespace": "ory", "deployment": "kratos", "timeout_secs": 120}`
 ///
 /// `timeout_secs` defaults to 120 if omitted.
-#[derive(Default)]
-pub struct WaitForRollout;
+pub struct WaitForRollout {
+    logger: crate::logger::Logger,
+}
+
+impl Default for WaitForRollout {
+    fn default() -> Self {
+        Self {
+            logger: crate::logger::Logger::new(crate::logger::TracingSink),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl StepBody for WaitForRollout {
     async fn run(&mut self, ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
+        let logger = &self.logger;
         let config = ctx
             .step
             .step_config
@@ -35,7 +45,7 @@ impl StepBody for WaitForRollout {
             .get("deployment")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WaitForRollout: missing deployment in step_config"))?;
-        tracing::debug!("wait_for_rollout {namespace}/{deployment}");
+        debug!(logger, "wait_for_rollout", namespace = namespace, deployment = deployment);
         let timeout_secs = config
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
@@ -56,16 +66,16 @@ impl StepBody for WaitForRollout {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         if skip_namespaces.contains(&namespace.to_string()) {
-            tracing::info!("Skipping wait for {namespace}/{deployment} (profile skip list)");
+            info!(logger, "Skipping wait for rollout (profile skip list)", namespace = namespace, deployment = deployment);
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!("Waiting for {namespace}/{deployment}...");
+        info!(logger, "Waiting for rollout", namespace = namespace, deployment = deployment);
 
-        crate::cluster::wait_rollout(namespace, deployment, timeout_secs)
+        crate::cluster::wait_rollout(logger, namespace, deployment, timeout_secs)
             .await
             .map_err(|e| step_err(format!("WaitForRollout({namespace}/{deployment}): {e}")))?;
-        tracing::info!(msg = "Rollout complete.", namespace = %namespace, deployment = %deployment);
+        info!(logger, "Rollout complete.", namespace = namespace, deployment = deployment);
 
         Ok(ExecutionResult::next())
     }
@@ -77,7 +87,7 @@ mod tests {
 
     #[test]
     fn wait_for_rollout_is_default() {
-        let _ = WaitForRollout;
+        let _ = WaitForRollout::default();
     }
 
     #[test]

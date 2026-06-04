@@ -16,7 +16,7 @@ use kube::api::{Api, DeleteParams, ListParams, PostParams};
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::{debug, error, info, trace};
+use crate::{error, info};
 use crate::workflows::data::UpData;
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
@@ -247,7 +247,7 @@ async fn image_exists_in_k3s(logger: &crate::logger::Logger, image_ref: &str) ->
     // Spawn a temporary pod on the node.
     if let Err(e) = spawn_ctr_pod(&node, pod_name).await {
         // If pod creation fails, assume image doesn't exist.
-        info!(logger, "Could not spawn ctr pod: {}", err = e.to_string());
+        error!(logger, "Could not spawn ctr pod: {}", err = e.to_string());
         return Ok(false);
     }
 
@@ -312,10 +312,10 @@ async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<P
         Ok(output) if output.status.success() => return Ok(tar_path),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            info!(logger, "buildctl failed, falling back to docker buildx: {}", err = stderr.to_string());
+            error!(logger, "buildctl failed, falling back to docker buildx: {}", err = stderr.to_string());
         }
         Err(e) => {
-            info!(logger, "buildctl not available, falling back to docker buildx: {}", err = e.to_string());
+            error!(logger, "buildctl not available, falling back to docker buildx: {}", err = e.to_string());
         }
     }
 

@@ -20,7 +20,7 @@ impl StepBody for EnsureCilium {
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
 
         if data.skip_cilium {
-            tracing::warn!(msg = "Skipping Cilium check (--skip-cilium).");
+            tracing::info!(msg = "Skipping Cilium check (--skip-cilium).");
             tracing::info!(msg = "Cilium check skipped.");
             return Ok(ExecutionResult::next());
         }

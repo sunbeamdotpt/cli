@@ -103,7 +103,7 @@ impl StepBody for DeleteNamespaces {
                 Err(kube::Error::Api(ae)) if ae.code == 404 => {
                     tracing::info!("  {ns} already gone.")
                 }
-                Err(e) => tracing::warn!("  Failed to delete {ns}: {e}"),
+                Err(e) => tracing::error!("  Failed to delete {ns}: {e}"),
             }
         }
 
@@ -144,7 +144,7 @@ impl StepBody for WaitForTermination {
         loop {
             attempt += 1;
             if std::time::Instant::now() > deadline {
-                tracing::warn!(
+                tracing::error!(
                     msg = "Timed out waiting for namespace deletion (5 min). Will try force-delete.",
                     remaining = ?to_delete,
                 );
@@ -188,7 +188,7 @@ impl StepBody for WaitForTermination {
             return Ok(ExecutionResult::next());
         }
 
-        tracing::warn!(
+        tracing::error!(
             "Namespaces still terminating: {}",
             remaining.join(", ")
         );
@@ -228,7 +228,7 @@ impl StepBody for ForceDeleteStuckNamespaces {
             tracing::info!("Force-deleting stuck namespace {ns}...");
             let logger = crate::logger::Logger::new(crate::logger::TracingSink);
             if let Err(e) = crate::down::force_delete_namespace(&logger, client.clone(), ns).await {
-                tracing::warn!("  Force-delete failed for {ns}: {e}");
+                tracing::error!("  Force-delete failed for {ns}: {e}");
             }
         }
 
@@ -257,7 +257,7 @@ impl StepBody for ForceDeleteStuckNamespaces {
         }
 
         if !still_stuck.is_empty() {
-            tracing::warn!(
+            tracing::error!(
                 msg = "Namespaces still stuck after force-delete — manual cleanup may be required.",
                 namespaces = %still_stuck.join(", "),
             );
@@ -309,7 +309,7 @@ impl StepBody for DeleteLimaVm {
         tracing::info!("Deleting Lima VM '{}'...", crate::constants::LIMA_VM_NAME);
         match delete_lima_vm().await {
             Ok(()) => tracing::info!("Lima VM deleted."),
-            Err(e) => tracing::warn!("{e}"),
+            Err(e) => tracing::error!("{e}"),
         }
 
         Ok(ExecutionResult::next())

@@ -191,7 +191,7 @@ impl StepBody for ApplyManifest {
                             break;
                         }
                         let backoff = 1u64 << attempt; // 2, 4, 8, 16 s
-                        self.logger.info(
+                        self.logger.error(
                             &format!(
                                 "Apply {namespace} attempt {attempt} failed (transient), retrying in {backoff}s..."
                             ),

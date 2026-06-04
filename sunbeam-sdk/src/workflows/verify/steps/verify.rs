@@ -368,7 +368,7 @@ impl StepBody for PrintResult {
         if data.synced {
             tracing::info!("VSO E2E verification passed.");
         } else {
-            tracing::warn!("VSO verification did not complete successfully.");
+            tracing::error!("VSO verification did not complete successfully.");
         }
         Ok(ExecutionResult::next())
     }

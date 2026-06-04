@@ -17,7 +17,7 @@ use crate::project::config::ProjectConfig;
 use crate::project::runner::{RunOptions, RunOutcome};
 use crate::topo::{Graph, sort};
 use crate::workflows::StepContext;
-use crate::{debug, error, info, trace};
+use crate::{error, info};
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -146,7 +146,7 @@ impl StepBody for BuildProjectImages {
                         info!(logger, "skipped (no package target)", project = project_name);
                     }
                     Err(e) => {
-                        info!(logger, "Image build failed", project = project_name, error = e.to_string());
+                        error!(logger, "Image build failed", project = project_name, error = e.to_string());
                         // With strict failures enabled, we propagate the error so
                         // the workflow terminates. Remove this return if you prefer
                         // best-effort builds.

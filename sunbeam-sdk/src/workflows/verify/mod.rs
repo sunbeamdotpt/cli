@@ -4,7 +4,7 @@ pub mod definition;
 /// Steps.
 pub mod steps;
 
-use crate::output;
+use crate::info;
 
 /// Register all verify workflow steps and the workflow definition with a host.
 #[tracing::instrument(skip(host))]
@@ -23,8 +23,8 @@ pub async fn register(host: &wfe::WorkflowHost) {
 }
 
 /// Print a summary of the completed verify workflow.
-pub fn print_summary(instance: &wfe_core::models::WorkflowInstance) {
-    tracing::info!("Verify workflow summary:");
+pub fn print_summary(logger: &crate::logger::Logger, instance: &wfe_core::models::WorkflowInstance) {
+    info!(logger, "Verify workflow summary:");
     for ep in &instance.execution_pointers {
         let fallback = format!("step-{}", ep.step_id);
         let name = ep.step_name.as_deref().unwrap_or(&fallback);
@@ -36,6 +36,7 @@ pub fn print_summary(instance: &wfe_core::models::WorkflowInstance) {
             }
             _ => "-".to_string(),
         };
-        tracing::info!("  {name:<40} {status:<12} {duration}");
+        let line = format!("  {name:<40} {status:<12} {duration}");
+        info!(logger, &line);
     }
 }

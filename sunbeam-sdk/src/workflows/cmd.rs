@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::error::{Result, SunbeamError};
 use crate::output;
-use crate::info;
+use crate::{error, info};
 
 use super::host;
 
@@ -483,7 +483,7 @@ pub async fn show_workflow_status(logger: &crate::logger::Logger, h: &wfe::Workf
             );
         }
         Err(e) => {
-            info!(logger, "Workflow instance not found", id = id, err = e);
+            error!(logger, "Workflow instance not found", id = id, err = e);
         }
     }
 

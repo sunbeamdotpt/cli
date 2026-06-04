@@ -192,7 +192,7 @@ impl StepBody for InitOrUnsealOpenBao {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         msg = "OpenBao API did not respond after 30 attempts.",
                         err = %e,
                     );
@@ -242,7 +242,7 @@ impl StepBody for InitOrUnsealOpenBao {
             if (root_token.is_empty() || unseal_key.is_empty()) && local_keystore.is_some() {
                 let ks = local_keystore.as_ref().unwrap();
                 if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
-                    tracing::info!("Cluster secret missing keys — restoring from local keystore...");
+                    tracing::error!("Cluster secret missing keys — restoring from local keystore...");
                     let mut secret_data = HashMap::new();
                     secret_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
                     secret_data.insert("root-token".to_string(), ks.root_token.clone());
@@ -258,7 +258,7 @@ impl StepBody for InitOrUnsealOpenBao {
             // If vault is initialized but we lost the root token, reset storage
             // and wait for the pod to restart so we can re-initialize inline.
             if root_token.is_empty() {
-                tracing::info!("Vault is initialized but root token is missing -- resetting storage...");
+                tracing::error!("Vault is initialized but root token is missing -- resetting storage...");
                 let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
                 let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
                 tracing::info!("Waiting for OpenBao pod to restart...");
@@ -357,7 +357,7 @@ impl StepBody for InitOrUnsealOpenBao {
                     Err(e) => {
                         init_err = Some(e);
                         if attempt < 4 {
-                            tracing::info!(
+                            tracing::error!(
                                 "OpenBao init attempt {} failed, retrying in {}s...",
                                 attempt + 1,
                                 3 + attempt * 2
@@ -395,7 +395,7 @@ impl StepBody for InitOrUnsealOpenBao {
                             key_threshold: 1,
                         };
                         if let Err(e) = save_keystore(&ks) {
-                            tracing::warn!("Failed to save vault keystore: {e}");
+                            tracing::error!("Failed to save vault keystore: {e}");
                         } else {
                             tracing::info!("Keys saved to local keystore.");
                         }
@@ -438,7 +438,7 @@ impl StepBody for InitOrUnsealOpenBao {
                 key_threshold: 1,
             };
             if let Err(e) = save_keystore(&ks) {
-                tracing::warn!("Failed to backfill vault keystore: {e}");
+                tracing::error!("Failed to backfill vault keystore: {e}");
             } else {
                 tracing::info!("Local keystore backfilled from cluster secret.");
             }

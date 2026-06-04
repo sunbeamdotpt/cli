@@ -157,7 +157,7 @@ fn configure_docker_insecure_registries(domain: &str) {
             std::fs::rename(&tmp, &daemon_path)?;
             Ok(())
         })() {
-            tracing::warn!(
+            tracing::error!(
                 "Failed to update Docker daemon.json for insecure registries: {e}\n\
                  You may need to manually add {registries:?} to ~/.docker/daemon.json -> insecure-registries"
             );

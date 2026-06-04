@@ -3,7 +3,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::{debug, info, trace};
+use crate::{error, info};
 use crate::workflows::data::UpData;
 
 #[cfg(unix)]
@@ -186,7 +186,7 @@ impl StepBody for EnsureLimaVm {
                         }
                     }
                     Err(e) => {
-                        info!(
+                        error!(
                             logger,
                             "k3s probe error (retrying)...",
                             attempt = k3s_attempt,
@@ -215,7 +215,7 @@ impl StepBody for EnsureLimaVm {
                         let _ = std::fs::create_dir_all(parent);
                     }
                     if let Err(e) = std::fs::write(&host_kc, merged_yaml) {
-                        info!(
+                        error!(
                             logger,
                             "Failed to write host kubeconfig.",
                             path = host_kc.display(),
@@ -231,7 +231,7 @@ impl StepBody for EnsureLimaVm {
                     }
                 }
                 Err(e) => {
-                    info!(
+                    error!(
                         logger,
                         "Kubeconfig merge failed — using Lima kubeconfig directly.",
                         err = e,
