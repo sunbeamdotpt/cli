@@ -1,7 +1,7 @@
 //! Cluster tear-down — deletes all Sunbeam-managed namespaces.
 
 use crate::error::{Result, SunbeamError};
-use crate::{debug, info, trace};
+use crate::{debug, info};
 use kube::api::{Api, Patch, PatchParams};
 
 /// Namespaces managed by Sunbeam infrastructure.

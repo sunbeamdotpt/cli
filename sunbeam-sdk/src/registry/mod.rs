@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{debug, info, trace};
+use crate::{debug, info};
 use kube::Client;
 use kube::api::{Api, ListParams};
 // ── Label / annotation keys ──────────────────────────────────────────

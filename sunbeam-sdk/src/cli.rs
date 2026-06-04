@@ -1,5 +1,5 @@
 use crate::error::{Result, SunbeamError};
-use crate::{debug, error, info, trace};
+use crate::{debug, info};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
@@ -956,7 +956,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             .await
             .map_err(|e| SunbeamError::Other(format!("down workflow failed: {e}")))?;
 
-            crate::workflows::down::print_summary(&instance);
+            crate::workflows::down::print_summary(&logger, &instance);
             crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != wfe_core::models::WorkflowStatus::Complete {

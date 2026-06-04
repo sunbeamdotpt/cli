@@ -475,7 +475,7 @@ pub async fn cmd_user_disable(target: &str) -> Result<()> {
         "Identity {}... disabled and all Kratos sessions revoked.",
         &iid[..8.min(iid.len())]
     );
-    tracing::warn!("App sessions (docs/people) expire within SESSION_COOKIE_AGE -- currently 1h.");
+    tracing::info!("App sessions (docs/people) expire within SESSION_COOKIE_AGE -- currently 1h.");
     Ok(())
 }
 
@@ -663,7 +663,7 @@ pub async fn cmd_user_onboard(
 
         if let Some(existing) = existing {
             let iid = identity_id(&existing)?;
-            tracing::warn!("Identity already exists: {}...", short_id(&iid));
+            tracing::info!("Identity already exists: {}...", short_id(&iid));
             tracing::info!("Generating fresh recovery link...");
             let (link, code) = generate_recovery(&pf.base_url, &iid).await?;
             (iid, link, code, false)
@@ -827,8 +827,8 @@ pub async fn cmd_user_offboard(target: &str) -> Result<()> {
     drop(pf);
 
     tracing::info!("Offboarding complete for {}...", short_id(&iid));
-    tracing::warn!("Existing access tokens expire within ~1h (Hydra TTL).");
-    tracing::warn!("App sessions (docs/people) expire within SESSION_COOKIE_AGE (~1h).");
+    tracing::info!("Existing access tokens expire within ~1h (Hydra TTL).");
+    tracing::info!("App sessions (docs/people) expire within SESSION_COOKIE_AGE (~1h).");
     Ok(())
 }
 

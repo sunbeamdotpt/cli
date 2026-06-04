@@ -16,7 +16,7 @@ use std::process::Stdio;
 use crate::error::{Result, SunbeamError};
 use crate::project::{ProjectConfig, Target};
 use crate::project::config::{ExecCommand, ExecTarget, WorkflowTarget};
-use crate::{debug, error, info, trace};
+use crate::{error, info};
 
 /// Outcome of attempting to run a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]

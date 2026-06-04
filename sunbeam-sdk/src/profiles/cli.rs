@@ -6,7 +6,7 @@ use crate::config::{self, ContainerShortcuts, Preset, Profile, ProfileRef, Rule,
 use crate::error::{Result, SunbeamError};
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::{debug, error, info, trace};
+use crate::info;
 
 /// Dispatch a profile subcommand.
 pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> Result<()> {

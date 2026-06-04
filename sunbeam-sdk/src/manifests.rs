@@ -1,7 +1,7 @@
 //! Kustomize build, apply, and namespace filtering.
 
 use crate::error::{Result, ResultExt};
-use crate::{debug, error, info};
+use crate::{error, info};
 
 /// Return only the YAML documents that belong to the given namespace.
 ///
@@ -284,7 +284,7 @@ fn clean_partial_chart_extracts(infra_dir: &std::path::Path) {
                 }
             }
             if !has_chart_yaml {
-                tracing::warn!(
+                tracing::info!(
                     "Removing partial helm-chart extract {}",
                     versioned.display()
                 );
@@ -326,7 +326,7 @@ async fn pre_apply_cleanup(logger: &crate::logger::Logger, namespaces: Option<&[
         let client = match crate::kube::get_client().await {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Failed to get kube client: {e}");
+                tracing::error!("Failed to get kube client: {e}");
                 return;
             }
         };
@@ -352,7 +352,7 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("Failed to get kube client for VSS pruning: {e}");
+            tracing::error!("Failed to get kube client for VSS pruning: {e}");
             return;
         }
     };
@@ -509,7 +509,7 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
 
     loop {
         if std::time::Instant::now() > deadline {
-            tracing::warn!(
+            tracing::info!(
                 "  {ns}/{svc} not ready after {timeout_secs}s -- continuing anyway."
             );
             return false;
@@ -538,7 +538,7 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID").await {
             Ok(id) if !id.is_empty() => id,
             _ => {
-                tracing::warn!(
+                tracing::info!(
                     "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
                 );
                 return;
@@ -576,7 +576,7 @@ async fn patch_tuwunel_oauth2_redirect(domain: &str) {
         .patch("tuwunel", &pp, &kube::api::Patch::Merge(patch))
         .await
     {
-        tracing::warn!("Failed to patch tuwunel OAuth2Client: {e}");
+        tracing::error!("Failed to patch tuwunel OAuth2Client: {e}");
     } else {
         tracing::info!("Patched tuwunel OAuth2Client redirect URI.");
     }
@@ -604,7 +604,7 @@ async fn os_api(path: &str, method: &str, body: Option<&str>) -> Option<String> 
     let pod_name = match crate::kube::find_pod_by_label("data", "app=opensearch").await {
         Some(name) => name,
         None => {
-            tracing::warn!("No OpenSearch pod found in data namespace");
+            tracing::info!("No OpenSearch pod found in data namespace");
             return None;
         }
     };
@@ -684,7 +684,7 @@ pub async fn inject_opensearch_model_id(logger: &crate::logger::Logger) {
 #[tracing::instrument]
 pub async fn ensure_opensearch_ml() {
     if os_api("/_cluster/health", "GET", None).await.is_none() {
-        tracing::warn!("OpenSearch not reachable -- skipping ML setup.");
+        tracing::info!("OpenSearch not reachable -- skipping ML setup.");
         return;
     }
 
@@ -711,7 +711,7 @@ pub async fn ensure_opensearch_ml() {
     {
         Some(r) => r,
         None => {
-            tracing::warn!("OpenSearch ML search API failed -- skipping ML setup.");
+            tracing::info!("OpenSearch ML search API failed -- skipping ML setup.");
             return;
         }
     };
@@ -862,7 +862,7 @@ pub async fn ensure_opensearch_ml() {
         {
             Some(r) => r,
             None => {
-                tracing::warn!("Failed to register ML model -- skipping.");
+                tracing::info!("Failed to register ML model -- skipping.");
                 return;
             }
         };
@@ -873,7 +873,7 @@ pub async fn ensure_opensearch_ml() {
             .unwrap_or_default();
 
         if task_id.is_empty() {
-            tracing::warn!("No task_id from model registration -- skipping.");
+            tracing::info!("No task_id from model registration -- skipping.");
             return;
         }
 
@@ -894,7 +894,7 @@ pub async fn ensure_opensearch_ml() {
                         break;
                     }
                     "FAILED" => {
-                        tracing::warn!("ML model registration failed: {task_resp}");
+                        tracing::error!("ML model registration failed: {task_resp}");
                         return;
                     }
                     _ => {}
@@ -903,7 +903,7 @@ pub async fn ensure_opensearch_ml() {
         }
 
         let Some(mid) = new_model_id else {
-            tracing::warn!("ML model registration timed out.");
+            tracing::error!("ML model registration timed out.");
             return;
         };
 
@@ -921,7 +921,7 @@ pub async fn ensure_opensearch_ml() {
     }
 
     let Some(model_id) = model_id else {
-        tracing::warn!("No ML model available -- skipping pipeline setup.");
+        tracing::info!("No ML model available -- skipping pipeline setup.");
         return;
     };
 

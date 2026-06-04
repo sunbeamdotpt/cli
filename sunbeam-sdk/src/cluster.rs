@@ -1,10 +1,11 @@
 //! Cluster lifecycle helpers.
 
 use crate::error::{Result, SunbeamError};
-use crate::{debug, info, trace};
+use crate::info;
 
 /// Poll deployment rollout status (approximate: check Available condition).
 pub(crate) async fn wait_rollout(
+    logger: &crate::logger::Logger,
     ns: &str,
     deployment: &str,
     timeout_secs: u64,
@@ -44,8 +45,13 @@ pub(crate) async fn wait_rollout(
                         "Too many consecutive transient errors waiting for {ns}/{deployment}: {e}"
                     )));
                 }
-                tracing::info!(
-                    "Transient error waiting for deployment {ns}/{deployment}, retrying in 3s... ({consecutive_transient_errors} consecutive errors: {e})"
+                info!(
+                    logger,
+                    "Transient error waiting for deployment, retrying in 3s...",
+                    ns = ns,
+                    deployment = deployment,
+                    consecutive_transient_errors = consecutive_transient_errors,
+                    error = e.to_string()
                 );
             }
         }

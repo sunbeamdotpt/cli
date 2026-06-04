@@ -6,7 +6,7 @@
 //! mappings and blocks until Ctrl-C.
 
 use crate::error::{Result, SunbeamError};
-use crate::{debug, info, trace};
+use crate::info;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::Api;

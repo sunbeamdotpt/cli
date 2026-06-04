@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::kube::{get_client, kube_exec, parse_target};
-use crate::{debug, error, info, trace};
+use crate::{debug, info};
 
 type HmacSha256 = Hmac<Sha256>;
 

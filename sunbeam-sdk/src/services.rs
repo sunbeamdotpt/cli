@@ -1,6 +1,7 @@
 //! Service management — status, logs, restart.
 
 use crate::error::{Result, SunbeamError};
+use crate::info;
 use crate::kube::{get_client, kube_rollout_restart, parse_target};
 
 use crate::registry::{self, Category, ServiceRegistry};
@@ -70,8 +71,8 @@ fn pod_ready_str(pod: &Pod) -> String {
 // VSO sync status
 // ---------------------------------------------------------------------------
 
-async fn vso_sync_status() -> Result<()> {
-    tracing::info!("VSO secret sync status...");
+async fn vso_sync_status(logger: &crate::logger::Logger) -> Result<()> {
+    info!(logger, "VSO secret sync status...");
 
     let client = get_client().await?;
     let mut all_ok = true;
@@ -163,9 +164,9 @@ async fn vso_sync_status() -> Result<()> {
 
     println!();
     if all_ok {
-        tracing::info!("All VSO secrets synced.");
+        info!(logger, "All VSO secrets synced.");
     } else {
-        tracing::warn!("Some VSO secrets are not synced.");
+        info!(logger, "Some VSO secrets are not synced.");
     }
     Ok(())
 }
@@ -178,7 +179,7 @@ async fn vso_sync_status() -> Result<()> {
 /// or legacy namespace/service syntax.
 #[tracing::instrument(skip(logger, target))]
 pub async fn cmd_status(logger: &crate::logger::Logger, target: Option<&str>) -> Result<()> {
-    tracing::info!("Pod health across all namespaces...");
+    info!(logger, "Pod health across all namespaces...");
 
     let client = get_client().await?;
     let reg = get_registry(logger).await?;
@@ -322,7 +323,7 @@ pub async fn cmd_status(logger: &crate::logger::Logger, target: Option<&str>) ->
     }
 
     if pods.is_empty() {
-        tracing::warn!("No pods found in managed namespaces.");
+        info!(logger, "No pods found in managed namespaces.");
         return Ok(());
     }
 
@@ -361,12 +362,12 @@ pub async fn cmd_status(logger: &crate::logger::Logger, target: Option<&str>) ->
 
     println!();
     if all_ok {
-        tracing::info!("All pods healthy.");
+        info!(logger, "All pods healthy.");
     } else {
-        tracing::warn!("Some pods are not ready.");
+        info!(logger, "Some pods are not ready.");
     }
 
-    vso_sync_status().await?;
+    vso_sync_status(logger).await?;
     Ok(())
 }
 
@@ -425,7 +426,7 @@ pub async fn cmd_logs(logger: &crate::logger::Logger, target: &str, follow: bool
             match line {
                 Ok(line) => println!("{line}"),
                 Err(e) => {
-                    tracing::warn!("Log stream error: {e}");
+                    info!(logger, "Log stream error", error = e);
                     break;
                 }
             }
@@ -441,7 +442,7 @@ pub async fn cmd_logs(logger: &crate::logger::Logger, target: &str, follow: bool
 
             match api.logs(&pod_name, &lp).await {
                 Ok(logs) => print!("{logs}"),
-                Err(e) => tracing::warn!("Failed to get logs for {pod_name}: {e}"),
+                Err(e) => info!(logger, "Failed to get logs", pod_name = pod_name, error = e),
             }
         }
     }
@@ -483,7 +484,7 @@ pub async fn cmd_get(logger: &crate::logger::Logger, target: &str, output: &str)
 /// deployments.
 #[tracing::instrument(skip(logger, target))]
 pub async fn cmd_restart(logger: &crate::logger::Logger, target: Option<&str>) -> Result<()> {
-    tracing::info!("Restarting services...");
+    info!(logger, "Restarting services...");
 
     let reg = get_registry(logger).await?;
 
@@ -538,19 +539,20 @@ pub async fn cmd_restart(logger: &crate::logger::Logger, target: Option<&str>) -
     };
 
     if pairs.is_empty() {
-        tracing::warn!(
-            "No matching services for target: {}",
-            target.unwrap_or("(none)")
+        info!(
+            logger,
+            "No matching services for target",
+            target = target.unwrap_or("(none)")
         );
         return Ok(());
     }
 
     for (ns, dep) in &pairs {
         if let Err(e) = kube_rollout_restart(ns, dep).await {
-            tracing::warn!("Failed to restart {ns}/{dep}: {e}");
+            info!(logger, "Failed to restart deployment", ns = ns, dep = dep, error = e);
         }
     }
-    tracing::info!("Done.");
+    info!(logger, "Done.");
     Ok(())
 }
 

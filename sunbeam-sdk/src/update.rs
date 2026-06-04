@@ -1,7 +1,7 @@
 //! Self-update from Gitea CI artifacts.
 
 use crate::error::{Result, ResultExt};
-use crate::{debug, info, trace};
+use crate::info;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

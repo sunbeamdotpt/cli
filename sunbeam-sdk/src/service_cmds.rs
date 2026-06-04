@@ -6,7 +6,7 @@
 use crate::cli::{SecretsAction, ServiceAction};
 use crate::error::{Result, SunbeamError};
 use crate::logger::Logger;
-use crate::{debug, error, info, trace};
+use crate::{debug, info};
 use tracing::Instrument;
 use crate::registry::{self, ServiceRegistry};
 
@@ -228,7 +228,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
         ServiceAction::Verify => {
             info!(logger, "Verifying VSO -> OpenBao integration...");
             run_workflow(logger, "verify", 1, 300, |i| {
-                crate::workflows::verify::print_summary(i)
+                crate::workflows::verify::print_summary(logger, i)
             })
             .await
         }

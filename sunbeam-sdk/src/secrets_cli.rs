@@ -241,7 +241,7 @@ async fn dispatch_kv(
                     )?;
                 }
                 None => {
-                    tracing::warn!("No secret found at {mount}/{path}");
+                    tracing::info!("No secret found at {mount}/{path}");
                 }
             }
             Ok(())
@@ -271,7 +271,7 @@ async fn dispatch_kv(
                     crate::output::render(&data, output)?;
                 }
                 None => {
-                    tracing::warn!("No keys found at {mount}/{path}");
+                    tracing::info!("No keys found at {mount}/{path}");
                 }
             }
             Ok(())
@@ -306,7 +306,7 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
                     .and_then(|v| v.as_str())
                     && t != key_type
                 {
-                    tracing::warn!(
+                    tracing::info!(
                         "Existing key type is {t}, requested {key_type} — leaving as-is."
                     );
                 }
@@ -326,7 +326,7 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
                     crate::output::render(&value, crate::output::OutputFormat::Json)?;
                 }
                 None => {
-                    tracing::warn!("Key {key_path} not found.");
+                    tracing::info!("Key {key_path} not found.");
                 }
             }
             Ok(())
@@ -339,7 +339,7 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
                     crate::output::render(&value, crate::output::OutputFormat::Json)?;
                 }
                 None => {
-                    tracing::warn!("No keys found at {mount}");
+                    tracing::info!("No keys found at {mount}");
                 }
             }
             Ok(())
@@ -370,7 +370,7 @@ async fn cmd_read(
             crate::output::render(&value, output)?;
         }
         None => {
-            tracing::warn!("Path {path} not found.");
+            tracing::info!("Path {path} not found.");
         }
     }
     Ok(())
@@ -411,7 +411,7 @@ async fn cmd_list(
             crate::output::render(&value, output)?;
         }
         None => {
-            tracing::warn!("Path {path} not found.");
+            tracing::info!("Path {path} not found.");
         }
     }
     Ok(())

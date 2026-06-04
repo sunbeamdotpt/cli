@@ -357,14 +357,14 @@ pub fn load_config() -> SunbeamConfig {
     }
     let mut config: SunbeamConfig = match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-            tracing::warn!(
+            tracing::error!(
                 "Failed to parse config from {}: {e}",
                 path.display()
             );
             SunbeamConfig::default()
         }),
         Err(e) => {
-            tracing::warn!(
+            tracing::error!(
                 "Failed to read config from {}: {e}",
                 path.display()
             );
@@ -392,7 +392,7 @@ pub fn load_config() -> SunbeamConfig {
         }
         // Persist the migration silently — next read will be clean.
         let _ = save_config_silent(&config);
-        tracing::warn!(
+        tracing::info!(
             "migrated legacy `infra_directory`/`acme_email` into context `{ctx_name}`. \
              Per-context keys are now the only source of truth."
         );
@@ -518,7 +518,7 @@ pub fn clear_config() -> Result<()> {
         std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
         tracing::info!("Configuration cleared from {}", path.display());
     } else {
-        tracing::warn!("No configuration file found to clear");
+        tracing::info!("No configuration file found to clear");
     }
     Ok(())
 }

@@ -5,7 +5,7 @@ use crate::discovery::{find_workspace_root, WORKSPACE_FILE};
 use crate::error::Result;
 use crate::operations::compose::ComposeOptions;
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
-use crate::{debug, error, info, trace};
+use crate::{debug, info};
 
 /// Dispatch.
 #[tracing::instrument(skip(logger))]

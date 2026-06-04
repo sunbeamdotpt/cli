@@ -86,7 +86,7 @@ pub async fn discover_manifests(base_dir: &std::path::Path) -> Result<Vec<Manife
         let manifests = match crate::kube::kustomize_build(&path, "", "").await {
             Ok(m) => m,
             Err(e) => {
-                tracing::warn!("Skipping {}: kustomize build failed: {e}", path.display());
+                tracing::info!("Skipping {}: kustomize build failed: {e}", path.display());
                 continue;
             }
         };

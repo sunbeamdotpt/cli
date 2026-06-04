@@ -500,7 +500,7 @@ pub async fn get_token() -> Result<String> {
         match refresh_token(&cached).await {
             Ok(new_tokens) => return Ok(new_tokens.access_token),
             Err(e) => {
-                tracing::warn!("Token refresh failed: {e}");
+                tracing::error!("Token refresh failed: {e}");
             }
         }
     }

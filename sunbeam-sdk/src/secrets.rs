@@ -52,7 +52,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let private_key = match RsaPrivateKey::new(&mut rng, bits) {
         Ok(k) => k,
         Err(e) => {
-            tracing::warn!("RSA key generation failed: {e}");
+            tracing::error!("RSA key generation failed: {e}");
             return (String::new(), String::new());
         }
     };
@@ -60,7 +60,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let private_pem = match private_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF) {
         Ok(p) => p.to_string(),
         Err(e) => {
-            tracing::warn!("PKCS8 encoding failed: {e}");
+            tracing::error!("PKCS8 encoding failed: {e}");
             return (String::new(), String::new());
         }
     };
@@ -69,7 +69,7 @@ pub(crate) fn gen_dkim_key_pair() -> (String, String) {
     let public_pem = match public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF) {
         Ok(p) => p.to_string(),
         Err(e) => {
-            tracing::warn!("Public key PEM encoding failed: {e}");
+            tracing::error!("Public key PEM encoding failed: {e}");
             return (private_pem, String::new());
         }
     };
@@ -162,7 +162,7 @@ pub(crate) async fn port_forward(
                         );
                         break;
                     }
-                    tracing::warn!(
+                    tracing::info!(
                         "Port-forward failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}), re-resolving pod: {e}"
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;

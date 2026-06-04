@@ -774,7 +774,7 @@ pub async fn kube_exec(
     let mut attached = match pods.exec(pod, cmd_strings, &ep).await {
         Ok(attached) => attached,
         Err(e) => {
-            tracing::warn!("kube_exec failed: {e}");
+            tracing::error!("kube_exec failed: {e}");
             return Err(e).with_ctx(|| format!("Failed to exec in pod {ns}/{pod}"));
         }
     };

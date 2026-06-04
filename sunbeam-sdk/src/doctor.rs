@@ -4,7 +4,7 @@
 //! in sequence, reporting pass/fail for each.
 
 use crate::error::Result;
-use crate::{debug, info, trace};
+use crate::info;
 
 /// Cmd doctor.
 #[tracing::instrument(skip(logger))]

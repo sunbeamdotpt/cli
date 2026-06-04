@@ -12,7 +12,7 @@ use crate::config::get_infra_dir;
 use crate::discovery::{find_project_root, find_workspace_root, WORKSPACE_FILE};
 use crate::error::{Result, SunbeamError};
 use crate::operations::config::WorkspaceConfig;
-use crate::{debug, error, info, trace};
+use crate::{debug, info};
 
 use crate::project::config::{is_standard_verb, ProjectConfig, STANDARD_VERBS};
 use crate::project::runner::{RunOptions, RunOutcome};

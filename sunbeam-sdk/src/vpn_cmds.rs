@@ -51,7 +51,7 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
     let probe = sunbeam_net::IpcClient::new(&socket);
     if probe.socket_exists() {
         if let Ok(status) = probe.status().await {
-            tracing::warn!(
+            tracing::info!(
                 "VPN daemon already running ({status}). Use `sunbeam disconnect` first."
             );
             return Ok(());
@@ -110,7 +110,7 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if std::time::Instant::now() > deadline {
-            tracing::warn!(
+            tracing::error!(
                 "VPN daemon did not reach Running state within 30s — \
                  check the daemon log for details"
             );
