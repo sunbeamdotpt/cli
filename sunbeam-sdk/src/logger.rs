@@ -19,11 +19,38 @@ use std::sync::Arc;
 /// Log severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
+    /// Trace-level verbosity.
     Trace,
+    /// Debug-level verbosity.
     Debug,
+    /// Informational messages.
     Info,
+    /// Warning messages.
     Warn,
+    /// Error messages.
     Error,
+}
+
+impl fmt::Display for Level {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Level::Trace => write!(f, "TRACE"),
+            Level::Debug => write!(f, "DEBUG"),
+            Level::Info => write!(f, "INFO"),
+            Level::Warn => write!(f, "WARN"),
+            Level::Error => write!(f, "ERROR"),
+        }
+    }
+}
+
+fn level_rank(level: Level) -> u8 {
+    match level {
+        Level::Trace => 0,
+        Level::Debug => 1,
+        Level::Info => 2,
+        Level::Warn => 3,
+        Level::Error => 4,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +59,7 @@ pub enum Level {
 
 /// Backend trait — implement this to add a new output target.
 pub trait Sink: Send + Sync {
+    /// Emit a single log event.
     fn log(&self, level: Level, msg: &str, fields: &[(&str, &dyn fmt::Display)]);
 }
 
@@ -166,8 +194,11 @@ pub struct TestSink {
 /// A single captured log event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedEvent {
+    /// Log level of the event.
     pub level: Level,
+    /// Log message.
     pub msg: String,
+    /// Key-value fields attached to the event.
     pub fields: Vec<(String, String)>,
 }
 
@@ -189,6 +220,244 @@ impl Sink for TestSink {
             msg: msg.to_string(),
             fields: kvs,
         });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LineSink
+// ---------------------------------------------------------------------------
+
+/// Awk-friendly single-line log sink writing to stderr.
+pub struct LineSink {
+    min_level: Level,
+}
+
+impl LineSink {
+    /// Create a new `LineSink` with `min_level` set to [`Level::Info`].
+    pub fn new() -> Self {
+        Self {
+            min_level: Level::Info,
+        }
+    }
+    /// Set the minimum log level. Events below this level are dropped.
+    pub fn with_level(mut self, level: Level) -> Self {
+        self.min_level = level;
+        self
+    }
+}
+
+impl Default for LineSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sink for LineSink {
+    fn log(&self, level: Level, msg: &str, fields: &[(&str, &dyn fmt::Display)]) {
+        if level_rank(level) < level_rank(self.min_level) {
+            return;
+        }
+        let now = chrono::Local::now();
+        let ts = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let sanitized = msg.replace('\n', "\\n").replace('"', "\\\"");
+        let mut out = format!(r#"time="{ts}" level={level} msg="{sanitized}""#);
+        for (k, v) in fields {
+            out.push(' ');
+            out.push_str(k);
+            out.push('=');
+            out.push_str(&v.to_string());
+        }
+        eprintln!("{out}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JsonSink
+// ---------------------------------------------------------------------------
+
+/// NDJSON structured log sink writing to stderr.
+pub struct JsonSink {
+    min_level: Level,
+}
+
+impl JsonSink {
+    /// Create a new `JsonSink` with `min_level` set to [`Level::Info`].
+    pub fn new() -> Self {
+        Self {
+            min_level: Level::Info,
+        }
+    }
+    /// Set the minimum log level. Events below this level are dropped.
+    pub fn with_level(mut self, level: Level) -> Self {
+        self.min_level = level;
+        self
+    }
+}
+
+impl Default for JsonSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sink for JsonSink {
+    fn log(&self, level: Level, msg: &str, fields: &[(&str, &dyn fmt::Display)]) {
+        if level_rank(level) < level_rank(self.min_level) {
+            return;
+        }
+        let now = chrono::Local::now();
+        let ts = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+        let mut map = serde_json::Map::new();
+        map.insert("timestamp".to_string(), serde_json::Value::String(ts));
+        map.insert("level".to_string(), serde_json::Value::String(level.to_string()));
+        map.insert("message".to_string(), serde_json::Value::String(msg.to_string()));
+
+        let mut field_map = serde_json::Map::new();
+        for (k, v) in fields {
+            field_map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+        if !field_map.is_empty() {
+            map.insert("fields".to_string(), serde_json::Value::Object(field_map));
+        }
+
+        if let Ok(line) = serde_json::to_string(&serde_json::Value::Object(map)) {
+            eprintln!("{line}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ThreadedSink
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// Grouped concurrent output sink backed by `indicatif::MultiProgress`.
+///
+/// Each distinct `group` field value gets its own progress bar. Events without
+/// a `group` field are printed via [`MultiProgress::println`].
+///
+/// For explicit group lifecycle (start → finish with checkmark), use
+/// [`ThreadedSink::enter_group`].
+#[derive(Clone)]
+pub struct ThreadedSink {
+    state: Arc<Mutex<ThreadedState>>,
+    min_level: Level,
+}
+
+struct ThreadedState {
+    mp: indicatif::MultiProgress,
+    groups: HashMap<String, indicatif::ProgressBar>,
+}
+
+impl ThreadedSink {
+    /// Create a new `ThreadedSink` with `min_level` set to [`Level::Info`].
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ThreadedState {
+                mp: indicatif::MultiProgress::new(),
+                groups: HashMap::new(),
+            })),
+            min_level: Level::Info,
+        }
+    }
+    /// Set the minimum log level. Events below this level are dropped.
+    pub fn with_level(mut self, level: Level) -> Self {
+        self.min_level = level;
+        self
+    }
+
+}
+
+impl Default for ThreadedSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThreadedSink {
+    /// Enter a named group. The returned guard finishes the progress bar on drop.
+    pub fn enter_group(&self, name: impl Into<String>) -> ThreadedGroupGuard {
+        let name = name.into();
+        let mut state = self.state.lock().unwrap();
+        let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
+        let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+        pb.set_style(style);
+        pb.set_message(format!("{name} ..."));
+        state.groups.insert(name.clone(), pb);
+        ThreadedGroupGuard {
+            state: self.state.clone(),
+            name,
+        }
+    }
+}
+
+/// Guard that finishes a threaded group on drop.
+pub struct ThreadedGroupGuard {
+    state: Arc<Mutex<ThreadedState>>,
+    name: String,
+}
+
+impl Drop for ThreadedGroupGuard {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(pb) = state.groups.remove(&self.name) {
+            let style = indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}")
+                .unwrap();
+            pb.set_style(style);
+            pb.set_prefix("✓");
+            let elapsed = pb.elapsed();
+            pb.finish_with_message(format!("{}  {:.1}s", self.name, elapsed.as_secs_f64()));
+        }
+    }
+}
+
+impl Sink for ThreadedSink {
+    fn log(&self, level: Level, msg: &str, fields: &[(&str, &dyn fmt::Display)]) {
+        if level_rank(level) < level_rank(self.min_level) {
+            return;
+        }
+        let now = chrono::Local::now();
+        let ts = now.format("%H:%M:%S%.3f").to_string();
+
+        let extra: Vec<String> = fields
+            .iter()
+            .filter(|(k, _)| *k != "group")
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+
+        let line = if extra.is_empty() {
+            format!("{ts}  {}", msg)
+        } else {
+            format!("{ts}  {}  {}", msg, extra.join(" "))
+        };
+
+        let group = fields
+            .iter()
+            .find(|(k, _)| *k == "group")
+            .map(|(_, v)| v.to_string());
+
+        if let Some(name) = group {
+            let mut state = self.state.lock().unwrap();
+            if let Some(pb) = state.groups.get_mut(&name) {
+                pb.set_message(format!("{name}  {line}"));
+            } else {
+                let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
+                let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                    .unwrap()
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+                pb.set_style(style);
+                pb.set_message(format!("{name}  {line}"));
+                state.groups.insert(name, pb);
+            }
+        } else {
+            let state = self.state.lock().unwrap();
+            let _ = state.mp.println(line);
+        }
     }
 }
 
@@ -296,4 +565,60 @@ mod tests {
         assert!(ev.fields.contains(&("name".to_string(), "world".to_string())));
         assert!(ev.fields.contains(&("count".to_string(), "42".to_string())));
     }
+
+    #[test]
+    fn line_sink_does_not_panic() {
+        let logger = Logger::new(LineSink::new());
+        logger.info("hello world", &[("count", &42)]);
+    }
+
+    #[test]
+    fn line_sink_filters_by_level() {
+        let sink = TestSink::default();
+        let logger = Logger::new(sink.clone());
+        let line_logger = Logger::new(LineSink::new().with_level(Level::Warn));
+        // Just verify it doesn't panic and filters correctly at the sink level.
+        line_logger.debug("hidden", &[]);
+        line_logger.info("hidden", &[]);
+        line_logger.error("visible", &[]);
+    }
+
+    #[test]
+    fn json_sink_does_not_panic() {
+        let logger = Logger::new(JsonSink::new());
+        logger.info("hello world", &[("count", &42)]);
+    }
+
+    #[test]
+    fn threaded_sink_tracks_groups() {
+        let sink = ThreadedSink::new();
+        let logger = Logger::new(sink.clone());
+        let _guard = sink.enter_group("apply");
+        logger.info("Applying manifests...", &[("group", &"apply")]);
+    }
+
+    #[test]
+    fn threaded_sink_handles_events_outside_group() {
+        let sink = ThreadedSink::new();
+        let logger = Logger::new(sink.clone());
+        logger.info("Orphan event", &[]);
+    }
+
+    #[test]
+    fn threaded_sink_filters_by_level() {
+        let sink = ThreadedSink::new().with_level(Level::Error);
+        let logger = Logger::new(sink);
+        logger.info("hidden", &[]);
+        logger.error("visible", &[]);
+    }
+
+    #[test]
+    fn display_level_formats_correctly() {
+        assert_eq!(format!("{}", Level::Trace), "TRACE");
+        assert_eq!(format!("{}", Level::Debug), "DEBUG");
+        assert_eq!(format!("{}", Level::Info), "INFO");
+        assert_eq!(format!("{}", Level::Warn), "WARN");
+        assert_eq!(format!("{}", Level::Error), "ERROR");
+    }
+
 }

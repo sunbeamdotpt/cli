@@ -85,6 +85,24 @@ pub fn init_subscriber(mode: LogMode, level_override: Option<&str>) -> Result<()
     Ok(())
 }
 
+/// Build a [`crate::logger::Logger`] backed by the appropriate sink for `mode`.
+///
+/// This is the preferred entry point for new code. It returns a logger that
+/// writes directly to stderr without going through the tracing ecosystem.
+pub fn build_logger(mode: LogMode) -> crate::logger::Logger {
+    match mode {
+        LogMode::Line => crate::logger::Logger::new(crate::logger::LineSink::new()),
+        LogMode::Json => crate::logger::Logger::new(crate::logger::JsonSink::new()),
+        LogMode::Threaded => {
+            if std::io::stderr().is_terminal() {
+                crate::logger::Logger::new(crate::logger::ThreadedSink::new())
+            } else {
+                crate::logger::Logger::new(crate::logger::LineSink::new())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
