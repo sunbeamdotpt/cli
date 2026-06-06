@@ -350,26 +350,36 @@ impl StepBody for WaitForCNPGWebhook {
 
 // ── WaitForLonghornWebhook ──────────────────────────────────────────────────
 
+/// Check whether a DaemonSet status indicates readiness.
+fn is_daemonset_ready(status: &k8s_openapi::api::apps::v1::DaemonSetStatus) -> bool {
+    let desired = status.desired_number_scheduled;
+    let ready = status.number_ready;
+    let available = status.number_available.unwrap_or(0);
+    desired > 0 && ready >= desired && available >= desired
+}
+
 /// Wait for Longhorn admission webhook to be ready.
 ///
-/// PVC creation requires the Longhorn validating webhook to be available.
-/// This polls the longhorn-admission-webhook service endpoints.
+/// In Longhorn v1.11.1 the webhook was folded into the manager DaemonSet, but
+/// the `longhorn-admission-webhook` Service selector was not updated, so that
+/// Service will never have endpoints. We therefore wait for the
+/// `longhorn-manager` DaemonSet to be ready instead.
 #[derive(Default)]
 pub struct WaitForLonghornWebhook;
 
 #[async_trait::async_trait]
 impl StepBody for WaitForLonghornWebhook {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
-        use k8s_openapi::api::core::v1::Endpoints;
+        use k8s_openapi::api::apps::v1::DaemonSet;
         use kube::api::Api;
         use std::time::{Duration, Instant};
 
-        tracing::info!(msg = "Waiting for Longhorn webhook...");
+        tracing::info!(msg = "Waiting for Longhorn manager (webhook) ...");
 
         let client = k::get_client()
             .await
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
-        let eps: Api<Endpoints> = Api::namespaced(client.clone(), "longhorn-system");
+        let ds_api: Api<DaemonSet> = Api::namespaced(client.clone(), "longhorn-system");
 
         let deadline = Instant::now() + Duration::from_secs(180);
         let mut attempt = 0;
@@ -377,34 +387,30 @@ impl StepBody for WaitForLonghornWebhook {
             attempt += 1;
             if Instant::now() > deadline {
                 return Err(wfe_core::WfeError::StepExecution(
-                    "Timed out waiting for Longhorn webhook (3 min). Check: kubectl get pods -n longhorn-system".into(),
+                    "Timed out waiting for Longhorn manager DaemonSet (3 min). Check: kubectl get ds -n longhorn-system".into(),
                 ));
             }
 
-            match eps.get_opt("longhorn-admission-webhook").await {
-                Ok(Some(ep)) => {
-                    let has_addr = ep
-                        .subsets
-                        .as_ref()
-                        .and_then(|ss| ss.first())
-                        .and_then(|s| s.addresses.as_ref())
-                        .is_some_and(|a| !a.is_empty());
-                    if has_addr {
-                        tracing::info!(msg = "Longhorn webhook ready.");
-                        return Ok(ExecutionResult::next());
+            match ds_api.get_opt("longhorn-manager").await {
+                Ok(Some(ds)) => {
+                    if let Some(status) = &ds.status {
+                        if is_daemonset_ready(status) {
+                            tracing::info!(msg = "Longhorn manager DaemonSet ready.");
+                            return Ok(ExecutionResult::next());
+                        }
                     }
                 }
                 Ok(None) => {}
                 Err(e) => {
                     return Err(wfe_core::WfeError::StepExecution(format!(
-                        "Failed to get Longhorn webhook endpoints: {e}"
+                        "Failed to get Longhorn manager DaemonSet: {e}"
                     )));
                 }
             }
 
             if attempt % 10 == 0 {
                 tracing::info!(
-                    msg = "Still waiting for Longhorn webhook...",
+                    msg = "Still waiting for Longhorn manager DaemonSet...",
                     attempt = attempt,
                 );
             }
@@ -436,5 +442,66 @@ mod tests {
     #[test]
     fn wait_for_longhorn_webhook_is_default() {
         let _ = WaitForLonghornWebhook;
+    }
+
+    #[test]
+    fn daemonset_ready_when_desired_met() {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        let status = DaemonSetStatus {
+            desired_number_scheduled: 3,
+            number_ready: 3,
+            number_available: Some(3),
+            ..Default::default()
+        };
+        assert!(is_daemonset_ready(&status));
+    }
+
+    #[test]
+    fn daemonset_not_ready_when_insufficient_ready() {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        let status = DaemonSetStatus {
+            desired_number_scheduled: 3,
+            number_ready: 2,
+            number_available: Some(3),
+            ..Default::default()
+        };
+        assert!(!is_daemonset_ready(&status));
+    }
+
+    #[test]
+    fn daemonset_not_ready_when_insufficient_available() {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        let status = DaemonSetStatus {
+            desired_number_scheduled: 3,
+            number_ready: 3,
+            number_available: Some(2),
+            ..Default::default()
+        };
+        assert!(!is_daemonset_ready(&status));
+    }
+
+    #[test]
+    fn daemonset_not_ready_when_zero_desired() {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        let status = DaemonSetStatus {
+            desired_number_scheduled: 0,
+            number_ready: 0,
+            number_available: Some(0),
+            ..Default::default()
+        };
+        assert!(!is_daemonset_ready(&status));
+    }
+
+    #[test]
+    fn daemonset_ready_fallbacks_to_zero_when_available_unset() {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        let status = DaemonSetStatus {
+            desired_number_scheduled: 1,
+            number_ready: 1,
+            number_available: None,
+            ..Default::default()
+        };
+        // number_available defaults to 0, so 0 >= 1 is false
+        assert!(!is_daemonset_ready(&status));
     }
 }
