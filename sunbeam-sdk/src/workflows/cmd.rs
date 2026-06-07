@@ -15,6 +15,17 @@ pub enum WorkflowAction {
     // Commands that work on both local and remote targets
     // ------------------------------------------------------------------
     /// List workflow instances.
+    #[command(long_about = r#"""List workflow instances.
+
+Local target: queries the SQLite database for runnable instances.
+Remote target: queries the wfe-server with optional status filter, pagination,
+and full-text query.
+
+EXAMPLES:
+  sunbeam workflow list
+  sunbeam workflow list --status complete
+  sunbeam workflow -t builds list --limit 100
+""#)]
     List {
         /// Filter by status (runnable, complete, terminated, suspended).
         #[arg(long, default_value = "")]
@@ -30,6 +41,14 @@ pub enum WorkflowAction {
         skip: u64,
     },
     /// Cancel a running workflow.
+    #[command(long_about = r#"""Cancel a running or suspended workflow instance.
+
+Sends a termination signal. The workflow stops at its next checkpoint.
+Already-completed steps are not rolled back.
+
+EXAMPLE:
+  sunbeam workflow cancel <instance-id>
+""#)]
     Cancel {
         /// Workflow instance ID.
         id: String,
@@ -39,16 +58,41 @@ pub enum WorkflowAction {
     // Local-only commands
     // ------------------------------------------------------------------
     /// Show status of a workflow instance.
+    #[command(long_about = r#"""Show detailed status of a workflow instance.
+
+Prints the workflow definition, overall status, creation/completion times,
+and a table of every step with its status, start/end times, and retry count.
+
+EXAMPLE:
+  sunbeam workflow status <instance-id>
+""#)]
     Status {
         /// Workflow instance ID.
         id: String,
     },
     /// Retry a failed workflow from its last checkpoint.
+    #[command(long_about = r#"""Resume a failed or suspended workflow.
+
+Retries from the last successful checkpoint. Steps that already completed
+are skipped. Useful after fixing an underlying issue (e.g. a pod that was
+stuck in Pending).
+
+EXAMPLE:
+  sunbeam workflow retry <instance-id>
+""#)]
     Retry {
         /// Workflow instance ID.
         id: String,
     },
     /// Run a YAML-defined workflow locally.
+    #[command(long_about = r#"""Run a workflow from a YAML file.
+
+Not yet implemented for local target. Use remote target (-t) with the
+`start` command instead.
+
+EXAMPLE:
+  sunbeam workflow run ./deploy.yaml
+""#)]
     Run {
         /// Path to workflow YAML file (default: ./workflows.yaml).
         #[arg(default_value = "")]
@@ -59,33 +103,124 @@ pub enum WorkflowAction {
     // Remote-only commands (wfe-server)
     // ------------------------------------------------------------------
     /// Register a workflow definition from a YAML file.
+    #[command(long_about = r#"""Register a workflow definition on a remote server.
+
+Uploads a YAML workflow definition to the wfe-server so it can be started
+by name and version later.
+
+EXAMPLE:
+  sunbeam workflow -t builds register ./deploy.yaml
+""#)]
     Register(crate::wfectl::register::RegisterArgs),
     /// Locally validate a workflow YAML file (no server round-trip).
+    #[command(long_about = r#"""Validate a workflow YAML file locally.
+
+Checks syntax, step references, and wiring without connecting to a server.
+Useful in CI before registering.
+
+EXAMPLE:
+  sunbeam workflow validate ./deploy.yaml
+""#)]
     Validate(crate::wfectl::validate::ValidateArgs),
     /// Manage registered workflow definitions.
+    #[command(long_about = r#"""List or manage registered workflow definitions.
+
+Shows all definitions available on the remote server with their versions
+and step counts.
+
+EXAMPLE:
+  sunbeam workflow -t builds definitions list
+""#)]
     Definitions(crate::wfectl::definitions::DefinitionsArgs),
     /// Start a registered workflow instance on the server.
-    #[command(name = "start")]
+    #[command(name = "start", long_about = r#"""Start a registered workflow on the remote server.
+
+Creates a new workflow instance from a previously registered definition.
+Returns the instance ID for tracking.
+
+EXAMPLE:
+  sunbeam workflow -t builds start --definition deploy --version 1
+""#)]
     Start(crate::wfectl::run::RunArgs),
     /// Get a workflow instance by ID or name.
+    #[command(long_about = r#"""Get workflow instance details from the remote server.
+
+Similar to `status` but queries the server-side state rather than local SQLite.
+
+EXAMPLE:
+  sunbeam workflow -t builds get <instance-id>
+""#)]
     Get(crate::wfectl::get::GetArgs),
     /// Suspend a running workflow.
+    #[command(long_about = r#"""Suspend a running workflow instance.
+
+Pauses execution at the next checkpoint. Can be resumed with `resume`.
+
+EXAMPLE:
+  sunbeam workflow -t builds suspend <instance-id>
+""#)]
     Suspend(crate::wfectl::suspend::SuspendArgs),
     /// Resume a suspended workflow.
+    #[command(long_about = r#"""Resume a suspended workflow instance.
+
+Continues execution from the last checkpoint.
+
+EXAMPLE:
+  sunbeam workflow -t builds resume <instance-id>
+""#)]
     Resume(crate::wfectl::resume::ResumeArgs),
     /// Publish an event to waiting workflows.
+    #[command(long_about = r#"""Publish an event to waiting workflows.
+
+Workflows that are blocked on `wait_for_event` will consume this event
+and continue.
+
+EXAMPLE:
+  sunbeam workflow -t builds publish --event deploy-complete --key prod
+""#)]
     Publish(crate::wfectl::publish::PublishArgs),
     /// Stream lifecycle events.
+    #[command(long_about = r#"""Stream workflow lifecycle events.
+
+Connects to the server's SSE endpoint and prints workflow start, complete,
+step transition, and failure events in real time.
+
+EXAMPLE:
+  sunbeam workflow -t builds watch
+""#)]
     Watch(crate::wfectl::watch::WatchArgs),
     /// Stream step logs.
+    #[command(long_about = r#"""Stream step execution logs.
+
+Tails the structured logs emitted by a specific workflow instance's steps.
+Useful for debugging long-running workflows.
+
+EXAMPLE:
+  sunbeam workflow -t builds logs <instance-id>
+""#)]
     Logs(crate::wfectl::logs::LogsArgs),
     /// Full-text search log lines.
+    #[command(long_about = r#"""Search workflow logs.
+
+Performs full-text search across stored step logs on the remote server.
+
+EXAMPLE:
+  sunbeam workflow -t builds search-logs <instance-id> --query "error"
+""#)]
     SearchLogs(crate::wfectl::search_logs::SearchLogsArgs),
 
     // ------------------------------------------------------------------
     // Target management
     // ------------------------------------------------------------------
     /// Authenticate with and save a remote workflow server target.
+    #[command(long_about = r#"""Register a remote workflow server target.
+
+Saves the server URL in ~/.sunbeam/config.json. Authentication tokens are
+resolved via `sunbeam auth token` using the domain derived from the URL.
+
+EXAMPLE:
+  sunbeam workflow login --name builds --url https://builds.sunbeam.pt
+""#)]
     Login {
         /// Target name.
         #[arg(short, long)]
@@ -95,12 +230,27 @@ pub enum WorkflowAction {
         url: String,
     },
     /// Remove a saved target.
+    #[command(long_about = r#"""Remove a saved remote target.
+
+Deletes the target from ~/.sunbeam/config.json. Does not revoke tokens.
+
+EXAMPLE:
+  sunbeam workflow logout --name builds
+""#)]
     Logout {
         /// Target name.
         #[arg(short, long)]
         name: String,
     },
     /// List saved workflow targets.
+    #[command(long_about = r#"""List all saved workflow targets.
+
+Shows name and URL for each registered remote target. The implicit `local`
+target is always listed.
+
+EXAMPLE:
+  sunbeam workflow targets
+""#)]
     Targets,
 }
 
