@@ -32,7 +32,7 @@ async fn connect_bao(
     let ob_pod = get_str(data, "ob_pod").ok_or_else(|| step_err("vault auth: missing ob_pod"))?;
     let root_token =
         get_str(data, "root_token").ok_or_else(|| step_err("vault auth: missing root_token"))?;
-    let pf = secrets::port_forward("data", &ob_pod, 8200)
+    let pf = secrets::port_forward("openbao", &ob_pod, 8200)
         .await
         .map_err(|e| step_err(e.to_string()))?;
     let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), &root_token);

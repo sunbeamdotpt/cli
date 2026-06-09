@@ -42,7 +42,7 @@ impl StepBody for FindOpenBaoPod {
 
         let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
         let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
-            kube::Api::namespaced(client.clone(), "data");
+            kube::Api::namespaced(client.clone(), "openbao");
         let lp = kube::api::ListParams::default()
             .labels("app.kubernetes.io/name=openbao,component=server");
         let pod_list = pods.list(&lp).await.map_err(|e| step_err(e.to_string()))?;
@@ -63,7 +63,7 @@ impl StepBody for FindOpenBaoPod {
 
 // ── GetRootToken ───────────────────────────────────────────────────────────
 
-/// Read the root token from the openbao-keys K8s secret.
+/// Read the root token from the openbao-bootstrap-token K8s secret.
 #[derive(Default)]
 pub struct GetRootToken;
 
@@ -71,9 +71,9 @@ pub struct GetRootToken;
 impl StepBody for GetRootToken {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         tracing::debug!("get_root_token");
-        let root_token = k::kube_get_secret_field("data", "openbao-keys", "root-token")
+        let root_token = k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
             .await
-            .map_err(|e| step_err(format!("Could not read openbao-keys secret: {e}")))?;
+            .map_err(|e| step_err(format!("Could not read openbao-bootstrap-token secret: {e}")))?;
 
         tracing::info!("Root token retrieved.");
 
@@ -103,7 +103,7 @@ impl StepBody for WriteSentinel {
             .as_deref()
             .ok_or_else(|| step_err("root_token not set"))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200)
+        let pf = secrets::port_forward("openbao", ob_pod, 8200)
             .await
             .map_err(|e| step_err(e.to_string()))?;
         let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
@@ -343,7 +343,7 @@ impl StepBody for Cleanup {
         let data = load_data(ctx)?;
         if let (Some(ob_pod), Some(root_token)) =
             (data.ob_pod.as_deref(), data.root_token.as_deref())
-            && let Ok(pf) = secrets::port_forward("data", ob_pod, 8200).await
+            && let Ok(pf) = secrets::port_forward("openbao", ob_pod, 8200).await
         {
             let bao =
                 BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);

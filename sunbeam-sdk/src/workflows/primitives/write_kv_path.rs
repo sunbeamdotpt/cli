@@ -72,7 +72,7 @@ impl StepBody for WriteKVPath {
         let path_data: HashMap<String, String> = serde_json::from_str(kv_json)
             .map_err(|e| step_err(format!("WriteKVPath({service}): bad kv_data: {e}")))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200)
+        let pf = secrets::port_forward("openbao", ob_pod, 8200)
             .await
             .map_err(|e| step_err(e.to_string()))?;
         let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);

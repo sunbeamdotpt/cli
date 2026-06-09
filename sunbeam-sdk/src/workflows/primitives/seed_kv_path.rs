@@ -105,7 +105,7 @@ impl StepBody for SeedKVPath {
             .and_then(|v| v.as_array())
             .ok_or_else(|| step_err("SeedKVPath: missing fields"))?;
 
-        let pf = secrets::port_forward("data", ob_pod, 8200)
+        let pf = secrets::port_forward("openbao", ob_pod, 8200)
             .await
             .map_err(|e| step_err(e.to_string()))?;
         let bao = BaoClient::with_token(&format!("http://127.0.0.1:{}", pf.local_port), root_token);
