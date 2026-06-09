@@ -74,13 +74,13 @@ pub async fn cmd_doctor(logger: &crate::logger::Logger) -> Result<()> {
     // 6. OpenBao
     if let Some((pod, unlabeled)) =
         crate::kube::find_pod_by_label_or_any(
-            "data",
+            "openbao",
             "app.kubernetes.io/name=openbao,component=server",
         )
         .await
     {
         let label_note = if unlabeled { " (unlabeled)" } else { "" };
-        match crate::kube::kube_exec("data", &pod, &["bao", "status", "-format=json"], None).await {
+        match crate::kube::kube_exec("openbao", &pod, &["bao", "status", "-format=json"], None).await {
             Ok((0, out)) => {
                 let sealed = serde_json::from_str::<serde_json::Value>(&out)
                     .ok()

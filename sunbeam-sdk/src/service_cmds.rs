@@ -442,14 +442,14 @@ async fn cmd_secrets(logger: &Logger, service: &str, action: Option<SecretsActio
     })?;
 
     let ob_pod =
-        crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
+        crate::kube::find_pod_by_label("openbao", "app.kubernetes.io/name=openbao,component=server")
             .await
             .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
 
-    let pf = crate::secrets::port_forward("data", &ob_pod, 8200).await?;
+    let pf = crate::secrets::port_forward("openbao", &ob_pod, 8200).await?;
     let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
 
-    let token = crate::kube::kube_get_secret_field("data", "openbao-keys", "root-token")
+    let token = crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
         .await
         .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
 

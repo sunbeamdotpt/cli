@@ -1,7 +1,7 @@
 //! OpenBao secrets engine interaction — KV, transit, generic read/write, and system ops.
 //!
 //! All commands work by finding the OpenBao pod, opening a port-forward, grabbing
-//! the root token from the K8s secret `openbao-keys`, and using `BaoClient` to hit
+//! the root token from the K8s secret `openbao-bootstrap-token`, and using `BaoClient` to hit
 //! the HTTP API. Override with `--addr` and `--token` for remote instances.
 
 use clap::Subcommand;
@@ -316,7 +316,7 @@ pub async fn dispatch(
         )),
         (None, token_override) => {
             let ob_pod = find_openbao_pod().await?;
-            let pf = crate::secrets::port_forward("data", &ob_pod, 8200).await?;
+            let pf = crate::secrets::port_forward("openbao", &ob_pod, 8200).await?;
             let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
 
             let tok = match token_override {
@@ -596,14 +596,14 @@ async fn cmd_unseal(client: &BaoClient, key: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn find_openbao_pod() -> Result<String> {
-    crate::kube::find_pod_by_label("data", "app.kubernetes.io/name=openbao,component=server")
+    crate::kube::find_pod_by_label("openbao", "app.kubernetes.io/name=openbao,component=server")
         .await
         .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))
 }
 
 async fn read_token() -> Result<String> {
     // 1. Try K8s secret
-    match crate::kube::kube_get_secret_field("data", "openbao-keys", "root-token").await {
+    match crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await {
         Ok(token) if !token.is_empty() => return Ok(token),
         _ => {}
     }

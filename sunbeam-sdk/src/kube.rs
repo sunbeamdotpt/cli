@@ -1032,7 +1032,7 @@ async fn resolve_registry_ip(domain: &str) -> String {
 pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
     // Find the openbao pod
     let client = get_client().await?;
-    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), "data");
+    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), "openbao");
 
     let lp = ListParams::default().labels("app.kubernetes.io/name=openbao");
     let pod_list = pods.list(&lp).await.ctx("Failed to list OpenBao pods")?;
@@ -1044,9 +1044,9 @@ pub async fn cmd_bao(bao_args: &[String]) -> Result<()> {
         .to_string();
 
     // Get root token
-    let root_token = kube_get_secret_field("data", "openbao-keys", "root-token")
+    let root_token = kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
         .await
-        .ctx("root-token not found in openbao-keys secret")?;
+        .ctx("root-token not found in openbao-bootstrap-token secret")?;
 
     // Build argv: `env VAULT_TOKEN=<token> bao <args...>`. Using `env` avoids
     // any shell interpretation of the token on the remote side.
@@ -1173,7 +1173,7 @@ mod tests {
         let doc = serde_json::json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
-            "metadata": { "name": "vault-bootstrap-job", "namespace": "data" },
+            "metadata": { "name": "vault-bootstrap-job", "namespace": "openbao" },
             "spec": {
                 "template": {
                     "spec": {

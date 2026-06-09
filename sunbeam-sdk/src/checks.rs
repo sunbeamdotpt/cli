@@ -272,7 +272,7 @@ async fn check_valkey(_domain: &str, _client: &reqwest::Client) -> CheckResult {
 /// kubectl exec openbao-0 -- bao status -format=json -> initialized + unsealed.
 async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult {
     match kube_exec(
-        "data",
+        "openbao",
         "openbao-0",
         &["bao", "status", "-format=json"],
         Some("openbao"),
@@ -281,7 +281,7 @@ async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult 
     {
         Ok((_, out)) => {
             if out.is_empty() {
-                return CheckResult::fail("openbao", "data", "openbao", "no response");
+                return CheckResult::fail("openbao", "openbao", "openbao", "no response");
             }
             match serde_json::from_str::<serde_json::Value>(&out) {
                 Ok(data) => {
@@ -293,7 +293,7 @@ async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult 
                     let passed = init && !sealed;
                     CheckResult {
                         name: "openbao".into(),
-                        ns: "data".into(),
+                        ns: "openbao".into(),
                         svc: "openbao".into(),
                         passed,
                         detail: format!("init={init}, sealed={sealed}"),
@@ -301,11 +301,11 @@ async fn check_openbao(_domain: &str, _client: &reqwest::Client) -> CheckResult 
                 }
                 Err(_) => {
                     let truncated: String = out.chars().take(80).collect();
-                    CheckResult::fail("openbao", "data", "openbao", &truncated)
+                    CheckResult::fail("openbao", "openbao", "openbao", &truncated)
                 }
             }
         }
-        Err(e) => CheckResult::fail("openbao", "data", "openbao", &format!("{e}")),
+        Err(e) => CheckResult::fail("openbao", "openbao", "openbao", &format!("{e}")),
     }
 }
 
@@ -516,7 +516,7 @@ fn check_registry() -> Vec<CheckEntry> {
         },
         CheckEntry {
             func: |d, c| Box::pin(check_openbao(d, c)),
-            ns: "data",
+            ns: "openbao",
             svc: "openbao",
         },
         CheckEntry {
@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(registry[2].svc, "postgres");
         assert_eq!(registry[3].ns, "data");
         assert_eq!(registry[3].svc, "valkey");
-        assert_eq!(registry[4].ns, "data");
+        assert_eq!(registry[4].ns, "openbao");
         assert_eq!(registry[4].svc, "openbao");
         assert_eq!(registry[5].ns, "storage");
         assert_eq!(registry[5].svc, "seaweedfs");
@@ -926,10 +926,10 @@ mod tests {
     }
 
     #[test]
-    fn test_check_registry_data_has_three_entries() {
+    fn test_check_registry_data_has_two_entries() {
         let registry = check_registry();
         let data: Vec<_> = registry.iter().filter(|e| e.ns == "data").collect();
-        assert_eq!(data.len(), 3); // postgres, valkey, openbao
+        assert_eq!(data.len(), 2); // postgres, valkey
     }
 
     // ── Filter logic (mirrors Python TestCmdCheck) ────────────────────
@@ -997,11 +997,10 @@ mod tests {
     #[test]
     fn test_filter_data_namespace() {
         let selected = filter_registry(Some("data"), None);
-        assert_eq!(selected.len(), 3);
+        assert_eq!(selected.len(), 2);
         let svcs: Vec<&str> = selected.iter().map(|(_, svc)| *svc).collect();
         assert!(svcs.contains(&"postgres"));
         assert!(svcs.contains(&"valkey"));
-        assert!(svcs.contains(&"openbao"));
     }
 
     #[test]
