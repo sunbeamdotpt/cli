@@ -104,6 +104,10 @@ prost = "0.14"
 # VCS
 gix = { version = "0.81.0", default-features = false, features = ["sha1", "revision"] }
 
+# repo-rs
+camino = "1.2"
+indexmap = "2.14"
+
 # Dev
 wiremock = "0.6"
 pretty_assertions = "1"
