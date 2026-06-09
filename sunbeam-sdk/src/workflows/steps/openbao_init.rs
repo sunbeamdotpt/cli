@@ -39,7 +39,7 @@ impl StepBody for FindOpenBaoPod {
 
         let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
         let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
-            kube::Api::namespaced(client.clone(), "data");
+            kube::Api::namespaced(client.clone(), "openbao");
         let lp = kube::api::ListParams::default()
             .labels("app.kubernetes.io/name=openbao,component=server");
         let pod_list = pods.list(&lp).await.map_err(|e| step_err(e.to_string()))?;
@@ -95,20 +95,7 @@ impl StepBody for WaitPodRunning {
         };
         tracing::info!(msg = "Waiting for OpenBao pod...", pod = %ob_pod);
 
-        // Ensure openbao-keys secret exists (even as placeholder) so the pod
-        // can mount it. InitOrUnsealOpenBao will overwrite with real values.
-        if k::kube_get_secret_field("data", "openbao-keys", "key")
-            .await
-            .is_err()
-        {
-            let placeholder = std::collections::HashMap::from([
-                ("key".to_string(), "placeholder".to_string()),
-                ("root-token".to_string(), "placeholder".to_string()),
-            ]);
-            let _ = k::create_secret("data", "openbao-keys", placeholder).await;
-        }
-
-        let _ = secrets::wait_pod_running("data", &ob_pod, 300).await;
+        let _ = secrets::wait_pod_running("openbao", &ob_pod, 300).await;
         tracing::info!(msg = "OpenBao pod is running.", pod = %ob_pod);
 
         Ok(ExecutionResult::next())
@@ -149,7 +136,7 @@ impl StepBody for InitOrUnsealOpenBao {
         // Port-forward with retries
         let mut pf = None;
         for attempt in 0..10 {
-            match secrets::port_forward("data", &ob_pod, 8200).await {
+            match secrets::port_forward("openbao", &ob_pod, 8200).await {
                 Ok(p) => {
                     pf = Some(p);
                     break;
@@ -208,12 +195,11 @@ impl StepBody for InitOrUnsealOpenBao {
             sealed: true,
         });
 
-        // Check if truly initialized (not just a placeholder secret)
+        // Check if truly initialized (not just an empty secret)
         let mut already_initialized = status.initialized;
         if !already_initialized
-            && let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await
+            && let Ok(key) = k::kube_get_secret_field("openbao", "openbao-unseal-key", "key").await
             && !key.is_empty()
-            && key != "placeholder"
         {
             already_initialized = true;
         }
@@ -227,13 +213,13 @@ impl StepBody for InitOrUnsealOpenBao {
 
         if already_initialized {
             tracing::info!("Already initialized.");
-            if let Ok(key) = k::kube_get_secret_field("data", "openbao-keys", "key").await
-                && key != "placeholder"
+            if let Ok(key) = k::kube_get_secret_field("openbao", "openbao-unseal-key", "key").await
+                && !key.is_empty()
             {
                 unseal_key = key;
             }
-            if let Ok(token) = k::kube_get_secret_field("data", "openbao-keys", "root-token").await
-                && token != "placeholder"
+            if let Ok(token) = k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await
+                && !token.is_empty()
             {
                 root_token = token;
             }
@@ -243,10 +229,14 @@ impl StepBody for InitOrUnsealOpenBao {
                 let ks = local_keystore.as_ref().unwrap();
                 if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
                     tracing::error!("Cluster secret missing keys — restoring from local keystore...");
-                    let mut secret_data = HashMap::new();
-                    secret_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
-                    secret_data.insert("root-token".to_string(), ks.root_token.clone());
-                    k::create_secret("data", "openbao-keys", secret_data)
+                    let mut unseal_data = HashMap::new();
+                    unseal_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
+                    k::create_secret("openbao", "openbao-unseal-key", unseal_data)
+                        .await
+                        .map_err(|e| step_err(e.to_string()))?;
+                    let mut token_data = HashMap::new();
+                    token_data.insert("root-token".to_string(), ks.root_token.clone());
+                    k::create_secret("openbao", "openbao-bootstrap-token", token_data)
                         .await
                         .map_err(|e| step_err(e.to_string()))?;
                     unseal_key = ks.unseal_keys_b64[0].clone();
@@ -259,14 +249,14 @@ impl StepBody for InitOrUnsealOpenBao {
             // and wait for the pod to restart so we can re-initialize inline.
             if root_token.is_empty() {
                 tracing::error!("Vault is initialized but root token is missing -- resetting storage...");
-                let _ = secrets::delete_resource("data", "pvc", "data-openbao-0").await;
-                let _ = secrets::delete_resource("data", "pod", &ob_pod).await;
+                let _ = secrets::delete_resource("openbao", "pvc", "data-openbao-0").await;
+                let _ = secrets::delete_resource("openbao", "pod", &ob_pod).await;
                 tracing::info!("Waiting for OpenBao pod to restart...");
 
                 // Poll for a new openbao pod to reach Running (up to 5 min).
                 let client = k::get_client().await.map_err(|e| step_err(e.to_string()))?;
                 let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
-                    kube::Api::namespaced(client.clone(), "data");
+                    kube::Api::namespaced(client.clone(), "openbao");
                 let lp = kube::api::ListParams::default()
                     .labels("app.kubernetes.io/name=openbao,component=server");
                 let mut new_pod = String::new();
@@ -306,7 +296,7 @@ impl StepBody for InitOrUnsealOpenBao {
                 // Re-establish port-forward to the new pod.
                 let mut pf2 = None;
                 for attempt in 0..10 {
-                    match secrets::port_forward("data", &new_pod, 8200).await {
+                    match secrets::port_forward("openbao", &new_pod, 8200).await {
                         Ok(p) => {
                             pf2 = Some(p);
                             break;
@@ -374,13 +364,17 @@ impl StepBody for InitOrUnsealOpenBao {
                 Some(init) => {
                     unseal_key = init.keys_base64[0].clone();
                     root_token = init.root_token.clone();
-                    let mut secret_data = HashMap::new();
-                    secret_data.insert("key".to_string(), unseal_key.clone());
-                    secret_data.insert("root-token".to_string(), root_token.clone());
-                    k::create_secret("data", "openbao-keys", secret_data)
+                    let mut unseal_data = HashMap::new();
+                    unseal_data.insert("key".to_string(), unseal_key.clone());
+                    k::create_secret("openbao", "openbao-unseal-key", unseal_data)
                         .await
                         .map_err(|e| step_err(e.to_string()))?;
-                    tracing::info!("Initialized -- keys stored in secret/openbao-keys.");
+                    let mut token_data = HashMap::new();
+                    token_data.insert("root-token".to_string(), root_token.clone());
+                    k::create_secret("openbao", "openbao-bootstrap-token", token_data)
+                        .await
+                        .map_err(|e| step_err(e.to_string()))?;
+                    tracing::info!("Initialized -- keys stored in openbao-unseal-key and openbao-bootstrap-token.");
 
                     // Save to local keystore
                     if !domain.is_empty() {
