@@ -16,7 +16,7 @@ The binary is `sunbeam`; the thin entry-point lives in `src/main.rs`. All implem
 - **Tracing/Logging:** tracing + tracing-subscriber with custom line/json/threaded layers
 - **Crypto:** rsa, sha2, hmac, blake2, chacha20poly1305, hkdf, base64, rand, aes-gcm, argon2, crypto_box, x25519-dalek, rcgen
 - **Email:** lettre (SMTP with tokio + rustls)
-- **VCS:** gix, repo-rs
+- **VCS:** gix, repo-rs-cmd, repo-rs-engine, repo-rs-model, repo-rs-git, repo-rs-manifest
 - **Secrets:** vaultrs (OpenBao / Vault)
 - **Networking/VPN:** boringtun, smoltcp, ipnet, zstd
 - **Testing:** cargo nextest, wiremock, pretty_assertions, tokio-test
