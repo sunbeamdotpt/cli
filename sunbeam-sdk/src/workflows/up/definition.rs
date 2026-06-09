@@ -70,6 +70,10 @@ pub fn build() -> WorkflowDefinition {
                 b.add_step_typed::<ApplyManifest>("apply-build",
                     Some(json!({"namespace": "build"})));
             })
+            .branch(|b| {
+                b.add_step_typed::<ApplyManifest>("apply-openbao",
+                    Some(json!({"namespace": "openbao"})));
+            })
         )
 
         .then::<steps::WaitForCNPGWebhook>()
