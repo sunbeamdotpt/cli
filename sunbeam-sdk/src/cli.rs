@@ -25,7 +25,7 @@ pub struct Cli {
     ///
     /// The `RUST_LOG` environment variable overrides the default level filter
     /// (e.g. `RUST_LOG=sunbeam=debug` or `RUST_LOG=trace`).
-    #[arg(short, long, value_enum, default_value_t = crate::logging::LogMode::Line, global = true)]
+    #[arg(long, value_enum, default_value_t = crate::logging::LogMode::Line, global = true)]
     pub log_mode: crate::logging::LogMode,
 
     /// Increase logging verbosity. Use once for debug, twice for trace.
@@ -617,46 +617,31 @@ EXAMPLES:
         action: OperationsAction,
     },
 
-    /// Version control — multi-repo git operations.
-    #[command(long_about = r#"""Git operations across the entire workspace.
+    /// Version control — repo tool operations.
+    #[command(long_about = r#"""Android repo-style multi-repository operations.
 
-Runs git commands in every repository defined in `sunbeam.workspace.yaml`.
-This is much faster than manually cd-ing into each repo.
-
-Supported commands mirror standard git operations:
-  status, log, branch, commit, push, fetch, pull, clone, init
-
-Most commands accept VcsArgs that control scope:
-  --all          — all repos in the workspace
-  --owned        — repos owned by the current user
-  --forks        — forked repos
-  --project <n>  — specific project name(s)
+Wraps the repo-rs engine for managing multiple Git repositories via a
+manifest. All standard repo subcommands are available:
+  init, sync, upload, start, status, diff, rebase, cherry-pick, abandon,
+  checkout, branches, forall, grep, manifest, info, list, prune, gc,
+  diffmanifests, wipe, selfupdate, smartsync, version, help, overview
 
 EXAMPLES:
-  # Show status in all repos
-  sunbeam vcs status --all
+  # Initialize a repo checkout
+  sunbeam vcs init --manifest-url https://git.sunbeam.pt/manifest.git
 
-  # Commit with message in all modified repos
-  sunbeam vcs commit --all -m "feat: update dependencies"
+  # Sync all projects
+  sunbeam vcs sync
 
-  # Push all branches
-  sunbeam vcs push --all
+  # Show status
+  sunbeam vcs status
 
-  # Pull in owned repos only
-  sunbeam vcs pull --owned
+  # Start a topic branch
+  sunbeam vcs start feature-x
 
-  # List branches
-  sunbeam vcs branch --all --list
-
-  # Create a branch in specific projects
-  sunbeam vcs branch --project proxy --project api --create feature/new-auth
-
-  # One-line log for owned repos
-  sunbeam vcs log --owned --oneline -n 5
-
-  # Clone the entire workspace from a manifest
-  sunbeam vcs init https://git.sunbeam.pt/org/workspace.git
-""#)]
+  # Upload for review
+  sunbeam vcs upload
+"""#)]
     Vcs {
         #[command(subcommand)]
         action: VcsAction,
@@ -1726,172 +1711,64 @@ EXAMPLE:
 }
 
 
-/// Version control subcommands.
+/// Repo tool subcommands.
 #[derive(Subcommand, Debug)]
+#[command(disable_help_subcommand = true)]
 pub enum VcsAction {
-    /// Show working tree status.
-    #[command(long_about = r#"""Show working tree status across repos.
-
-Displays modified, staged, and untracked files for each repository in the
-selected scope. This is equivalent to running `git status` in every repo.
-
-EXAMPLES:
-  sunbeam vcs status --all
-  sunbeam vcs status --owned
-""#)]
-    Status {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-    },
-    /// Show commit history.
-    #[command(long_about = r#"""Show commit history across repos.
-
-Runs `git log` in every repository in the selected scope. Use --oneline for
-compact output and -n to limit commits per repo.
-
-EXAMPLES:
-  sunbeam vcs log --all --oneline -n 5
-  sunbeam vcs log --project proxy
-""#)]
-    Log {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Print one line per commit.
-        #[arg(long)]
-        oneline: bool,
-        /// Limit number of commits.
-        #[arg(short = 'n', long)]
-        limit: Option<usize>,
-    },
+    /// Initialize a repo client checkout.
+    Init(repo_rs_cmd::init::InitArgs),
+    /// Update working tree to the latest revision.
+    Sync(repo_rs_cmd::sync::SyncArgs),
+    /// Upload changes for code review.
+    Upload(repo_rs_cmd::upload::UploadArgs),
+    /// Download changes from the server.
+    Download(repo_rs_cmd::download::DownloadArgs),
+    /// Start a new branch for development.
+    Start(repo_rs_cmd::start::StartArgs),
+    /// Show the working tree status.
+    Status(repo_rs_cmd::status::StatusArgs),
+    /// Show changes between commits, commit and working tree, etc.
+    Diff(repo_rs_cmd::diff::DiffArgs),
+    /// Stage files for upload.
+    Stage(repo_rs_cmd::stage::StageArgs),
+    /// Rebase local branches.
+    Rebase(repo_rs_cmd::rebase::RebaseArgs),
+    /// Cherry-pick a change.
+    CherryPick(repo_rs_cmd::cherry_pick::CherryPickArgs),
+    /// Abandon a topic branch.
+    Abandon(repo_rs_cmd::abandon::AbandonArgs),
+    /// Checkout a branch.
+    Checkout(repo_rs_cmd::checkout::CheckoutArgs),
     /// List, create, or delete branches.
-    #[command(long_about = r#"""Manage branches across repos.
-
-Exactly one of --list, --create, or --delete must be specified.
-Operations are performed in every repository in the selected scope.
-
-EXAMPLES:
-  sunbeam vcs branch --all --list
-  sunbeam vcs branch --all --create feature/new-auth
-  sunbeam vcs branch --all --delete old-feature
-""#)]
-    Branch {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// List branches.
-        #[arg(long, group = "branch_op")]
-        list: bool,
-        /// Create a new branch.
-        #[arg(long, group = "branch_op")]
-        create: Option<String>,
-        /// Delete a branch.
-        #[arg(long, group = "branch_op")]
-        delete: Option<String>,
-    },
-    /// Record changes to the repository.
-    #[command(long_about = r#"""Commit changes across repos.
-
-Stages and commits in every repository that has modified files. Use --all
-to stage all changes (equivalent to `git commit -a`) before committing.
-
-EXAMPLES:
-  sunbeam vcs commit --all -m "fix: handle edge case"
-  sunbeam vcs commit --owned -m "docs: update README"
-""#)]
-    Commit {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Commit message.
-        #[arg(short = 'm', long)]
-        message: String,
-        /// Stage all modified/deleted files before committing.
-        #[arg(long)]
-        all: bool,
-    },
-    /// Push refs to a remote.
-    #[command(long_about = r#"""Push branches to the remote.
-
-Pushes the current branch in every repository in the selected scope.
-Use --set-upstream to configure tracking for new branches.
-
-EXAMPLES:
-  sunbeam vcs push --all
-  sunbeam vcs push --all --set-upstream origin/feature-x
-""#)]
-    Push {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-        /// Set upstream and push.
-        #[arg(long)]
-        set_upstream: Option<String>,
-    },
-    /// Fetch from remote.
-    #[command(long_about = r#"""Fetch from remotes across repos.
-
-Runs `git fetch` in every repository in the selected scope.
-
-EXAMPLE:
-  sunbeam vcs fetch --all
-""#)]
-    Fetch {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-    },
-    /// Pull from remote.
-    #[command(long_about = r#"""Pull from remotes across repos.
-
-Runs `git pull` in every repository in the selected scope.
-
-EXAMPLE:
-  sunbeam vcs pull --all
-""#)]
-    Pull {
-        #[command(flatten)]
-        args: crate::vcs::VcsArgs,
-        /// Remote name (default: origin).
-        #[arg(long, default_value = "origin")]
-        remote: String,
-    },
-    /// Clone a repository.
-    #[command(long_about = r#"""Clone a single repository.
-
-Clones into the workspace directory structure inferred from the URL.
-Use --name to override the local directory name.
-
-EXAMPLE:
-  sunbeam vcs clone https://git.sunbeam.pt/org/project.git
-""#)]
-    Clone {
-        /// Repository URL.
-        url: String,
-        /// Local name override (default: inferred from URL).
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Initialize workspace repos from a manifest.
-    #[command(long_about = r#"""Clone all repositories in a workspace.
-
-Reads sunbeam.workspace.yaml from the given URL (or current directory) and
-clones every listed repository into the local workspace directory. This is
-the fastest way to set up a new development machine.
-
-EXAMPLES:
-  sunbeam vcs init https://git.sunbeam.pt/org/workspace.git
-  sunbeam vcs init  # uses current directory's sunbeam.workspace.yaml
-""#)]
-    Init {
-        /// Git URL of the workspace root repository.
-        /// If omitted, uses the current directory's sunbeam.workspace.yaml.
-        url: Option<String>,
-        /// Local directory name when cloning a git repo.
-        #[arg(long)]
-        name: Option<String>,
-    },
+    Branches(repo_rs_cmd::branches::BranchesArgs),
+    /// Run a shell command in each project.
+    Forall(repo_rs_cmd::forall::ForallArgs),
+    /// Search across projects.
+    Grep(repo_rs_cmd::grep::GrepArgs),
+    /// Manifest inspection and comparison.
+    Manifest(repo_rs_cmd::manifest::ManifestArgs),
+    /// Display info about a project.
+    Info(repo_rs_cmd::info::InfoArgs),
+    /// List projects.
+    List(repo_rs_cmd::list::ListArgs),
+    /// Prune branches.
+    Prune(repo_rs_cmd::prune::PruneArgs),
+    /// Garbage collection.
+    Gc(repo_rs_cmd::gc::GcArgs),
+    /// Diff manifests.
+    Diffmanifests(repo_rs_cmd::diffmanifests::DiffManifestsArgs),
+    /// Wipe a project.
+    Wipe(repo_rs_cmd::wipe::WipeArgs),
+    /// Update the repo tool itself.
+    Selfupdate(repo_rs_cmd::selfupdate::SelfUpdateArgs),
+    /// Smart sync.
+    Smartsync(repo_rs_cmd::smartsync::SmartsyncArgs),
+    /// Display the version of repo.
+    Version(repo_rs_cmd::version::VersionArgs),
+    /// Display detailed help.
+    Help(repo_rs_cmd::help::HelpArgs),
+    /// Show project overview.
+    Overview(repo_rs_cmd::overview::OverviewArgs),
 }
 /// Docker Compose subcommands.
 #[derive(Subcommand, Debug)]
