@@ -17,6 +17,7 @@ pub const APP_NAMESPACES: &[&str] = &[
     "media",
     "monitoring",
     "oci",
+    "openbao",
     "ory",
     "press",
     "stalwart",
@@ -29,7 +30,7 @@ pub const APP_NAMESPACES: &[&str] = &[
 /// Tear down all Sunbeam-managed namespaces.
 ///
 /// * `infra` — also delete cert-manager and longhorn-system.
-/// * `keep_data` — preserve the data namespace (postgres, opensearch, openbao).
+/// * `keep_data` — preserve the data namespace (postgres, opensearch).
 #[tracing::instrument(skip(logger))]
 pub async fn cmd_down(
     logger: &crate::logger::Logger,

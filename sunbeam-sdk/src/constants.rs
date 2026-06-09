@@ -14,6 +14,7 @@ pub const MANAGED_NS: &[&str] = &[
     "matrix",
     "media",
     "monitoring",
+    "openbao",
     "ory",
     "stalwart",
     "storage",

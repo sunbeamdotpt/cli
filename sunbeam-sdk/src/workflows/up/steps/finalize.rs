@@ -51,10 +51,10 @@ impl StepBody for PrintURLs {
 
         println!();
         println!("  OpenBao UI:");
-        println!("    kubectl --context=sunbeam -n data port-forward svc/openbao 8200:8200");
+        println!("    kubectl --context=sunbeam -n openbao port-forward svc/openbao 8200:8200");
         println!("    http://localhost:8200");
         println!(
-            "    token: kubectl --context=sunbeam -n data get secret openbao-keys \
+            "    token: kubectl --context=sunbeam -n openbao get secret openbao-bootstrap-token \
              -o jsonpath='{{.data.root-token}}' | base64 -d"
         );
         println!("{sep}\n");

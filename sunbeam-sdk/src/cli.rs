@@ -144,7 +144,7 @@ EXAMPLES:
         /// Also delete infrastructure namespaces (cert-manager, longhorn-system).
         #[arg(long)]
         infra: bool,
-        /// Preserve data namespace (postgres, opensearch, openbao).
+        /// Preserve data namespace (postgres, opensearch).
         #[arg(long)]
         keep_data: bool,
         /// Use Lima VM for local k3s (shorthand for --profile lima).
@@ -412,9 +412,9 @@ EXAMPLES:
 OpenBao is the HashiCorp Vault fork used by Sunbeam for secrets management.
 This command provides direct access to KV v2, transit, and generic endpoints.
 
-By default, the command auto-discovers the OpenBao pod in the `data` namespace,
+By default, the command auto-discovers the OpenBao pod in the `openbao` namespace,
 opens a port-forward, and reads the root token from the K8s secret
-`data/openbao-keys`. You can override the address and token with --addr and
+`openbao/openbao-bootstrap-token`. You can override the address and token with --addr and
 --token for remote instances.
 
 Subcommands:
