@@ -69,8 +69,15 @@ whoami.workspace = true
 libc.workspace = true
 
 # VCS
-repo-rs = "0.1.2"
 gix = { workspace = true, default-features = false, features = ["revision", "sha1"] }
+repo-rs-cmd = "0.2.0"
+repo-rs-engine = "0.2.0"
+repo-rs-model = "0.2.0"
+repo-rs-git = "0.2.0"
+repo-rs-manifest = "0.2.0"
+camino = { workspace = true }
+indexmap = { workspace = true }
+anstream = "1"
 
 # OpenBao / Vault
 vaultrs.workspace = true
