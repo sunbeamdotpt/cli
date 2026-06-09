@@ -1557,6 +1557,9 @@ dependencies = [
  "libc",
  "libgit2-sys",
  "log",
+ "openssl-probe 0.1.6",
+ "openssl-sys",
+ "url",
 ]
 
 [[package]]
@@ -3372,7 +3375,9 @@ checksum = "005d6ae6eac1912906073e069f7db60b1fa98e052a68227824afe3e3a1c59ca2"
 dependencies = [
  "cc",
  "libc",
+ "libssh2-sys",
  "libz-sys",
+ "openssl-sys",
  "pkg-config",
 ]
 
@@ -3401,6 +3406,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
 dependencies = [
  "cc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
+name = "libssh2-sys"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "220e4f05ad4a218192533b300327f5150e809b54c4ec83b5a1d91833601811b9"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "openssl-sys",
  "pkg-config",
  "vcpkg",
 ]
@@ -3821,9 +3840,27 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openssl-probe"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
+
+[[package]]
+name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.116"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "option-ext"
@@ -4517,9 +4554,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "repo-rs-cmd"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80cb7dc0d5c5276947fb8d16c9736eb52e398eefad307f0612a14fcf6dff9613"
+checksum = "bac899771c2d63a96fabcb0f1a7dd0f7e9b1b2e81d951983997d67470bf7d0c0"
 dependencies = [
  "anstream",
  "async-trait",
@@ -4535,9 +4572,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-engine"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c4f1364938d29e82a672033144d88fee9dc9c8dca64e9bf8d149aee529bc301"
+checksum = "759a221e7621523cb834da5857b10d94ae630b810c1195590ebf1b595d77e430"
 dependencies = [
  "anstream",
  "async-trait",
@@ -4558,9 +4595,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-git"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56d9e2a8662e7e6b2dc7b3be8aaade70473c1b4f47a1717004f6e3beb7acc06c"
+checksum = "b2800ba5ec1361f57279b36b33458776b58023efaa8e7b40e34ee902b408ae93"
 dependencies = [
  "async-trait",
  "camino",
@@ -4575,9 +4612,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-manifest"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2942b970a1f02a70da89bc1067a1d4afafea8ee0aa9e40c31d62ce20e014c0c"
+checksum = "b1bf1c45ed917fe1b3218c811027dc54292cd8dd84348a0d8df834f8bc0967b6"
 dependencies = [
  "camino",
  "indexmap",
@@ -4590,9 +4627,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-model"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4ccb155ba48cceee44202838276c29c80a5f99dc23bf7a9204075c0164bd5f8"
+checksum = "8cfc3bc4e49040c2235cad93c10e538a63ff2832f3c90e329821984d4ae9fe7f"
 dependencies = [
  "camino",
  "indexmap",
@@ -4833,7 +4870,7 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
 dependencies = [
- "openssl-probe",
+ "openssl-probe 0.2.1",
  "rustls-pki-types",
  "schannel",
  "security-framework",
