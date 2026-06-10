@@ -444,12 +444,13 @@ async fn apply_one_doc(
         }
     };
 
-    let api: Api<DynamicObject> = if let Some(ns) = namespace {
-        Api::namespaced_with(client.clone(), ns, &ar)
-    } else if scope == Scope::Namespaced {
-        Api::default_namespaced_with(client.clone(), &ar)
-    } else {
+    let (is_cluster, api_ns) = api_scope_for_resource(scope, namespace);
+    let api: Api<DynamicObject> = if is_cluster {
         Api::all_with(client.clone(), &ar)
+    } else if let Some(ns) = api_ns {
+        Api::namespaced_with(client.clone(), ns, &ar)
+    } else {
+        Api::default_namespaced_with(client.clone(), &ar)
     };
 
     let mut patch: serde_json::Value = match serde_yaml::from_str(doc) {
@@ -596,6 +597,19 @@ fn resolve_api_resource(
     }
 
     bail!("Could not discover API resource for {api_version}/{kind}")
+}
+
+/// Decide whether to use a cluster-scoped or namespaced API for a resource.
+///
+/// Cluster-scoped resources (e.g. `CiliumClusterwideNetworkPolicy`) must always
+/// use `Api::all_with`, even when kustomize injects `metadata.namespace` into
+/// the manifest. `kubectl` behaves the same way.
+pub(crate) fn api_scope_for_resource(scope: Scope, namespace: Option<&str>) -> (bool, Option<&str>) {
+    if scope == Scope::Cluster {
+        (true, None)
+    } else {
+        (false, namespace)
+    }
 }
 
 /// Get a Kubernetes Secret object.
@@ -1252,5 +1266,29 @@ mod tests {
         let json_str = serde_json::to_string(&secret_obj).unwrap();
         assert!(json_str.contains("YWRtaW4=")); // base64("admin")
         assert!(json_str.contains("czNjcmV0")); // base64("s3cret")
+    }
+
+    #[test]
+    fn cluster_scoped_resource_ignores_manifest_namespace() {
+        use kube::discovery::Scope;
+
+        // Cluster-scoped resources must use Api::all_with (no namespace segment),
+        // even when kustomize injects metadata.namespace into the manifest.
+        let (is_cluster, ns) = api_scope_for_resource(Scope::Cluster, Some("openbao"));
+        assert!(
+            is_cluster,
+            "cluster-scoped resources must use all_with regardless of manifest namespace"
+        );
+        assert_eq!(ns, None);
+
+        // Namespaced resources with a namespace use Api::namespaced_with.
+        let (is_cluster, ns) = api_scope_for_resource(Scope::Namespaced, Some("openbao"));
+        assert!(!is_cluster);
+        assert_eq!(ns, Some("openbao"));
+
+        // Namespaced resources without a namespace use Api::default_namespaced_with.
+        let (is_cluster, ns) = api_scope_for_resource(Scope::Namespaced, None);
+        assert!(!is_cluster);
+        assert_eq!(ns, None);
     }
 }

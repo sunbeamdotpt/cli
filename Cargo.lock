@@ -4554,9 +4554,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "repo-rs-cmd"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bac899771c2d63a96fabcb0f1a7dd0f7e9b1b2e81d951983997d67470bf7d0c0"
+checksum = "1cbfb65a43e2e4e7f88bb5afc1c6b58d815ef5c0602973075501210652194f4f"
 dependencies = [
  "anstream",
  "async-trait",
@@ -4572,9 +4572,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-engine"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "759a221e7621523cb834da5857b10d94ae630b810c1195590ebf1b595d77e430"
+checksum = "8b2f057b2f390b3feb8be05536013fe57123303b63be208a82bb38c829053a08"
 dependencies = [
  "anstream",
  "async-trait",
@@ -4595,9 +4595,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-git"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2800ba5ec1361f57279b36b33458776b58023efaa8e7b40e34ee902b408ae93"
+checksum = "409ec5bc89b0ed3ec7a2a5fdb3ddf597e7d66b000e458360faa0bea38a672401"
 dependencies = [
  "async-trait",
  "camino",
@@ -4612,9 +4612,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-manifest"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1bf1c45ed917fe1b3218c811027dc54292cd8dd84348a0d8df834f8bc0967b6"
+checksum = "b21618a836d32d6a4abcdeedbc42ce072057c33bf26631bab25a9a936b443d70"
 dependencies = [
  "camino",
  "indexmap",
@@ -4627,9 +4627,9 @@ dependencies = [
 
 [[package]]
 name = "repo-rs-model"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cfc3bc4e49040c2235cad93c10e538a63ff2832f3c90e329821984d4ae9fe7f"
+checksum = "f0cf4290565b6c441ab5e06c499ec202c7297c4c41f1351bd21ebab10c525c2b"
 dependencies = [
  "camino",
  "indexmap",
