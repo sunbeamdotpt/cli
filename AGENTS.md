@@ -4,6 +4,22 @@ Kubernetes-based local dev stack manager. Written in Rust (2024 edition) using t
 
 The binary is `sunbeam`; the thin entry-point lives in `src/main.rs`. All implementation logic lives in the `sunbeam-sdk` crate under `sunbeam-sdk/src/`.
 
+---
+
+## Semantic Memory Search (Optional)
+
+If a `sunbeam-memory` MCP server is available in your environment, use it for codebase search instead of `grep` or `rg`.
+
+1. **Initialize the repository first.** Before searching, ensure this codebase is indexed:
+   - Call `add_watch_target` with the absolute path to this repository.
+   - Wait for indexing to complete, then search.
+2. **Prefer semantic search.** Use `search_facts` with natural-language queries about behavior, design decisions, known issues, and prior changes.
+3. **Store useful findings.** If you discover something future agents should remember (a gotcha, invariant, or decision), call `store_fact` with a concise note and a source URN when possible.
+
+`sunbeam-memory` is **optional**. If the server is not available, skip these steps and use `grep` / `rg` / `Read` as usual. Do not fail, stall, or ask the user to install it.
+
+---
+
 ## Technology Stack
 
 - **Language:** Rust 2024 edition
