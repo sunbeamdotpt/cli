@@ -313,8 +313,44 @@ EXAMPLES:
         action: crate::workflows::cmd::WorkflowAction,
     },
 
+    /// Kanban board management.
+    #[command(long_about = r#"""Manage Kanban projects, boards, and cards.
+
+Connects to the Sunbeam Kanban backend over gRPC. Most commands require an
+active SSO session (`sunbeam auth login`). Public board commands are
+unauthenticated.
+
+EXAMPLES:
+  # List projects you can access
+  sunbeam kanban project list
+
+  # List boards in a project
+  sunbeam kanban board list --project proj_xxx
+
+  # Create a card
+  sunbeam kanban card create --board board_xxx --title "Fix the thing"
+
+  # Search cards
+  sunbeam kanban search "frontend crash"
+
+  # Subscribe to realtime board events
+  sunbeam kanban subscribe board board_xxx
+""#)]
+    Kanban {
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
+        output: crate::output::OutputFormat,
+        /// Kanban server URL override (default: https://kanban.<domain>).
+        #[arg(short, long)]
+        url: Option<String>,
+        #[command(subcommand)]
+        action: crate::kanban::KanbanCommand,
+    },
+
     /// Service operations (deploy, logs, restart, exec, secrets, ...).
-    #[command(alias = "svc", long_about = r#"""Operate on individual services in the cluster.
+    #[command(
+        alias = "svc",
+        long_about = r#"""Operate on individual services in the cluster.
 
 Provides a curated set of kubectl-adjacent commands scoped to services
 (namespaces and deployments). Most commands accept a service name, namespace,
@@ -360,7 +396,8 @@ EXAMPLES:
 
   # View secrets stored in OpenBao for a service
   sunbeam service secrets hydra
-""#)]
+""#
+    )]
     Service {
         #[command(subcommand)]
         action: ServiceAction,
@@ -536,7 +573,9 @@ EXAMPLE:
     Version,
 
     /// Per-project build verbs (alias: proj).
-    #[command(alias = "proj", long_about = r#"""Build, test, and package projects in the workspace.
+    #[command(
+        alias = "proj",
+        long_about = r#"""Build, test, and package projects in the workspace.
 
 Sunbeam discovers projects from `sunbeam.workspace.yaml` and `sunbeam.yaml`
 files. Each project defines targets (build, test, lint, fmt, package, deploy,
@@ -574,14 +613,17 @@ EXAMPLES:
 
   # Validate all workspace configs
   sunbeam project check --all
-""#)]
+""#
+    )]
     Project {
         #[command(subcommand)]
         action: ProjectAction,
     },
 
     /// Workspace-level operations (alias: ops).
-    #[command(alias = "ops", long_about = r#"""Workspace-level orchestration commands.
+    #[command(
+        alias = "ops",
+        long_about = r#"""Workspace-level orchestration commands.
 
 Operate across the entire workspace rather than a single project.
 
@@ -611,7 +653,8 @@ EXAMPLES:
 
   # List all repos
   sunbeam ops repos
-""#)]
+""#
+    )]
     Operations {
         #[command(subcommand)]
         action: OperationsAction,
@@ -658,6 +701,7 @@ impl Verb {
             Verb::User { .. } => "user",
             Verb::Auth { .. } => "auth",
             Verb::Workflow { .. } => "workflow",
+            Verb::Kanban { .. } => "kanban",
             Verb::Service { .. } => "service",
             Verb::Vpn { .. } => "vpn",
             Verb::Secrets { .. } => "secrets",
@@ -867,7 +911,8 @@ EXAMPLES:
     },
 
     /// List all available services that can be applied.
-    #[command(long_about = r#"""List services discovered in the infrastructure directory.
+    #[command(
+        long_about = r#"""List services discovered in the infrastructure directory.
 
 Shows namespace, service name, kind, and whether the resource is currently
 enabled or disabled by profile rules.
@@ -875,7 +920,8 @@ enabled or disabled by profile rules.
 EXAMPLE:
   sunbeam service list
   sunbeam service list -o json
-""#)]
+""#
+    )]
     List {
         /// Output format.
         #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table)]
@@ -1043,11 +1089,13 @@ EXAMPLES:
     },
 
     /// Scale a service deployment.
-    #[command(long_about = r#"""Scale a deployment to the specified number of replicas.
+    #[command(
+        long_about = r#"""Scale a deployment to the specified number of replicas.
 
 EXAMPLE:
   sunbeam service scale hydra 3
-""#)]
+""#
+    )]
     Scale {
         /// Service name.
         service: String,
@@ -1102,11 +1150,13 @@ EXAMPLE:
 #[derive(Subcommand, Debug)]
 pub enum SecretsAction {
     /// Get a specific secret field value.
-    #[command(long_about = r#"""Get a specific field from a service's OpenBao KV secret.
+    #[command(
+        long_about = r#"""Get a specific field from a service's OpenBao KV secret.
 
 EXAMPLE:
   sunbeam service secrets hydra get secretsSystem
-""#)]
+""#
+    )]
     Get {
         /// Field name within the service's KV path.
         key: String,
@@ -1464,34 +1514,40 @@ EXAMPLES:
 ""#)]
     Build(ProjectRunArgs),
     /// Run tests.
-    #[command(long_about = r#"""Run tests for the current project or selected projects.
+    #[command(
+        long_about = r#"""Run tests for the current project or selected projects.
 
 Runs the `test` target defined in `sunbeam.yaml`.
 
 EXAMPLES:
   sunbeam project test
   sunbeam project test --all
-""#)]
+""#
+    )]
     Test(ProjectRunArgs),
     /// Lint.
-    #[command(long_about = r#"""Run the linter for the current project or selected projects.
+    #[command(
+        long_about = r#"""Run the linter for the current project or selected projects.
 
 Runs the `lint` target defined in `sunbeam.yaml`.
 
 EXAMPLES:
   sunbeam project lint
   sunbeam project lint --all
-""#)]
+""#
+    )]
     Lint(ProjectRunArgs),
     /// Format.
-    #[command(long_about = r#"""Format source code for the current project or selected projects.
+    #[command(
+        long_about = r#"""Format source code for the current project or selected projects.
 
 Runs the `fmt` target defined in `sunbeam.yaml`.
 
 EXAMPLES:
   sunbeam project fmt
   sunbeam project fmt --all
-""#)]
+""#
+    )]
     Fmt(ProjectRunArgs),
     /// Package (container image, tarball, etc.).
     #[command(long_about = r#"""Package the project into a distributable artifact.
@@ -1558,7 +1614,8 @@ EXAMPLE:
 ""#)]
     Info,
     /// Print topologically-sorted build order for a verb.
-    #[command(long_about = r#"""Show the build order for a verb across the workspace.
+    #[command(
+        long_about = r#"""Show the build order for a verb across the workspace.
 
 Respects project dependencies (`deps.projects` in sunbeam.yaml) and prints
 the topological groups. Useful for understanding parallelism limits.
@@ -1566,7 +1623,8 @@ the topological groups. Useful for understanding parallelism limits.
 EXAMPLE:
   sunbeam project order build
   sunbeam project order package
-""#)]
+""#
+    )]
     Order {
         #[arg(default_value = "build")]
         verb: String,
@@ -1709,7 +1767,6 @@ EXAMPLE:
 ""#)]
     Repos,
 }
-
 
 /// Repo tool subcommands.
 #[derive(Subcommand, Debug)]
@@ -2006,7 +2063,13 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             crate::workflows::down::register(&host).await;
 
             let step_ctx = crate::workflows::StepContext::from_active();
-            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
+            let effective_profile = profile.or_else(|| {
+                if use_lima {
+                    Some("lima".to_string())
+                } else {
+                    None
+                }
+            });
 
             let initial_data = serde_json::json!({
                 "__ctx": step_ctx,
@@ -2056,12 +2119,19 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 return Ok(());
             }
 
-            let mut overrides = crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+            let mut overrides =
+                crate::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
             let config = crate::config::load_config();
 
             // --use-lima implies --profile lima
-            let effective_profile = profile.or_else(|| if use_lima { Some("lima".to_string()) } else { None });
+            let effective_profile = profile.or_else(|| {
+                if use_lima {
+                    Some("lima".to_string())
+                } else {
+                    None
+                }
+            });
 
             let mut skip_namespaces: Vec<String> = Vec::new();
             let mut skip_ory = false;
@@ -2083,12 +2153,15 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
 
                 let profile_obj = if profile_path.exists() {
                     crate::profiles::load_profile(&profile_path)?
-                } else if let Some(p) = config.resolve_profile(&crate::config::ProfileRef::Name(profile_name.clone())) {
+                } else if let Some(p) =
+                    config.resolve_profile(&crate::config::ProfileRef::Name(profile_name.clone()))
+                {
                     p
                 } else {
                     return Err(SunbeamError::Config(format!(
                         "Profile not found: {} (looked at {} and config.json)",
-                        profile_name, profile_path.display()
+                        profile_name,
+                        profile_path.display()
                     )));
                 };
 
@@ -2101,17 +2174,29 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 let base_dir = crate::config::get_infra_dir().join("base");
                 match crate::profiles::discover_manifests(&base_dir).await {
                     Ok(resources) => {
-                        match crate::profiles::resolve_profile_overrides(&profile_obj, &config.presets, &resources) {
+                        match crate::profiles::resolve_profile_overrides(
+                            &profile_obj,
+                            &config.presets,
+                            &resources,
+                        ) {
                             Ok(profile_overrides) => {
                                 overrides.items.extend(profile_overrides.items);
                             }
                             Err(e) => {
-                                info!(logger, "Failed to resolve profile overrides", error = e.to_string());
+                                info!(
+                                    logger,
+                                    "Failed to resolve profile overrides",
+                                    error = e.to_string()
+                                );
                             }
                         }
                     }
                     Err(e) => {
-                        info!(logger, "Failed to discover manifests for profile resolution", error = e.to_string());
+                        info!(
+                            logger,
+                            "Failed to discover manifests for profile resolution",
+                            error = e.to_string()
+                        );
                     }
                 }
             }
@@ -2166,9 +2251,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Service { action }) => {
-            crate::service_cmds::dispatch(logger, action).await
-        }
+        Some(Verb::Service { action }) => crate::service_cmds::dispatch(logger, action).await,
 
         Some(Verb::Config { action }) => match action {
             None => {
@@ -2223,7 +2306,9 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 let mut config = crate::config::load_config();
                 if !config.contexts.contains_key(&name) {
                     info!(
-                        logger, "Context does not exist, creating empty context", name = name
+                        logger,
+                        "Context does not exist, creating empty context",
+                        name = name
                     );
                     config
                         .contexts
@@ -2265,9 +2350,12 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             Some(ConfigAction::Clear) => crate::config::clear_config(),
         },
 
-        Some(Verb::Secrets { addr, token, output, action }) => {
-            crate::secrets_cli::dispatch(addr.as_deref(), token.as_deref(), output, action).await
-        }
+        Some(Verb::Secrets {
+            addr,
+            token,
+            output,
+            action,
+        }) => crate::secrets_cli::dispatch(addr.as_deref(), token.as_deref(), output, action).await,
 
         Some(Verb::User { action }) => match action {
             None => {
@@ -2346,15 +2434,17 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             Some(AuthAction::Token) => crate::auth::cmd_auth_token().await,
         },
 
+        Some(Verb::Workflow {
+            target,
+            output,
+            action,
+        }) => crate::workflows::cmd::dispatch(Some(&target), action, output).await,
 
-        Some(Verb::Workflow { target, output, action }) => {
-            crate::workflows::cmd::dispatch(
-                Some(&target),
-                action,
-                output,
-            )
-            .await
-        }
+        Some(Verb::Kanban {
+            output,
+            url,
+            action,
+        }) => crate::kanban::dispatch(logger, action, output, url.as_deref()).await,
 
         Some(Verb::Vpn { action }) => match action {
             VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
@@ -2408,16 +2498,6 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             let logger = crate::logger::Logger::new(crate::logger::TracingSink);
             crate::vcs::dispatch(&logger, action).await
         }
-
-
-
-
-
-
-
-
-
-
     }
 }
 
@@ -2943,7 +3023,12 @@ mod tests {
         let cli = parse(&["sunbeam", "service", "deploy"]);
         match cli.verb {
             Some(Verb::Service {
-                action: ServiceAction::Deploy { target, all, profile },
+                action:
+                    ServiceAction::Deploy {
+                        target,
+                        all,
+                        profile,
+                    },
             }) => {
                 assert!(target.is_none());
                 assert!(!all);
@@ -3188,9 +3273,6 @@ mod tests {
         }
     }
 
-
-
-
     #[test]
     fn test_project_run_custom_verb() {
         let cli = parse(&["sunbeam", "project", "run", "seed"]);
@@ -3240,9 +3322,7 @@ mod tests {
             Some(Verb::Secrets { action, .. }) => {
                 assert!(matches!(
                     action,
-                    crate::secrets_cli::SecretsAction::Kv(
-                        crate::secrets_cli::KvAction::Get { .. }
-                    )
+                    crate::secrets_cli::SecretsAction::Kv(crate::secrets_cli::KvAction::Get { .. })
                 ));
             }
             _ => panic!("expected Secrets Kv Get"),
@@ -3254,9 +3334,11 @@ mod tests {
         let cli = parse(&["sunbeam", "secrets", "kv", "put", "secret/hydra", "foo=bar"]);
         match cli.verb {
             Some(Verb::Secrets { action, .. }) => match action {
-                crate::secrets_cli::SecretsAction::Kv(
-                    crate::secrets_cli::KvAction::Put { path, pairs, .. },
-                ) => {
+                crate::secrets_cli::SecretsAction::Kv(crate::secrets_cli::KvAction::Put {
+                    path,
+                    pairs,
+                    ..
+                }) => {
                     assert_eq!(path, "secret/hydra");
                     assert_eq!(pairs, vec!["foo=bar"]);
                 }
@@ -3287,10 +3369,7 @@ mod tests {
         let cli = parse(&["sunbeam", "secrets", "status"]);
         match cli.verb {
             Some(Verb::Secrets { action, .. }) => {
-                assert!(matches!(
-                    action,
-                    crate::secrets_cli::SecretsAction::Status
-                ));
+                assert!(matches!(action, crate::secrets_cli::SecretsAction::Status));
             }
             _ => panic!("expected Secrets Status"),
         }
@@ -3322,7 +3401,12 @@ mod tests {
             "status",
         ]);
         match cli.verb {
-            Some(Verb::Secrets { addr, token, action, .. }) => {
+            Some(Verb::Secrets {
+                addr,
+                token,
+                action,
+                ..
+            }) => {
                 assert_eq!(addr, Some("https://vault.example.com:8200".to_string()));
                 assert_eq!(token, Some("hvs.test".to_string()));
                 assert!(matches!(action, crate::secrets_cli::SecretsAction::Status));
@@ -3330,5 +3414,4 @@ mod tests {
             _ => panic!("expected Secrets with addr+token"),
         }
     }
-
 }

@@ -15,8 +15,6 @@ pub mod cli;
 pub mod cluster;
 /// Context-based configuration file I/O.
 pub mod config;
-/// Manifest-anchored profile override system.
-pub mod profiles;
 /// Shared constants (paths, ports, timeouts).
 pub mod constants;
 /// kubectl describe wrappers.
@@ -29,12 +27,14 @@ pub mod doctor;
 pub mod down;
 /// Pod exec and interactive shell helpers.
 pub mod exec;
+/// Kanban project management via gRPC.
+pub mod kanban;
 /// Kubernetes client setup and manifest operations.
 pub mod kube;
-/// Unified tracing-based logging subsystem.
-pub mod logging;
 /// Structured logger with inherited fields.
 pub mod logger;
+/// Unified tracing-based logging subsystem.
+pub mod logging;
 /// Runtime manifest parameter discovery and override application.
 pub mod manifest_params;
 /// Kustomize build, apply, and namespace filtering.
@@ -45,6 +45,8 @@ pub mod openbao;
 pub mod operations;
 /// CLI output helpers (tables, JSON, YAML, step banners).
 pub mod output;
+/// Manifest-anchored profile override system.
+pub mod profiles;
 
 /// Kubernetes port-forward utilities.
 pub mod port_forward;

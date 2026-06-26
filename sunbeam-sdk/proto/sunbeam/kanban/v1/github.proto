@@ -1,0 +1,145 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// proto/sunbeam/kanban/v1/github.proto
+//
+// GitHubLinkService links Kanban cards to GitHub issues and PRs.
+// The server proxies GitHub API calls using a GitHub App or PAT configured
+// on the kanban service. State sync is display-only in v1; auto-status
+// updates are a v2 follow-up.
+//
+// Auth: every RPC requires a valid bearer token. Keto checks are performed by
+// the kanban-local `keto_dispatch` middleware. Object-id source is card_id or
+// link_id via `x-sunbeam-object-id`; see keto_dispatch.rs for details.
+
+syntax = "proto3";
+
+package sunbeam.kanban.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_package = "pt.sunbeam.kanban.v1";
+option java_multiple_files = true;
+option go_package = "pt.sunbeam/kanban/v1;kanbanv1";
+
+// ----------------------------------------------------------------------------
+// Messages
+// ----------------------------------------------------------------------------
+
+// GitHubLink is the compact value type embedded in Card.github_links for
+// board renders. Cards import this file to get this type. Stored fields
+// mirror what the FE needs inline on a card tile without a round-trip.
+message GitHubLink {
+  string id = 1;            // ULID.
+  string repo = 2;          // "owner/repo" combined string.
+  int32 number = 3;         // PR/issue number.
+  // "open" | "closed" | "merged" | "draft"
+  string state = 4;
+  bool merged = 5;
+  google.protobuf.Timestamp last_synced_at = 6;
+}
+
+// GitHubLinkDetail is the full server-side representation returned by
+// GithubLinkService RPCs. It extends the compact GitHubLink with fields
+// needed for the link management UI (card_id, repo decomposition, kind,
+// title, url).
+message GitHubLinkDetail {
+  string id = 1;
+  string card_id = 2;
+  string repo_owner = 3;
+  string repo_name = 4;
+  int32 issue_or_pr_number = 5;
+  // "issue" or "pull_request"
+  string kind = 6;
+  string title = 7;
+  // "open" | "closed"
+  string state = 8;
+  // Direct URL to the issue or PR on GitHub.
+  string url = 9;
+  google.protobuf.Timestamp last_synced_at = 10;
+}
+
+// GitHubIssueResult is a search hit returned by SearchGithubIssues.
+message GitHubIssueResult {
+  string repo_owner = 1;
+  string repo_name = 2;
+  int32 number = 3;
+  string kind = 4;
+  string title = 5;
+  string state = 6;
+  string url = 7;
+}
+
+// ----------------------------------------------------------------------------
+// Request / response messages
+// ----------------------------------------------------------------------------
+
+message LinkGitHubIssueRequest {
+  string card_id = 1;
+  string repo_owner = 2;
+  string repo_name = 3;
+  int32 number = 4;
+}
+
+message UnlinkGitHubIssueRequest {
+  string link_id = 1;
+}
+
+message ListGitHubLinksByCardRequest {
+  string card_id = 1;
+}
+
+message ListGitHubLinksByCardResponse {
+  repeated GitHubLinkDetail links = 1;
+}
+
+// SearchGithubIssuesRequest proxies a search to the GitHub API.
+// If repo_name is empty the search spans all repos owned by repo_owner.
+message SearchGithubIssuesRequest {
+  string repo_owner = 1;
+  // Optional; empty means all repos under repo_owner.
+  string repo_name = 2;
+  string query = 3;
+  // Maximum results to return; default 20, max 50.
+  int32 limit = 4;
+}
+
+message SearchGithubIssuesResponse {
+  repeated GitHubIssueResult results = 1;
+}
+
+message ResyncGitHubLinkRequest {
+  string link_id = 1;
+}
+
+// ----------------------------------------------------------------------------
+// Service
+// ----------------------------------------------------------------------------
+
+// GithubLinkService manages links between Kanban cards and GitHub issues/PRs.
+//
+// All GitHub API calls are server-side proxied; the FE never talks to GitHub
+// directly. State sync is on-demand (manual ResyncLink or on link creation);
+// automatic webhook-driven sync is a v2 item.
+//
+// Auth: every RPC requires a valid bearer token. Link/Unlink requires "edit"
+// on the card's board. List/Search/Resync requires "view". See keto_dispatch.rs.
+service GithubLinkService {
+  // LinkIssue creates a GitHubLink between a card and a GitHub issue/PR.
+  // Performs an initial sync of title/state from GitHub on creation.
+  // Emits GitHubLinkAddedEvent on the board stream.
+  rpc LinkIssue(LinkGitHubIssueRequest) returns (GitHubLinkDetail);
+
+  // UnlinkIssue removes the link. Does not close or modify the GitHub issue.
+  rpc UnlinkIssue(UnlinkGitHubIssueRequest) returns (google.protobuf.Empty);
+
+  // ListLinksByCard returns all links for a card.
+  rpc ListLinksByCard(ListGitHubLinksByCardRequest) returns (ListGitHubLinksByCardResponse);
+
+  // SearchGithubIssues proxies a search query to the GitHub API.
+  // Results are not persisted; this is a live search for the link picker UI.
+  rpc SearchGithubIssues(SearchGithubIssuesRequest) returns (SearchGithubIssuesResponse);
+
+  // ResyncLink re-fetches title/state from GitHub and updates the record.
+  // Emits GitHubLinkRefreshedEvent on the board stream.
+  rpc ResyncLink(ResyncGitHubLinkRequest) returns (GitHubLinkDetail);
+}

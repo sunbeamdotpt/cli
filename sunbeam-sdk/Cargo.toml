@@ -89,11 +89,17 @@ wfe-sqlite.workspace = true
 wfe-yaml.workspace = true
 wfe-server-protos.workspace = true
 tonic = { workspace = true, features = ["tls-native-roots"] }
+tonic-prost = "0.14"
 prost-types.workspace = true
 prost.workspace = true
+ulid = "1"
 
 [dev-dependencies]
 wiremock.workspace = true
+mockall = "0.13"
+async-trait = "0.1"
+rustls = { workspace = true, features = ["aws-lc-rs"] }
 
 [build-dependencies]
 chrono.workspace = true
+tonic-prost-build = "0.14"
