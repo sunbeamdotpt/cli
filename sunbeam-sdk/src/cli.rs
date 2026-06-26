@@ -51,7 +51,7 @@ SSO (Hydra OIDC) is used by Planka, Kratos admin UI, Grafana, and other
 services behind the ingress. The CLI uses the OAuth2 Device Authorization
 Grant (RFC 8628): it prints a user code and URL, opens a browser to the URL,
 and polls for tokens once authorized. Tokens are stored in
-~/.sunbeam/auth/{domain}.json.
+~/.sunbeam/config.json under `auth.<domain>`.
 
 Tokens are cached locally and refreshed automatically. Use `logout` to clear
 cached tokens. Use `token` to print the current access token for scripts.
@@ -1164,8 +1164,8 @@ pub enum AuthAction {
     #[command(long_about = r#"Log in to Sunbeam via Hydra OIDC.
 
 Prints a user code and URL, opens a browser to the verification URL, and polls
-for tokens once authorized. Tokens are cached in ~/.sunbeam/auth/{domain}.json
-and refreshed automatically.
+for tokens once authorized. Tokens are stored in ~/.sunbeam/config.json under
+`auth.<domain>` and refreshed automatically.
 
 Use --domain to authenticate against a specific domain. If omitted, the active
 context's domain is used.
@@ -1183,8 +1183,8 @@ EXAMPLE:
     #[command(long_about = r#"Clear all cached authentication tokens.
 
 Removes the SSO access token, refresh token, and id token from
-~/.sunbeam/auth/{domain}.json. Does not delete identities or server-side
-sessions.
+`auth.<domain>` in ~/.sunbeam/config.json. Does not delete identities or
+server-side sessions.
 
 EXAMPLE:
   sunbeam auth logout

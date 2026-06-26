@@ -494,7 +494,6 @@ fn login_target(logger: &crate::logger::Logger, name: &str, url: &str) -> Result
         name.to_string(),
         crate::config::WorkflowTarget {
             url: url.to_string(),
-            token: String::new(),
         },
     );
     crate::config::save_config(&cfg)?;

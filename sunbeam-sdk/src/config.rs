@@ -1,6 +1,7 @@
 //! Context-based configuration file I/O and path helpers.
 
 use crate::error::{Result, ResultExt};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -148,6 +149,12 @@ pub struct SunbeamConfig {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_workflow_target: String,
 
+    /// OAuth2 tokens keyed by domain. This is the unified auth store;
+    /// legacy per-domain files under ~/.sunbeam/auth/ are migrated here
+    /// on first load.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub auth: HashMap<String, AuthTokens>,
+
     // --- Legacy fields (migrated on load) ---
     #[serde(default, skip_serializing_if = "String::is_empty")]
     /// Infra directory.
@@ -256,9 +263,24 @@ pub struct Context {
 pub struct WorkflowTarget {
     /// Server URL (e.g. https://builds.sunbeam.pt).
     pub url: String,
-    /// SSO access token (empty until login).
+}
+
+/// Cached OAuth2 tokens persisted as part of the unified config.
+///
+/// Tokens are keyed by domain in `SunbeamConfig.auth` so multiple
+/// environments can coexist in one config file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthTokens {
+    /// Access token.
+    pub access_token: String,
+    /// Refresh token.
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub token: String,
+    pub refresh_token: String,
+    /// Expiration timestamp.
+    pub expires_at: DateTime<Utc>,
+    /// ID token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -328,6 +350,11 @@ fn legacy_config_path() -> PathBuf {
         .join(".sunbeam.json")
 }
 
+/// Legacy auth cache directory (~/.sunbeam/auth/) — used only for migration.
+fn legacy_auth_dir() -> PathBuf {
+    sunbeam_dir().join("auth")
+}
+
 /// Load configuration, return default if not found.
 /// Migrates legacy ~/.sunbeam.json → ~/.sunbeam/config.json on first load.
 /// Migrates legacy flat config to context-based format.
@@ -388,6 +415,48 @@ pub fn load_config() -> SunbeamConfig {
         );
     }
 
+    // One-shot migration: legacy per-domain auth cache files
+    // (~/.sunbeam/auth/{domain}.json) into the unified config.auth map.
+    let legacy_auth = legacy_auth_dir();
+    if legacy_auth.is_dir() {
+        let mut migrated = false;
+        if let Ok(entries) = std::fs::read_dir(&legacy_auth) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let domain = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if domain.is_empty() || config.auth.contains_key(&domain) {
+                    continue;
+                }
+                let content = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let tokens = match serde_json::from_str::<AuthTokens>(&content) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                config.auth.insert(domain, tokens);
+                migrated = true;
+            }
+        }
+        if migrated {
+            let _ = save_config_silent(&config);
+            tracing::info!(
+                "migrated legacy auth cache files from {} into config.json",
+                legacy_auth.display()
+            );
+        }
+        // Best-effort removal of the now-redundant auth directory.
+        let _ = std::fs::remove_dir_all(&legacy_auth);
+    }
+
     config
 }
 
@@ -411,10 +480,40 @@ fn save_config_inner(config: &SunbeamConfig, verbose: bool) -> Result<()> {
     let content = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, content)
         .with_ctx(|| format!("Failed to save config to {}", path.display()))?;
+
+    // Config now contains OAuth tokens; restrict to owner-only access.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&path, perms)
+            .with_ctx(|| format!("Failed to set permissions on {}", path.display()))?;
+    }
+
     if verbose {
         tracing::info!("Configuration saved to {}", path.display());
     }
     Ok(())
+}
+
+/// Read cached OAuth tokens for the given domain, if any.
+pub fn get_auth_tokens(domain: &str) -> Option<AuthTokens> {
+    let config = load_config();
+    config.auth.get(domain).cloned()
+}
+
+/// Store (or replace) OAuth tokens for the given domain.
+pub fn set_auth_tokens(domain: &str, tokens: &AuthTokens) -> Result<()> {
+    let mut config = load_config();
+    config.auth.insert(domain.to_string(), tokens.clone());
+    save_config_silent(&config)
+}
+
+/// Remove cached OAuth tokens for the given domain.
+pub fn remove_auth_tokens(domain: &str) -> Result<()> {
+    let mut config = load_config();
+    config.auth.remove(domain);
+    save_config_silent(&config)
 }
 
 /// Resolve the context to use, given CLI flags and config.
@@ -747,6 +846,49 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("infra_directory"));
         assert!(!json.contains("acme_email"));
+    }
+
+    #[test]
+    fn test_auth_tokens_roundtrip() {
+        let tokens = AuthTokens {
+            access_token: "access_abc".to_string(),
+            refresh_token: "refresh_xyz".to_string(),
+            expires_at: Utc::now(),
+            id_token: Some("id_123".to_string()),
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let loaded: AuthTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.access_token, "access_abc");
+        assert_eq!(loaded.refresh_token, "refresh_xyz");
+        assert_eq!(loaded.id_token, Some("id_123".to_string()));
+    }
+
+    #[test]
+    fn test_auth_map_serializes_under_top_level_key() {
+        let mut config = SunbeamConfig::default();
+        config.auth.insert(
+            "sunbeam.pt".to_string(),
+            AuthTokens {
+                access_token: "ory_at_test".to_string(),
+                refresh_token: String::new(),
+                expires_at: Utc::now(),
+                id_token: None,
+            },
+        );
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"auth\""));
+        assert!(json.contains("\"sunbeam.pt\""));
+        assert!(json.contains("\"access_token\""));
+    }
+
+    #[test]
+    fn test_workflow_target_has_no_token_field() {
+        let target = WorkflowTarget {
+            url: "https://builds.sunbeam.pt".to_string(),
+        };
+        let json = serde_json::to_string(&target).unwrap();
+        assert!(!json.contains("token"));
+        assert!(json.contains("url"));
     }
 
     #[test]

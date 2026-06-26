@@ -1,31 +1,10 @@
 //! OAuth2 Device Authorization Grant for CLI authentication against Hydra.
 
+use crate::config::AuthTokens;
 use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
-use std::path::PathBuf;
-
-// ---------------------------------------------------------------------------
-// Token cache data
-// ---------------------------------------------------------------------------
-
-/// Cached OAuth2 tokens persisted to disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthTokens {
-    /// Access token.
-    pub access_token: String,
-    /// Refresh token.
-    pub refresh_token: String,
-    /// Expires at.
-    pub expires_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    /// Id token.
-    pub id_token: Option<String>,
-    /// Domain.
-    pub domain: String,
-}
+use chrono::Utc;
+use serde::Deserialize;
 
 /// Hydra OAuth2 client ID for the Sunbeam CLI public client.
 ///
@@ -38,86 +17,6 @@ pub struct AuthTokens {
 ///   redirect_uris: http://localhost:9876-9880/callback, http://127.0.0.1:9876-9880/callback
 ///   post_logout_redirect_uris: http://localhost:9876/callback, http://127.0.0.1:9876/callback
 const DEFAULT_CLIENT_ID: &str = "62c878f8-4229-4bf9-a73c-1e3aae0ae425";
-
-// ---------------------------------------------------------------------------
-// Cache file helpers
-// ---------------------------------------------------------------------------
-
-/// Legacy auth cache dir — used only for migration.
-fn legacy_auth_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".local/share")
-        })
-        .join("sunbeam")
-        .join("auth")
-}
-
-/// Cache path for auth tokens — per-domain so multiple environments work.
-/// Files live under ~/.sunbeam/auth/{safe_domain}.json.
-fn cache_path_for_domain(domain: &str) -> PathBuf {
-    let dir = crate::config::sunbeam_dir().join("auth");
-    let filename = if domain.is_empty() {
-        "default.json".to_string()
-    } else {
-        let safe = domain.replace(['/', '\\', ':'], "_");
-        format!("{safe}.json")
-    };
-
-    let new_path = dir.join(&filename);
-
-    // Migration: copy from legacy location if new path doesn't exist yet
-    if !new_path.exists() {
-        let legacy = legacy_auth_dir().join(&filename);
-        if legacy.exists() {
-            if let Some(parent) = new_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::copy(&legacy, &new_path);
-        }
-    }
-
-    new_path
-}
-
-fn cache_path() -> PathBuf {
-    let domain = crate::config::domain();
-    cache_path_for_domain(domain)
-}
-
-fn read_cache() -> Result<AuthTokens> {
-    let path = cache_path();
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        SunbeamError::Identity(format!("No cached auth tokens ({}): {e}", path.display()))
-    })?;
-    let tokens: AuthTokens =
-        serde_json::from_str(&content).ctx("Failed to parse cached auth tokens")?;
-    Ok(tokens)
-}
-
-fn write_cache(tokens: &AuthTokens) -> Result<()> {
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_ctx(|| format!("Failed to create auth cache dir: {}", parent.display()))?;
-    }
-    let content = serde_json::to_string_pretty(tokens)?;
-    std::fs::write(&path, &content)
-        .with_ctx(|| format!("Failed to write auth cache to {}", path.display()))?;
-
-    // Set 0600 permissions on unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perms)
-            .with_ctx(|| format!("Failed to set permissions on {}", path.display()))?;
-    }
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // OIDC discovery
@@ -146,11 +45,10 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
     }
 
     // 3. Cached token domain (already logged in)
-    if let Ok(tokens) = read_cache()
-        && !tokens.domain.is_empty()
-    {
-        tracing::info!("Using cached domain: {}", tokens.domain);
-        return Ok(tokens.domain);
+    let cfg = crate::config::load_config();
+    if let Some(domain) = cfg.auth.keys().find(|k| !k.is_empty()) {
+        tracing::info!("Using cached domain: {domain}");
+        return Ok(domain.clone());
     }
 
     // 4. Try cluster discovery (may fail if not connected)
@@ -204,8 +102,8 @@ struct TokenResponse {
 }
 
 /// Refresh an access token using a refresh token.
-async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
-    let discovery = discover_oidc(&cached.domain).await?;
+async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> {
+    let discovery = discover_oidc(domain).await?;
 
     // Try to get client_id from K8s, fall back to default
     let client_id = resolve_client_id().await;
@@ -244,10 +142,9 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
             .unwrap_or_else(|| cached.refresh_token.clone()),
         expires_at,
         id_token: token_resp.id_token.or_else(|| cached.id_token.clone()),
-        domain: cached.domain.clone(),
     };
 
-    write_cache(&new_tokens)?;
+    crate::config::set_auth_tokens(domain, &new_tokens)?;
     Ok(new_tokens)
 }
 
@@ -427,7 +324,6 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         refresh_token: token_resp.refresh_token.unwrap_or_default(),
         expires_at,
         id_token: token_resp.id_token.clone(),
-        domain: domain.clone(),
     };
 
     let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
@@ -437,7 +333,7 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         tracing::info!("Logged in successfully");
     }
 
-    write_cache(&tokens)?;
+    crate::config::set_auth_tokens(&domain, &tokens)?;
     Ok(())
 }
 
@@ -492,9 +388,16 @@ fn extract_email(id_token: &str) -> Option<String> {
 /// the user to run `sunbeam auth login`.
 #[tracing::instrument]
 pub async fn get_token() -> Result<String> {
-    let cached = match read_cache() {
-        Ok(tokens) => tokens,
-        Err(_) => {
+    let domain = crate::config::domain();
+    if domain.is_empty() {
+        return Err(SunbeamError::config(
+            "No domain configured; set one with `sunbeam config set --domain ...`",
+        ));
+    }
+
+    let cached = match crate::config::get_auth_tokens(domain) {
+        Some(tokens) => tokens,
+        None => {
             return Err(SunbeamError::identity(
                 "Not logged in. Run `sunbeam auth login` to authenticate.",
             ));
@@ -509,7 +412,7 @@ pub async fn get_token() -> Result<String> {
 
     // Try to refresh
     if !cached.refresh_token.is_empty() {
-        match refresh_token(&cached).await {
+        match refresh_token(domain, &cached).await {
             Ok(new_tokens) => return Ok(new_tokens.access_token),
             Err(e) => {
                 tracing::error!("Token refresh failed: {e}");
@@ -535,9 +438,15 @@ pub async fn cmd_auth_token() -> Result<()> {
 /// Remove cached auth tokens.
 #[tracing::instrument]
 pub async fn cmd_auth_logout() -> Result<()> {
-    let path = cache_path();
-    if path.exists() {
-        std::fs::remove_file(&path).with_ctx(|| format!("Failed to remove {}", path.display()))?;
+    let domain = crate::config::domain();
+    if domain.is_empty() {
+        return Err(SunbeamError::config(
+            "No domain configured; set one with `sunbeam config set --domain ...`",
+        ));
+    }
+
+    if crate::config::get_auth_tokens(domain).is_some() {
+        crate::config::remove_auth_tokens(domain)?;
         tracing::info!("Logged out (cached tokens removed)");
     } else {
         tracing::info!("Not logged in (no cached tokens to remove)");
@@ -548,8 +457,15 @@ pub async fn cmd_auth_logout() -> Result<()> {
 /// Print current auth status.
 #[tracing::instrument]
 pub async fn cmd_auth_status() -> Result<()> {
-    match read_cache() {
-        Ok(tokens) => {
+    let domain = crate::config::domain();
+    if domain.is_empty() {
+        return Err(SunbeamError::config(
+            "No domain configured; set one with `sunbeam config set --domain ...`",
+        ));
+    }
+
+    match crate::config::get_auth_tokens(domain) {
+        Some(tokens) => {
             let now = Utc::now();
             let expired = tokens.expires_at <= now;
 
@@ -574,9 +490,9 @@ pub async fn cmd_auth_status() -> Result<()> {
                     tokens.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
                 );
             }
-            tracing::info!("Domain: {}", tokens.domain);
+            tracing::info!("Domain: {domain}");
         }
-        Err(_) => {
+        None => {
             tracing::info!("Not logged in. Run `sunbeam auth login` to authenticate.");
         }
     }
@@ -623,7 +539,6 @@ mod tests {
             id_token: Some(
                 "eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ.sig".to_string(),
             ),
-            domain: "sunbeam.pt".to_string(),
         };
 
         let json = serde_json::to_string_pretty(&tokens).unwrap();
@@ -631,7 +546,6 @@ mod tests {
 
         assert_eq!(deserialized.access_token, "access_abc");
         assert_eq!(deserialized.refresh_token, "refresh_xyz");
-        assert_eq!(deserialized.domain, "sunbeam.pt");
         assert!(deserialized.id_token.is_some());
 
         // Verify expires_at survives roundtrip (within 1 second tolerance)
@@ -648,7 +562,6 @@ mod tests {
             refresh_token: "refresh".to_string(),
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
-            domain: "example.com".to_string(),
         };
 
         let json = serde_json::to_string(&tokens).unwrap();
@@ -666,7 +579,6 @@ mod tests {
             refresh_token: "refresh".to_string(),
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
-            domain: "example.com".to_string(),
         };
 
         let now = Utc::now();
@@ -681,7 +593,6 @@ mod tests {
             refresh_token: "refresh".to_string(),
             expires_at: Utc::now() - Duration::hours(1),
             id_token: None,
-            domain: "example.com".to_string(),
         };
 
         let now = Utc::now();
@@ -696,7 +607,6 @@ mod tests {
             refresh_token: "refresh".to_string(),
             expires_at: Utc::now() + Duration::seconds(30),
             id_token: None,
-            domain: "example.com".to_string(),
         };
 
         let now = Utc::now();
@@ -738,20 +648,6 @@ mod tests {
         let fake_jwt = format!("eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig");
 
         assert_eq!(extract_email(&fake_jwt), None);
-    }
-
-    #[test]
-    fn test_cache_path_is_under_sunbeam() {
-        let path = cache_path_for_domain("sunbeam.pt");
-        let path_str = path.to_string_lossy();
-        assert!(path_str.contains(".sunbeam/auth"));
-        assert!(path_str.ends_with("sunbeam.pt.json"));
-    }
-
-    #[test]
-    fn test_cache_path_default_domain() {
-        let path = cache_path_for_domain("");
-        assert!(path.to_string_lossy().ends_with("default.json"));
     }
 
     #[test]

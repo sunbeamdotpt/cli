@@ -70,18 +70,16 @@ pub enum WorkflowsCommand {
     SearchLogs(search_logs::SearchLogsArgs),
 }
 
-/// Resolve the SSO access token from the sunbeam auth cache.
+/// Resolve the SSO access token from the unified config auth store.
 pub fn resolve_token(domain: &str) -> anyhow::Result<String> {
-    let path = dirs::home_dir()
-        .unwrap_or_default()
-        .join(format!(".sunbeam/auth/{domain}.json"));
-    let bytes = std::fs::read(&path)
-        .map_err(|_| anyhow::anyhow!("not logged in — run `sunbeam auth sso` first"))?;
-    let token: serde_json::Value = serde_json::from_slice(&bytes)?;
-    token["access_token"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("token cache is corrupt — run `sunbeam auth sso`"))
+    let tokens = crate::config::get_auth_tokens(domain)
+        .ok_or_else(|| anyhow::anyhow!("not logged in — run `sunbeam auth login` first"))?;
+    if tokens.access_token.is_empty() {
+        return Err(anyhow::anyhow!(
+            "token cache is corrupt — run `sunbeam auth login` again"
+        ));
+    }
+    Ok(tokens.access_token)
 }
 
 /// Dispatch a workflows subcommand.
@@ -124,26 +122,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_token_missing_file_returns_not_logged_in() {
+    fn resolve_token_missing_returns_not_logged_in() {
         let err = resolve_token("nonexistent.example.com").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("not logged in"), "unexpected: {msg}");
-    }
-
-    #[test]
-    fn resolve_token_from_valid_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        // Override HOME for this test by writing to a known path.
-        let auth_dir = dir.path().join(".sunbeam/auth");
-        std::fs::create_dir_all(&auth_dir).unwrap();
-        std::fs::write(
-            auth_dir.join("test.example.com.json"),
-            r#"{"access_token": "ory_at_test123"}"#,
-        )
-        .unwrap();
-
-        // We can't easily override dirs::home_dir() in a unit test, so
-        // just verify the error path works. The happy path is tested via
-        // integration/manual testing.
     }
 }
