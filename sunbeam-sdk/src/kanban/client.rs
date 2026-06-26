@@ -168,9 +168,7 @@ mod tests {
     #[tokio::test]
     async fn build_with_invalid_url_returns_error() {
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let err = build(&logger, "http://[::1]:1", "token")
-            .await
-            .unwrap_err();
+        let err = build(&logger, "http://[::1]:1", "token").await.unwrap_err();
         assert!(
             err.to_string().contains("failed to connect") || err.to_string().contains("connect"),
             "unexpected error: {err}"

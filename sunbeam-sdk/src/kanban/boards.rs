@@ -960,13 +960,11 @@ mod tests {
     #[tokio::test]
     async fn list_boards_table_renders() {
         let mut mock = MockBoardService::new();
-        mock.expect_list_boards()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListBoardsResponse {
-                    boards: vec![sample_board("board_1")],
-                })
-            });
+        mock.expect_list_boards().times(1).returning(|_| {
+            Ok(client::ListBoardsResponse {
+                boards: vec![sample_board("board_1")],
+            })
+        });
 
         run(
             BoardAction::List {
@@ -982,14 +980,12 @@ mod tests {
     #[tokio::test]
     async fn get_board_without_board_uses_default() {
         let mut mock = MockBoardService::new();
-        mock.expect_get_board()
-            .times(1)
-            .returning(|_| {
-                Ok(client::BoardDetail {
-                    board: None,
-                    columns: vec![sample_column("col_1", "board_1", 1)],
-                })
-            });
+        mock.expect_get_board().times(1).returning(|_| {
+            Ok(client::BoardDetail {
+                board: None,
+                columns: vec![sample_column("col_1", "board_1", 1)],
+            })
+        });
 
         run(
             BoardAction::Get {
@@ -1130,7 +1126,10 @@ mod tests {
 
     #[test]
     fn board_visibility_name_covers_default() {
-        assert_eq!(board_visibility_name(BoardVisibility::Public as i32), "public");
+        assert_eq!(
+            board_visibility_name(BoardVisibility::Public as i32),
+            "public"
+        );
         assert_eq!(board_visibility_name(99), "unspecified");
     }
 

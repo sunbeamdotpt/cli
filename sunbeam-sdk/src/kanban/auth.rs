@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::kanban::client::{self, AuthServiceClient};
 use crate::logger::Logger;
-use crate::output::{render, OutputFormat};
+use crate::output::{OutputFormat, render};
 use async_trait::async_trait;
 use clap::Subcommand;
 use serde::Serialize;
@@ -70,7 +70,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<AuthServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(AuthServiceClientWrapper::new(AuthServiceClient::new(channel)))
+    Ok(AuthServiceClientWrapper::new(AuthServiceClient::new(
+        channel,
+    )))
 }
 
 /// Run an auth command.
@@ -135,14 +137,12 @@ mod tests {
     #[tokio::test]
     async fn logout_renders_watermark() {
         let mut mock = MockAuthService::new();
-        mock.expect_signal_logout()
-            .times(1)
-            .returning(|_| {
-                Ok(client::SignalLogoutResponse {
-                    subject: "sub_123".into(),
-                    watermark_ms: 1_700_000_000_000,
-                })
-            });
+        mock.expect_signal_logout().times(1).returning(|_| {
+            Ok(client::SignalLogoutResponse {
+                subject: "sub_123".into(),
+                watermark_ms: 1_700_000_000_000,
+            })
+        });
 
         run(AuthAction::Logout, OutputFormat::Json, &mut mock)
             .await
@@ -152,17 +152,15 @@ mod tests {
     #[tokio::test]
     async fn whoami_table_renders() {
         let mut mock = MockAuthService::new();
-        mock.expect_who_am_i()
-            .times(1)
-            .returning(|_| {
-                Ok(client::WhoAmIResponse {
-                    subject: "sub_123".into(),
-                    display_name: "Ada".into(),
-                    email: "ada@example.com".into(),
-                    roles: vec!["admin".into()],
-                    expires_at_ms: 1,
-                })
-            });
+        mock.expect_who_am_i().times(1).returning(|_| {
+            Ok(client::WhoAmIResponse {
+                subject: "sub_123".into(),
+                display_name: "Ada".into(),
+                email: "ada@example.com".into(),
+                roles: vec!["admin".into()],
+                expires_at_ms: 1,
+            })
+        });
 
         run(AuthAction::WhoAmI, OutputFormat::Table, &mut mock)
             .await
@@ -178,8 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrapper_new_constructs() {
-        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1")
-            .connect_lazy();
+        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1").connect_lazy();
         let auth = crate::kanban::client::BearerAuth::new("").unwrap();
         let auth_channel = tonic::service::interceptor::InterceptedService::new(channel, auth);
         let _wrapper = AuthServiceClientWrapper::new(AuthServiceClient::new(auth_channel));

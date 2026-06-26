@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::kanban::client::{self, SearchServiceClient};
 use crate::logger::Logger;
-use crate::output::{render_list, OutputFormat};
+use crate::output::{OutputFormat, render_list};
 use async_trait::async_trait;
 use clap::Args;
 use serde::Serialize;
@@ -35,7 +35,10 @@ struct SearchHitOut {
 #[async_trait]
 pub trait SearchService {
     /// Search cards by query.
-    async fn search_cards(&mut self, req: client::SearchCardsRequest) -> Result<client::SearchCardsResponse>;
+    async fn search_cards(
+        &mut self,
+        req: client::SearchCardsRequest,
+    ) -> Result<client::SearchCardsResponse>;
 }
 
 /// Wrapper around the generated Tonic search client.
@@ -53,7 +56,10 @@ impl SearchServiceClientWrapper {
 
 #[async_trait]
 impl SearchService for SearchServiceClientWrapper {
-    async fn search_cards(&mut self, req: client::SearchCardsRequest) -> Result<client::SearchCardsResponse> {
+    async fn search_cards(
+        &mut self,
+        req: client::SearchCardsRequest,
+    ) -> Result<client::SearchCardsResponse> {
         let resp = self.inner.search_cards(req).await?;
         Ok(resp.into_inner())
     }
@@ -66,7 +72,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<SearchServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(SearchServiceClientWrapper::new(SearchServiceClient::new(channel)))
+    Ok(SearchServiceClientWrapper::new(SearchServiceClient::new(
+        channel,
+    )))
 }
 
 /// Run a search command.
@@ -167,11 +175,13 @@ mod tests {
         mock.expect_search_cards()
             .withf(|req| req.limit == 5)
             .times(1)
-            .returning(|_| Ok(client::SearchCardsResponse {
-                hits: vec![],
-                next_cursor: String::new(),
-                total: 0,
-            }));
+            .returning(|_| {
+                Ok(client::SearchCardsResponse {
+                    hits: vec![],
+                    next_cursor: String::new(),
+                    total: 0,
+                })
+            });
 
         run(
             SearchAction {
@@ -188,27 +198,25 @@ mod tests {
     #[tokio::test]
     async fn search_table_renders() {
         let mut mock = MockSearchService::new();
-        mock.expect_search_cards()
-            .times(1)
-            .returning(|_| {
-                Ok(client::SearchCardsResponse {
-                    hits: vec![client::CardSearchHit {
-                        card_id: "card_1".into(),
-                        card_ref: "PROJ-1".into(),
-                        board_id: "board_1".into(),
-                        project_id: "proj_1".into(),
-                        title: "Fix".into(),
-                        description_snippet: String::new(),
-                        priority: "high".into(),
-                        status: "open".into(),
-                        label_names: vec![],
-                        assignee_subjects: vec![],
-                        score: 1.0,
-                    }],
-                    next_cursor: String::new(),
-                    total: 1,
-                })
-            });
+        mock.expect_search_cards().times(1).returning(|_| {
+            Ok(client::SearchCardsResponse {
+                hits: vec![client::CardSearchHit {
+                    card_id: "card_1".into(),
+                    card_ref: "PROJ-1".into(),
+                    board_id: "board_1".into(),
+                    project_id: "proj_1".into(),
+                    title: "Fix".into(),
+                    description_snippet: String::new(),
+                    priority: "high".into(),
+                    status: "open".into(),
+                    label_names: vec![],
+                    assignee_subjects: vec![],
+                    score: 1.0,
+                }],
+                next_cursor: String::new(),
+                total: 1,
+            })
+        });
 
         run(
             SearchAction {

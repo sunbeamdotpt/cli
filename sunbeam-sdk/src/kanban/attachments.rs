@@ -218,7 +218,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<AttachmentServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(AttachmentServiceClientWrapper::new(AttachmentServiceClient::new(channel)))
+    Ok(AttachmentServiceClientWrapper::new(
+        AttachmentServiceClient::new(channel),
+    ))
 }
 
 /// Run an attachment command.
@@ -235,11 +237,7 @@ pub async fn run(
             let resp = client
                 .list_attachments_by_card(client::request_with_object_id(req, &card_id)?)
                 .await?;
-            let attachments: Vec<_> = resp
-                .attachments
-                .into_iter()
-                .map(attachment_out)
-                .collect();
+            let attachments: Vec<_> = resp.attachments.into_iter().map(attachment_out).collect();
             render_list(
                 &attachments,
                 &[

@@ -2,8 +2,8 @@
 
 use crate::error::{Result, ResultExt};
 use crate::kanban::client::{
-    self, CardTemplate as ProtoCardTemplate, CreateCardTemplateRequest,
-    DeleteCardTemplateRequest, GetCardTemplateRequest, ListCardTemplatesRequest,
+    self, CardTemplate as ProtoCardTemplate, CreateCardTemplateRequest, DeleteCardTemplateRequest,
+    GetCardTemplateRequest, ListCardTemplatesRequest,
     TemplateChecklistItem as ProtoTemplateChecklistItem, TemplatesServiceClient,
     UpdateCardTemplateRequest, request_with_object_id,
 };
@@ -153,10 +153,8 @@ pub trait CardTemplateService {
         req: Request<UpdateCardTemplateRequest>,
     ) -> Result<client::CardTemplate>;
     /// Delete a card template.
-    async fn delete_card_template(
-        &mut self,
-        req: Request<DeleteCardTemplateRequest>,
-    ) -> Result<()>;
+    async fn delete_card_template(&mut self, req: Request<DeleteCardTemplateRequest>)
+    -> Result<()>;
 }
 
 /// Wrapper around the generated Tonic templates client.
@@ -483,13 +481,11 @@ mod tests {
     #[tokio::test]
     async fn list_card_templates_table_renders() {
         let mut mock = MockCardTemplateService::new();
-        mock.expect_list_card_templates()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListCardTemplatesResponse {
-                    templates: vec![card_template_fixture()],
-                })
-            });
+        mock.expect_list_card_templates().times(1).returning(|_| {
+            Ok(client::ListCardTemplatesResponse {
+                templates: vec![card_template_fixture()],
+            })
+        });
 
         run(
             CardTemplateAction::List {

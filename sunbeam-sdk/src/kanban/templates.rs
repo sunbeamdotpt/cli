@@ -213,9 +213,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<TemplatesServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(TemplatesServiceClientWrapper::new(TemplatesServiceClient::new(
-        channel,
-    )))
+    Ok(TemplatesServiceClientWrapper::new(
+        TemplatesServiceClient::new(channel),
+    ))
 }
 
 /// Run a board template command.
@@ -230,7 +230,8 @@ pub async fn run(
                 project_id: project.unwrap_or_default(),
             };
             let resp = client.list_templates(req).await?;
-            let templates: Vec<BoardTemplateOut> = resp.templates.iter().map(|t| t.into()).collect();
+            let templates: Vec<BoardTemplateOut> =
+                resp.templates.iter().map(|t| t.into()).collect();
             render_list(
                 &templates,
                 &["ID", "PROJECT", "NAME", "DESCRIPTION", "GLOBAL", "COLUMNS"],
@@ -471,13 +472,11 @@ mod tests {
     #[tokio::test]
     async fn list_templates_table_renders() {
         let mut mock = MockTemplateService::new();
-        mock.expect_list_templates()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListTemplatesResponse {
-                    templates: vec![board_template_fixture()],
-                })
-            });
+        mock.expect_list_templates().times(1).returning(|_| {
+            Ok(client::ListTemplatesResponse {
+                templates: vec![board_template_fixture()],
+            })
+        });
 
         run(
             TemplateAction::List {

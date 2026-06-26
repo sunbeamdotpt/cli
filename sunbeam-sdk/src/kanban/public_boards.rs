@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::kanban::client::{self, PublicBoardServiceClient};
 use crate::logger::Logger;
-use crate::output::{render, render_list, OutputFormat};
+use crate::output::{OutputFormat, render, render_list};
 use async_trait::async_trait;
 use clap::Subcommand;
 use serde::Serialize;
@@ -233,17 +233,15 @@ mod tests {
     #[tokio::test]
     async fn list_public_boards_table_renders() {
         let mut mock = MockPublicBoardService::new();
-        mock.expect_list_public_boards()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListBoardsResponse {
-                    boards: vec![
-                        sample_board("b1", "p1", 1),
-                        sample_board("b2", "p1", 2),
-                        sample_board("b3", "p1", 99),
-                    ],
-                })
-            });
+        mock.expect_list_public_boards().times(1).returning(|_| {
+            Ok(client::ListBoardsResponse {
+                boards: vec![
+                    sample_board("b1", "p1", 1),
+                    sample_board("b2", "p1", 2),
+                    sample_board("b3", "p1", 99),
+                ],
+            })
+        });
 
         run_with_client(
             PublicBoardAction::List {
@@ -302,17 +300,13 @@ mod tests {
     #[tokio::test]
     async fn build_client_rejects_invalid_url() {
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let err = build_client(&logger, ":::not-a-url")
-            .await
-            .unwrap_err();
+        let err = build_client(&logger, ":::not-a-url").await.unwrap_err();
         assert!(err.to_string().contains("invalid kanban server URL"));
     }
 
     #[tokio::test]
     async fn wrapper_new_constructs() {
-        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1")
-            .connect_lazy();
-        let _wrapper =
-            PublicBoardServiceClientWrapper::new(PublicBoardServiceClient::new(channel));
+        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1").connect_lazy();
+        let _wrapper = PublicBoardServiceClientWrapper::new(PublicBoardServiceClient::new(channel));
     }
 }

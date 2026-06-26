@@ -304,7 +304,10 @@ async fn request_device_code(
         )));
     }
 
-    let body = resp.bytes().await.ctx("Failed to read device authorization response")?;
+    let body = resp
+        .bytes()
+        .await
+        .ctx("Failed to read device authorization response")?;
     serde_json::from_slice::<DeviceAuthorizationResponse>(&body)
         .ctx("Failed to parse device authorization response")
 }
@@ -326,10 +329,7 @@ async fn poll_device_token(
         let resp = client
             .post(token_endpoint)
             .form(&[
-                (
-                    "grant_type",
-                    "urn:ietf:params:oauth:grant-type:device_code",
-                ),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ("device_code", device_code),
                 ("client_id", client_id),
             ])
@@ -338,7 +338,10 @@ async fn poll_device_token(
             .ctx("Failed to poll device token endpoint")?;
 
         if resp.status().is_success() {
-            let body = resp.bytes().await.ctx("Failed to read device token response")?;
+            let body = resp
+                .bytes()
+                .await
+                .ctx("Failed to read device token response")?;
             return serde_json::from_slice::<TokenResponse>(&body)
                 .ctx("Failed to parse device token response");
         }
@@ -408,8 +411,7 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
     )
     .await?;
 
-    let expires_at =
-        Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
+    let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
 
     let tokens = AuthTokens {
         access_token: token_resp.access_token,
@@ -807,10 +809,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_device_token_retries_pending() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
 
         struct PendingThenSuccess(Arc<AtomicUsize>);
         impl Respond for PendingThenSuccess {
@@ -856,10 +858,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_device_token_respects_slow_down() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
 
         struct SlowDownThenSuccess(Arc<AtomicUsize>);
         impl Respond for SlowDownThenSuccess {

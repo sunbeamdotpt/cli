@@ -187,10 +187,7 @@ pub trait ProjectService {
         req: tonic::Request<UpdateProjectRequest>,
     ) -> Result<client::Project>;
     /// Delete a project.
-    async fn delete_project(
-        &mut self,
-        req: tonic::Request<DeleteProjectRequest>,
-    ) -> Result<()>;
+    async fn delete_project(&mut self, req: tonic::Request<DeleteProjectRequest>) -> Result<()>;
     /// List project members.
     async fn list_members(
         &mut self,
@@ -249,10 +246,7 @@ impl ProjectService for ProjectServiceClientWrapper {
         Ok(resp.into_inner())
     }
 
-    async fn delete_project(
-        &mut self,
-        req: tonic::Request<DeleteProjectRequest>,
-    ) -> Result<()> {
+    async fn delete_project(&mut self, req: tonic::Request<DeleteProjectRequest>) -> Result<()> {
         self.inner.delete_project(req).await?;
         Ok(())
     }
@@ -300,11 +294,7 @@ pub async fn run(
                 .list_projects(tonic::Request::new(ListProjectsRequest {}))
                 .await
                 .with_ctx(|| "list projects failed".to_string())?;
-            let projects: Vec<ProjectOut> = resp
-                .projects
-                .into_iter()
-                .map(Into::into)
-                .collect();
+            let projects: Vec<ProjectOut> = resp.projects.into_iter().map(Into::into).collect();
             render_list(
                 &projects,
                 &["ID", "NAME", "PREFIX", "DESCRIPTION", "MEMBERS"],
@@ -413,11 +403,7 @@ pub async fn run(
                     }))
                     .await
                     .with_ctx(|| "list members failed".to_string())?;
-                let members: Vec<MemberOut> = resp
-                    .members
-                    .into_iter()
-                    .map(Into::into)
-                    .collect();
+                let members: Vec<MemberOut> = resp.members.into_iter().map(Into::into).collect();
                 render_list(
                     &members,
                     &["PROJECT ID", "SUBJECT", "RELATION", "DISPLAY NAME", "EMAIL"],
@@ -604,8 +590,7 @@ mod tests {
                     && r.update_mask.as_ref().map(|m| m.paths.clone())
                         == Some(vec!["name".into(), "description".into()])
                     && r.project.as_ref().map(|p| p.name.clone()) == Some("Renamed".into())
-                    && r.project.as_ref().map(|p| p.description.clone())
-                        == Some("New desc".into())
+                    && r.project.as_ref().map(|p| p.description.clone()) == Some("New desc".into())
             })
             .times(1)
             .returning(|_| Ok(sample_project()));
@@ -723,13 +708,11 @@ mod tests {
     #[tokio::test]
     async fn list_projects_table_renders() {
         let mut mock = MockProjectService::new();
-        mock.expect_list_projects()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListProjectsResponse {
-                    projects: vec![sample_project()],
-                })
-            });
+        mock.expect_list_projects().times(1).returning(|_| {
+            Ok(client::ListProjectsResponse {
+                projects: vec![sample_project()],
+            })
+        });
 
         run(ProjectAction::List, OutputFormat::Table, &mut mock)
             .await
@@ -774,12 +757,13 @@ mod tests {
             .withf(|req| {
                 let r = req.get_ref();
                 let paths = r.update_mask.as_ref().map(|m| m.paths.clone());
-                paths == Some(vec![
-                    "name".into(),
-                    "icon".into(),
-                    "color".into(),
-                    "description".into(),
-                ])
+                paths
+                    == Some(vec![
+                        "name".into(),
+                        "icon".into(),
+                        "color".into(),
+                        "description".into(),
+                    ])
             })
             .times(1)
             .returning(|_| Ok(sample_project()));
@@ -795,8 +779,8 @@ mod tests {
             OutputFormat::Json,
             &mut mock,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

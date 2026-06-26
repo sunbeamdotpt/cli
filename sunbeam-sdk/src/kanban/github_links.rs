@@ -232,7 +232,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<GithubLinkServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(GithubLinkServiceClientWrapper::new(GithubLinkServiceClient::new(channel)))
+    Ok(GithubLinkServiceClientWrapper::new(
+        GithubLinkServiceClient::new(channel),
+    ))
 }
 
 /// Run a GitHub link command.
@@ -275,11 +277,7 @@ pub async fn run(
             let resp = client
                 .list_links_by_card(client::request_with_object_id(req, &card_id)?)
                 .await?;
-            let links: Vec<_> = resp
-                .links
-                .into_iter()
-                .map(link_detail_out)
-                .collect();
+            let links: Vec<_> = resp.links.into_iter().map(link_detail_out).collect();
             render_list(
                 &links,
                 &["ID", "REPO", "NUMBER", "KIND", "TITLE", "STATE", "URL"],
@@ -305,12 +303,10 @@ pub async fn run(
                 query,
                 limit: 20,
             };
-            let resp = client.search_github_issues(tonic::Request::new(req)).await?;
-            let results: Vec<_> = resp
-                .results
-                .into_iter()
-                .map(issue_result_out)
-                .collect();
+            let resp = client
+                .search_github_issues(tonic::Request::new(req))
+                .await?;
+            let results: Vec<_> = resp.results.into_iter().map(issue_result_out).collect();
             render_list(
                 &results,
                 &["REPO", "NUMBER", "KIND", "TITLE", "STATE", "URL"],
@@ -481,13 +477,11 @@ mod tests {
     #[tokio::test]
     async fn list_links_table_renders() {
         let mut mock = MockGithubLinkService::new();
-        mock.expect_list_links_by_card()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListGitHubLinksByCardResponse {
-                    links: vec![sample_link_detail("link_1")],
-                })
-            });
+        mock.expect_list_links_by_card().times(1).returning(|_| {
+            Ok(client::ListGitHubLinksByCardResponse {
+                links: vec![sample_link_detail("link_1")],
+            })
+        });
 
         run(
             GitHubAction::List {
@@ -503,21 +497,19 @@ mod tests {
     #[tokio::test]
     async fn search_issues_table_renders() {
         let mut mock = MockGithubLinkService::new();
-        mock.expect_search_github_issues()
-            .times(1)
-            .returning(|_| {
-                Ok(client::SearchGithubIssuesResponse {
-                    results: vec![client::GitHubIssueResult {
-                        repo_owner: "sunbeam".into(),
-                        repo_name: "cli".into(),
-                        number: 42,
-                        kind: "issue".into(),
-                        title: "Fix crash".into(),
-                        state: "open".into(),
-                        url: "https://github.com/sunbeam/cli/issues/42".into(),
-                    }],
-                })
-            });
+        mock.expect_search_github_issues().times(1).returning(|_| {
+            Ok(client::SearchGithubIssuesResponse {
+                results: vec![client::GitHubIssueResult {
+                    repo_owner: "sunbeam".into(),
+                    repo_name: "cli".into(),
+                    number: 42,
+                    kind: "issue".into(),
+                    title: "Fix crash".into(),
+                    state: "open".into(),
+                    url: "https://github.com/sunbeam/cli/issues/42".into(),
+                }],
+            })
+        });
 
         run(
             GitHubAction::Search {

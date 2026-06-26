@@ -34,10 +34,7 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<client::BoardEventEnvelo
 #[async_trait]
 pub trait SubscriptionService {
     /// Subscribe to board-level events.
-    async fn subscribe_board(
-        &mut self,
-        req: client::SubscribeBoardRequest,
-    ) -> Result<EventStream>;
+    async fn subscribe_board(&mut self, req: client::SubscribeBoardRequest) -> Result<EventStream>;
     /// Subscribe to project-level events.
     async fn subscribe_project(
         &mut self,
@@ -67,10 +64,7 @@ impl SubscriptionServiceClientWrapper {
 
 #[async_trait]
 impl SubscriptionService for SubscriptionServiceClientWrapper {
-    async fn subscribe_board(
-        &mut self,
-        req: client::SubscribeBoardRequest,
-    ) -> Result<EventStream> {
+    async fn subscribe_board(&mut self, req: client::SubscribeBoardRequest) -> Result<EventStream> {
         let stream = self.board_client.subscribe_board(req).await?.into_inner();
         Ok(Box::pin(stream.map_err(|e| e.into())))
     }
@@ -444,8 +438,8 @@ pub async fn run_with_client(
                 .with_ctx(|| "kanban subscribe board failed".to_string())?;
 
             while let Some(envelope) = stream.next().await {
-                let envelope = envelope
-                    .with_ctx(|| "kanban subscribe board stream failed".to_string())?;
+                let envelope =
+                    envelope.with_ctx(|| "kanban subscribe board stream failed".to_string())?;
                 print_envelope(&envelope)?;
             }
         }
@@ -460,8 +454,8 @@ pub async fn run_with_client(
                 .with_ctx(|| "kanban subscribe project failed".to_string())?;
 
             while let Some(envelope) = stream.next().await {
-                let envelope = envelope
-                    .with_ctx(|| "kanban subscribe project stream failed".to_string())?;
+                let envelope =
+                    envelope.with_ctx(|| "kanban subscribe project stream failed".to_string())?;
                 print_envelope(&envelope)?;
             }
         }
@@ -509,10 +503,7 @@ mod tests {
             .withf(|req| req.board_id == "board_123" && req.since_seq == 0)
             .times(1)
             .returning(|_| {
-                Ok(futures::stream::iter(vec![Ok(heartbeat_envelope(
-                    "board_123",
-                ))])
-                .boxed())
+                Ok(futures::stream::iter(vec![Ok(heartbeat_envelope("board_123"))]).boxed())
             });
 
         run_with_client(
@@ -531,9 +522,7 @@ mod tests {
         mock.expect_subscribe_project()
             .withf(|req| req.project_id == "proj_123" && req.since_seq == 0)
             .times(1)
-            .returning(|_| {
-                Ok(futures::stream::iter(vec![Ok(heartbeat_envelope(""))]).boxed())
-            });
+            .returning(|_| Ok(futures::stream::iter(vec![Ok(heartbeat_envelope(""))]).boxed()));
 
         run_with_client(
             SubscribeAction::Project {
@@ -548,14 +537,14 @@ mod tests {
     #[tokio::test]
     async fn subscribe_board_stream_error_propagates() {
         let mut mock = MockSubscriptionService::new();
-        mock.expect_subscribe_board()
-            .times(1)
-            .returning(|_| {
-                Ok(futures::stream::iter(vec![Err(crate::error::SunbeamError::Other(
+        mock.expect_subscribe_board().times(1).returning(|_| {
+            Ok(
+                futures::stream::iter(vec![Err(crate::error::SunbeamError::Other(
                     "stream boom".into(),
                 ))])
-                .boxed())
-            });
+                .boxed(),
+            )
+        });
 
         let err = run_with_client(
             SubscribeAction::Board {
@@ -658,7 +647,9 @@ mod tests {
         assert!(value["labels"].as_array().unwrap().len() == 1);
     }
 
-    fn payload_envelope(payload: client::board_event_envelope::Payload) -> client::BoardEventEnvelope {
+    fn payload_envelope(
+        payload: client::board_event_envelope::Payload,
+    ) -> client::BoardEventEnvelope {
         client::BoardEventEnvelope {
             board_id: "b".into(),
             event_id: "e".into(),
@@ -876,9 +867,9 @@ mod tests {
         ];
 
         let mut mock = MockSubscriptionService::new();
-        mock.expect_subscribe_board()
-            .times(1)
-            .returning(move |_| Ok(futures::stream::iter(events.clone().into_iter().map(Ok)).boxed()));
+        mock.expect_subscribe_board().times(1).returning(move |_| {
+            Ok(futures::stream::iter(events.clone().into_iter().map(Ok)).boxed())
+        });
 
         run_with_client(
             SubscribeAction::Board {
@@ -903,15 +894,15 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            err.to_string().contains("login") || err.to_string().contains("invalid kanban server URL"),
+            err.to_string().contains("login")
+                || err.to_string().contains("invalid kanban server URL"),
             "unexpected error: {err}"
         );
     }
 
     #[tokio::test]
     async fn wrapper_new_constructs() {
-        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1")
-            .connect_lazy();
+        let channel = tonic::transport::Endpoint::from_static("http://[::1]:1").connect_lazy();
         let auth = crate::kanban::client::BearerAuth::new("").unwrap();
         let auth_channel = tonic::service::interceptor::InterceptedService::new(channel, auth);
         let board_client = BoardServiceClient::new(auth_channel.clone());

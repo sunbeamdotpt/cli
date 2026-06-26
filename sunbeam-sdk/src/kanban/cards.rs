@@ -305,10 +305,7 @@ pub trait CardService {
         req: tonic::Request<client::MoveCardRequest>,
     ) -> Result<client::Card>;
     /// Delete a card.
-    async fn delete_card(
-        &mut self,
-        req: tonic::Request<client::DeleteCardRequest>,
-    ) -> Result<()>;
+    async fn delete_card(&mut self, req: tonic::Request<client::DeleteCardRequest>) -> Result<()>;
     /// Add a dependency between two cards.
     async fn add_card_dependency(
         &mut self,
@@ -373,10 +370,7 @@ impl CardService for CardServiceClientWrapper {
         Ok(resp.into_inner())
     }
 
-    async fn delete_card(
-        &mut self,
-        req: tonic::Request<client::DeleteCardRequest>,
-    ) -> Result<()> {
+    async fn delete_card(&mut self, req: tonic::Request<client::DeleteCardRequest>) -> Result<()> {
         self.inner.delete_card(req).await?;
         Ok(())
     }
@@ -405,7 +399,9 @@ pub async fn build_client(
     token: &str,
 ) -> Result<CardServiceClientWrapper> {
     let channel = client::build(logger, server, token).await?;
-    Ok(CardServiceClientWrapper::new(CardServiceClient::new(channel)))
+    Ok(CardServiceClientWrapper::new(CardServiceClient::new(
+        channel,
+    )))
 }
 
 /// Run a card command.
@@ -703,7 +699,10 @@ mod tests {
                 let r = req.get_ref();
                 r.card_id == "card_1"
                     && r.card.as_ref().map(|c| c.id.clone()).unwrap_or_default() == "card_1"
-                    && r.update_mask.as_ref().map(|m| m.paths.clone()).unwrap_or_default()
+                    && r.update_mask
+                        .as_ref()
+                        .map(|m| m.paths.clone())
+                        .unwrap_or_default()
                         == vec!["title".to_string()]
             })
             .times(1)
@@ -819,14 +818,12 @@ mod tests {
     #[tokio::test]
     async fn list_cards_table_renders() {
         let mut mock = MockCardService::new();
-        mock.expect_list_cards_by_board()
-            .times(1)
-            .returning(|_| {
-                Ok(client::ListCardsByBoardResponse {
-                    cards: vec![sample_card()],
-                    next_cursor: String::new(),
-                })
-            });
+        mock.expect_list_cards_by_board().times(1).returning(|_| {
+            Ok(client::ListCardsByBoardResponse {
+                cards: vec![sample_card()],
+                next_cursor: String::new(),
+            })
+        });
 
         run(
             CardAction::List {
@@ -879,7 +876,12 @@ mod tests {
             .withf(|req| {
                 let r = req.get_ref();
                 let paths = r.update_mask.as_ref().map(|m| m.paths.clone());
-                paths == Some(vec!["title".into(), "description".into(), "priority".into()])
+                paths
+                    == Some(vec![
+                        "title".into(),
+                        "description".into(),
+                        "priority".into(),
+                    ])
             })
             .times(1)
             .returning(|_| Ok(sample_card()));
@@ -962,19 +964,33 @@ mod tests {
     #[test]
     fn fmt_ts_handles_missing_and_invalid() {
         assert!(fmt_ts(None).is_empty());
-        assert!(fmt_ts(Some(&prost_types::Timestamp {
-            seconds: i64::MAX,
-            nanos: 0,
-        }))
-        .is_empty());
+        assert!(
+            fmt_ts(Some(&prost_types::Timestamp {
+                seconds: i64::MAX,
+                nanos: 0,
+            }))
+            .is_empty()
+        );
     }
 
     #[test]
     fn priority_arg_to_proto_covers_all() {
-        assert_eq!(PriorityArg::Low.to_proto() as i32, client::CardPriority::Low as i32);
-        assert_eq!(PriorityArg::Medium.to_proto() as i32, client::CardPriority::Medium as i32);
-        assert_eq!(PriorityArg::High.to_proto() as i32, client::CardPriority::High as i32);
-        assert_eq!(PriorityArg::Urgent.to_proto() as i32, client::CardPriority::Urgent as i32);
+        assert_eq!(
+            PriorityArg::Low.to_proto() as i32,
+            client::CardPriority::Low as i32
+        );
+        assert_eq!(
+            PriorityArg::Medium.to_proto() as i32,
+            client::CardPriority::Medium as i32
+        );
+        assert_eq!(
+            PriorityArg::High.to_proto() as i32,
+            client::CardPriority::High as i32
+        );
+        assert_eq!(
+            PriorityArg::Urgent.to_proto() as i32,
+            client::CardPriority::Urgent as i32
+        );
     }
 
     #[tokio::test]

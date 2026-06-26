@@ -313,9 +313,7 @@ pub async fn run(
     match cmd {
         AggregateAction::List => {
             let resp = client
-                .list_aggregated_boards(tonic::Request::new(
-                    client::ListAggregatedBoardsRequest {},
-                ))
+                .list_aggregated_boards(tonic::Request::new(client::ListAggregatedBoardsRequest {}))
                 .await
                 .with_ctx(|| "list aggregated boards".to_string())?;
             let boards: Vec<_> = resp
@@ -542,9 +540,9 @@ mod tests {
             .returning(|_| {
                 Ok(vec![
                     client::AggregatedBoardChunk {
-                        payload: Some(client::aggregated_board_chunk::Payload::Metadata(
-                            board("agg_1", "Roadmap"),
-                        )),
+                        payload: Some(client::aggregated_board_chunk::Payload::Metadata(board(
+                            "agg_1", "Roadmap",
+                        ))),
                     },
                     client::AggregatedBoardChunk {
                         payload: Some(client::aggregated_board_chunk::Payload::SourceBoard(
@@ -858,18 +856,29 @@ mod tests {
     #[test]
     fn fmt_ts_handles_missing_and_invalid() {
         assert!(fmt_ts(None).is_empty());
-        assert!(fmt_ts(Some(&prost_types::Timestamp {
-            seconds: i64::MAX,
-            nanos: 0,
-        }))
-        .is_empty());
+        assert!(
+            fmt_ts(Some(&prost_types::Timestamp {
+                seconds: i64::MAX,
+                nanos: 0,
+            }))
+            .is_empty()
+        );
     }
 
     #[test]
     fn visibility_arg_to_proto_covers_all() {
-        assert_eq!(VisibilityArg::Private.to_proto() as i32, client::BoardVisibility::Private as i32);
-        assert_eq!(VisibilityArg::Internal.to_proto() as i32, client::BoardVisibility::Internal as i32);
-        assert_eq!(VisibilityArg::Public.to_proto() as i32, client::BoardVisibility::Public as i32);
+        assert_eq!(
+            VisibilityArg::Private.to_proto() as i32,
+            client::BoardVisibility::Private as i32
+        );
+        assert_eq!(
+            VisibilityArg::Internal.to_proto() as i32,
+            client::BoardVisibility::Internal as i32
+        );
+        assert_eq!(
+            VisibilityArg::Public.to_proto() as i32,
+            client::BoardVisibility::Public as i32
+        );
     }
 
     #[tokio::test]
