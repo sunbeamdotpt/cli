@@ -27,7 +27,7 @@ If a `sunbeam-memory` MCP server is available in your environment, use it for co
 - **CLI framework:** clap v4 with derive macros + clap_complete
 - **Kubernetes:** kube-rs (client + runtime + websockets), k8s-openapi
 - **Workflow engine:** wfe, wfe-core, wfe-sqlite, wfe-yaml, wfe-server-protos
-- **TLS/HTTP:** rustls (ring crypto provider), reqwest, tokio-rustls, h2, tonic/prost (gRPC)
+- **TLS/HTTP:** rustls (aws-lc-rs crypto provider), reqwest, tokio-rustls, h2, tonic/prost (gRPC)
 - **Serialization:** serde, serde_json, serde_yaml
 - **Tracing/Logging:** tracing + tracing-subscriber with custom line/json/threaded layers
 - **Crypto:** rsa, sha2, hmac, blake2, chacha20poly1305, hkdf, base64, rand, aes-gcm, argon2, crypto_box, x25519-dalek, rcgen
@@ -88,6 +88,21 @@ If a `sunbeam-memory` MCP server is available in your environment, use it for co
 │       │   ├── verify/     # VSO + OpenBao integration test workflow
 │       │   ├── primitives/ # Reusable WFE step bodies (ApplyManifest, WaitForRollout, etc.)
 │       │   └── steps/      # Shared steps (k8s secrets, kratos admin, openbao init, postgres)
+│       ├── kanban/         # Kanban board/project management gRPC client
+│       │   ├── mod.rs      # Top-level dispatch, URL resolution, idempotency keys
+│       │   ├── client.rs   # Generated gRPC stubs + channel/auth helpers
+│       │   ├── auth.rs     # Kanban auth commands (whoami, logout)
+│       │   ├── projects.rs # Project CRUD and membership
+│       │   ├── boards.rs   # Board and column management
+│       │   ├── aggregated.rs # Aggregated (meta) boards
+│       │   ├── cards.rs    # Card CRUD, move, dependencies
+│       │   ├── templates.rs # Board templates
+│       │   ├── card_templates.rs # Card templates
+│       │   ├── attachments.rs # File attachments
+│       │   ├── github_links.rs # GitHub issue/PR links
+│       │   ├── search.rs   # Full-text card search
+│       │   ├── public_boards.rs # Unauthenticated public board reads
+│       │   └── subscribe.rs # Realtime event subscriptions
 │       ├── project/        # Per-project build/test/deploy (sunbeam.yaml parsing + runner)
 │       ├── operations/     # Workspace-level commands (compose, stack, worktree)
 │       ├── profiles/       # Manifest profile system (shortcuts, rules, validation)
@@ -128,12 +143,13 @@ cargo doc --workspace --no-deps
 - The `logging` module has extensive tests for output formatting using a custom `TestWriter`.
 - `error.rs` tests cover exit codes, display formatting, context extensions, and the `bail!` macro.
 - `workflows/` tests verify step registration and workflow definition shape without executing against a cluster.
+- `kanban/` commands are tested behind `mockall::automock` service traits; the kanban module targets >90% line coverage via `cargo llvm-cov`.
 
 ## Architecture
 
 ### Entry Point
 
-`src/main.rs` installs the rustls ring crypto provider, parses CLI args, initializes the tracing subscriber (with `LogMode::Line` / `Json` / `Threaded`), sets a panic hook, and dispatches to `sunbeam_sdk::cli::dispatch(cli)`. On error it prints the error chain and exits with the error's exit code.
+`src/main.rs` installs the rustls aws-lc-rs crypto provider, parses CLI args, initializes the tracing subscriber (with `LogMode::Line` / `Json` / `Threaded`), sets a panic hook, and dispatches to `sunbeam_sdk::cli::dispatch(cli)`. On error it prints the error chain and exits with the error's exit code.
 
 ### CLI Dispatch
 
@@ -144,6 +160,7 @@ Top-level verbs include:
 - `service` (alias `svc`) — status, logs, restart, apply, deploy, shell, exec, port-forward, scale, top, edit, secrets, transit, delete-job
 - `project` (alias `proj`) + shortcuts (`build`, `test`, `lint`, `fmt`, `package`, `deploy`, `dev`, `clean`, `doc`) — per-project targets from `sunbeam.yaml`
 - `operations` (alias `ops`) + `wt` shortcut — workspace compose, stack, worktree
+- `kanban` — board/project management via gRPC against the Sunbeam Kanban backend (auth, project, board, aggregate, card, template, card-template, attachment, github, search, public-board, subscribe)
 - `config`, `user`, `auth`, `pm`, `vpn`, `workflow`, `workflows`, `doctor`, `update`, `version`, `completions`
 
 ### Error Handling
@@ -239,7 +256,7 @@ Integration tests that require real services are **not** run in CI. Binary distr
 ## Security Considerations
 
 - **Never commit secrets** — no `.env` files, credentials, or keys in the repo.
-- **TLS:** The project uses pure rustls (no native-tls). The ring crypto provider is installed at startup.
+- **TLS:** The project uses pure rustls (no native-tls). The aws-lc-rs crypto provider is installed at startup.
 - **VPN:** When the VPN daemon is running, `kube::get_client()` rewrites the cluster URL to a loopback proxy inside the WireGuard trust boundary and disables TLS verification for that hop.
 - **Secrets:** OpenBao (HashiCorp Vault fork) is used for KV secrets, database engine config, and transit keystore operations. Root tokens are short-lived and obtained via port-forward.
 - **Authentication:** OAuth2/OIDC via Hydra for SSO; Gitea personal access tokens for Git operations.
