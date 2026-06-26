@@ -142,6 +142,8 @@ fn generate_state() -> String {
 struct OidcDiscovery {
     authorization_endpoint: String,
     token_endpoint: String,
+    #[serde(default)]
+    device_authorization_endpoint: Option<String>,
 }
 
 /// Resolve the domain for authentication, trying multiple sources.
@@ -297,6 +299,196 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
 
     write_cache(&new_tokens)?;
     Ok(new_tokens)
+}
+
+// ---------------------------------------------------------------------------
+// Device Authorization Grant (RFC 8628)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct DeviceAuthorizationResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
+    #[serde(default = "default_device_interval")]
+    interval: u64,
+    #[serde(default = "default_device_expires")]
+    expires_in: u64,
+}
+
+fn default_device_interval() -> u64 {
+    5
+}
+
+fn default_device_expires() -> u64 {
+    1800
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuth2ErrorResponse {
+    error: String,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
+fn device_authorization_endpoint(discovery: &OidcDiscovery, domain: &str) -> String {
+    discovery
+        .device_authorization_endpoint
+        .clone()
+        .unwrap_or_else(|| format!("https://auth.{domain}/oauth2/device/auth"))
+}
+
+async fn request_device_code(
+    endpoint: &str,
+    client_id: &str,
+) -> Result<DeviceAuthorizationResponse> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(endpoint)
+        .form(&[
+            ("client_id", client_id),
+            ("scope", "openid email profile offline_access"),
+        ])
+        .send()
+        .await
+        .with_ctx(|| format!("Failed to request device code from {endpoint}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(SunbeamError::identity(format!(
+            "Device authorization request failed (HTTP {status}): {body}"
+        )));
+    }
+
+    let body = resp.bytes().await.ctx("Failed to read device authorization response")?;
+    serde_json::from_slice::<DeviceAuthorizationResponse>(&body)
+        .ctx("Failed to parse device authorization response")
+}
+
+async fn poll_device_token(
+    token_endpoint: &str,
+    client_id: &str,
+    device_code: &str,
+    mut interval_secs: u64,
+    expires_secs: u64,
+) -> Result<TokenResponse> {
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let expires = std::time::Duration::from_secs(expires_secs);
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+
+        let resp = client
+            .post(token_endpoint)
+            .form(&[
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:device_code",
+                ),
+                ("device_code", device_code),
+                ("client_id", client_id),
+            ])
+            .send()
+            .await
+            .ctx("Failed to poll device token endpoint")?;
+
+        if resp.status().is_success() {
+            let body = resp.bytes().await.ctx("Failed to read device token response")?;
+            return serde_json::from_slice::<TokenResponse>(&body)
+                .ctx("Failed to parse device token response");
+        }
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let err = serde_json::from_str::<OAuth2ErrorResponse>(&body)
+            .map(|e| e.error)
+            .unwrap_or_else(|_| body.clone());
+
+        match err.as_str() {
+            "authorization_pending" => {}
+            "slow_down" => {
+                interval_secs += 5;
+            }
+            _ => {
+                return Err(SunbeamError::identity(format!(
+                    "Device token request failed (HTTP {status}): {body}"
+                )));
+            }
+        }
+
+        if start.elapsed() >= expires {
+            return Err(SunbeamError::identity(
+                "Device login timed out. Run `sunbeam auth device` to try again.",
+            ));
+        }
+    }
+}
+
+/// Device login — OAuth2 Device Authorization Grant.
+///
+/// Prints a user code and verification URL, then polls the token endpoint until
+/// the user authorizes the device. Tokens are cached the same way as browser
+/// SSO login, so `sunbeam auth token` and `crate::auth::get_token()` work
+/// identically for upstream API calls.
+#[tracing::instrument(skip(domain_override))]
+pub async fn cmd_auth_device_login(domain_override: Option<&str>) -> Result<()> {
+    tracing::info!("Authenticating with Hydra via device code");
+
+    let domain = resolve_domain(domain_override).await?;
+    let discovery = discover_oidc(&domain).await?;
+    let client_id = resolve_client_id().await;
+
+    let device_endpoint = device_authorization_endpoint(&discovery, &domain);
+    let device_resp = request_device_code(&device_endpoint, &client_id).await?;
+
+    println!("\n    Device code: {}\n", device_resp.user_code);
+    println!(
+        "    Open this URL in your browser: {}\n",
+        device_resp.verification_uri
+    );
+
+    // Try to open the browser using the complete URI when available.
+    let browser_url = device_resp
+        .verification_uri_complete
+        .as_ref()
+        .unwrap_or(&device_resp.verification_uri);
+    let _open_result = open_browser(browser_url);
+
+    tracing::info!("Waiting for device authorization...");
+    let token_resp = poll_device_token(
+        &discovery.token_endpoint,
+        &client_id,
+        &device_resp.device_code,
+        device_resp.interval,
+        device_resp.expires_in,
+    )
+    .await?;
+
+    let expires_at =
+        Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
+
+    let tokens = AuthTokens {
+        access_token: token_resp.access_token,
+        refresh_token: token_resp.refresh_token.unwrap_or_default(),
+        expires_at,
+        id_token: token_resp.id_token.clone(),
+        domain: domain.clone(),
+        gitea_token: None,
+    };
+
+    let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
+    if let Some(ref email) = email {
+        tracing::info!("Logged in as {email}");
+    } else {
+        tracing::info!("Logged in successfully");
+    }
+
+    write_cache(&tokens)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -983,5 +1175,163 @@ mod tests {
     fn test_cache_path_default_domain() {
         let path = cache_path_for_domain("");
         assert!(path.to_string_lossy().ends_with("default.json"));
+    }
+
+    #[test]
+    fn test_device_authorization_response_parses() {
+        let json = r#"{
+            "device_code": "device_123",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://auth.example.com/device",
+            "verification_uri_complete": "https://auth.example.com/device?user_code=ABCD-EFGH",
+            "interval": 5,
+            "expires_in": 600
+        }"#;
+        let resp: DeviceAuthorizationResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.device_code, "device_123");
+        assert_eq!(resp.user_code, "ABCD-EFGH");
+        assert_eq!(resp.verification_uri, "https://auth.example.com/device");
+        assert_eq!(
+            resp.verification_uri_complete,
+            Some("https://auth.example.com/device?user_code=ABCD-EFGH".to_string())
+        );
+        assert_eq!(resp.interval, 5);
+        assert_eq!(resp.expires_in, 600);
+    }
+
+    #[test]
+    fn test_device_authorization_response_uses_defaults() {
+        let json = r#"{
+            "device_code": "device_123",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://auth.example.com/device"
+        }"#;
+        let resp: DeviceAuthorizationResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.interval, 5);
+        assert_eq!(resp.expires_in, 1800);
+        assert!(resp.verification_uri_complete.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_request_device_code_hits_endpoint() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/device/auth"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "dev_123",
+                "user_code": "USER-CODE",
+                "verification_uri": "https://auth.example.com/device",
+                "verification_uri_complete": "https://auth.example.com/device?user_code=USER-CODE",
+                "interval": 1,
+                "expires_in": 300
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = request_device_code(&format!("{}/device/auth", server.uri()), "sunbeam-cli")
+            .await
+            .unwrap();
+        assert_eq!(resp.user_code, "USER-CODE");
+        assert_eq!(resp.device_code, "dev_123");
+    }
+
+    #[tokio::test]
+    async fn test_poll_device_token_retries_pending() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct PendingThenSuccess(Arc<AtomicUsize>);
+        impl Respond for PendingThenSuccess {
+            fn respond(&self, _request: &Request) -> ResponseTemplate {
+                let count = self.0.fetch_add(1, Ordering::SeqCst);
+                if count < 2 {
+                    ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                        "error": "authorization_pending"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "access_token": "access_abc",
+                        "refresh_token": "refresh_xyz",
+                        "expires_in": 3600,
+                        "id_token": "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImFsaWNlQGV4YW1wbGUuY29tIn0.sig"
+                    }))
+                }
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(PendingThenSuccess(Arc::new(AtomicUsize::new(0))))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let token = poll_device_token(
+            &format!("{}/token", server.uri()),
+            "sunbeam-cli",
+            "dev_123",
+            1,
+            30,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(token.access_token, "access_abc");
+        assert_eq!(token.refresh_token, Some("refresh_xyz".to_string()));
+        assert!(token.id_token.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_poll_device_token_respects_slow_down() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct SlowDownThenSuccess(Arc<AtomicUsize>);
+        impl Respond for SlowDownThenSuccess {
+            fn respond(&self, _request: &Request) -> ResponseTemplate {
+                let count = self.0.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                        "error": "slow_down"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "access_token": "access_slow",
+                        "expires_in": 3600
+                    }))
+                }
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(SlowDownThenSuccess(Arc::new(AtomicUsize::new(0))))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let start = std::time::Instant::now();
+        let token = poll_device_token(
+            &format!("{}/token", server.uri()),
+            "sunbeam-cli",
+            "dev_123",
+            1,
+            30,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(token.access_token, "access_slow");
+        // slow_down should have added 5s to the interval, so the second poll waits 6s total.
+        assert!(start.elapsed() >= std::time::Duration::from_secs(6));
     }
 }

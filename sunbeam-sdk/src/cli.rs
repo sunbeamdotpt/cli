@@ -1183,6 +1183,9 @@ EXAMPLE:
         /// Domain to authenticate against (e.g. sunbeam.pt).
         #[arg(long)]
         domain: Option<String>,
+        /// Use the OAuth2 Device Authorization Grant (headless login).
+        #[arg(long)]
+        device: bool,
     },
     /// Log in to SSO only (Hydra OIDC — for Planka, identity management).
     #[command(long_about = r#"""Log in to SSO only.
@@ -1190,10 +1193,32 @@ EXAMPLE:
 Useful when you only need access to SSO-protected services (Grafana, Planka,
 Kratos admin UI) and do not need Git access.
 
+Use --device for headless environments (RFC 8628 device code flow).
+
 EXAMPLE:
   sunbeam auth sso
+  sunbeam auth sso --device
 ""#)]
     Sso {
+        /// Domain to authenticate against.
+        #[arg(long)]
+        domain: Option<String>,
+        /// Use the OAuth2 Device Authorization Grant (headless login).
+        #[arg(long)]
+        device: bool,
+    },
+    /// Log in with a device code (headless OAuth2 Device Authorization Grant).
+    #[command(long_about = r#"""Log in using a device code.
+
+For headless environments or when a browser cannot be opened. The CLI prints a
+URL and a user code; authorize the device in a browser, and the CLI polls for
+tokens. After SSO completes, run `sunbeam auth git` if you also need Git access.
+
+EXAMPLE:
+  sunbeam auth device
+  sunbeam auth device --domain staging.sunbeam.pt
+""#)]
+    Device {
         /// Domain to authenticate against.
         #[arg(long)]
         domain: Option<String>,
@@ -2420,11 +2445,21 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
 
         Some(Verb::Auth { action }) => match action {
             None => crate::auth::cmd_auth_status().await,
-            Some(AuthAction::Login { domain }) => {
+            Some(AuthAction::Login { domain, device: true }) => {
+                crate::auth::cmd_auth_device_login(domain.as_deref()).await?;
+                crate::auth::cmd_auth_git_login(domain.as_deref()).await
+            }
+            Some(AuthAction::Login { domain, device: false }) => {
                 crate::auth::cmd_auth_login_all(domain.as_deref()).await
             }
-            Some(AuthAction::Sso { domain }) => {
+            Some(AuthAction::Sso { domain, device: true }) => {
+                crate::auth::cmd_auth_device_login(domain.as_deref()).await
+            }
+            Some(AuthAction::Sso { domain, device: false }) => {
                 crate::auth::cmd_auth_sso_login(domain.as_deref()).await
+            }
+            Some(AuthAction::Device { domain }) => {
+                crate::auth::cmd_auth_device_login(domain.as_deref()).await
             }
             Some(AuthAction::Git { domain }) => {
                 crate::auth::cmd_auth_git_login(domain.as_deref()).await
