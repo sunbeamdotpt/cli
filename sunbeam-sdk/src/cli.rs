@@ -223,33 +223,24 @@ EXAMPLES:
         action: Option<UserAction>,
     },
 
-    /// Authenticate with Sunbeam (OAuth2 login via browser).
+    /// Authenticate with Sunbeam (OAuth2 device login).
     #[command(long_about = r#"""Authenticate with Sunbeam services.
 
-Sunbeam supports two independent authentication flows:
-
-  1. SSO (Hydra OIDC) — used by Planka, Kratos admin UI, Grafana, and other
-     services behind the ingress. A browser-based OAuth2 flow obtains an
-     access token and refresh token, stored in ~/.sunbeam/config.json.
-
-  2. Gitea — obtains a personal access token for Git operations against
-     the internal Gitea instance.
-
-The `login` subcommand runs both flows sequentially. You can also run them
-individually with `sso` or `git`.
+SSO (Hydra OIDC) is used by Planka, Kratos admin UI, Grafana, and other
+services behind the ingress. The CLI uses the OAuth2 Device Authorization
+Grant (RFC 8628): it prints a user code and URL, opens a browser to the URL,
+and polls for tokens once authorized. Tokens are stored in
+~/.sunbeam/auth/{domain}.json.
 
 Tokens are cached locally and refreshed automatically. Use `logout` to clear
-all cached tokens. Use `token` to print the current access token for scripts.
+cached tokens. Use `token` to print the current access token for scripts.
 
 EXAMPLES:
-  # Log in to both SSO and Gitea (opens browser)
+  # Log in (prints a device code)
   sunbeam auth login
 
   # Log in against a specific domain
   sunbeam auth login --domain sunbeam.pt
-
-  # SSO only
-  sunbeam auth sso
 
   # Show current auth status
   sunbeam auth status
@@ -1166,14 +1157,15 @@ EXAMPLE:
 /// Authentication subcommands (login, logout, token).
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
-    /// Log in to both SSO and Gitea.
-    #[command(long_about = r#"""Run both SSO and Gitea login flows sequentially.
+    /// Log in via OAuth2 Device Authorization Grant.
+    #[command(long_about = r#"""Log in to Sunbeam via Hydra OIDC.
 
-Opens a browser for Hydra OIDC (SSO) and then requests a Gitea personal
-access token. Both tokens are cached in ~/.sunbeam/config.json.
+Prints a user code and URL, opens a browser to the verification URL, and polls
+for tokens once authorized. Tokens are cached in ~/.sunbeam/auth/{domain}.json
+and refreshed automatically.
 
-Use --domain to authenticate against a specific domain. If omitted, the
-active context's domain is used.
+Use --domain to authenticate against a specific domain. If omitted, the active
+context's domain is used.
 
 EXAMPLE:
   sunbeam auth login
@@ -1183,74 +1175,23 @@ EXAMPLE:
         /// Domain to authenticate against (e.g. sunbeam.pt).
         #[arg(long)]
         domain: Option<String>,
-        /// Use the OAuth2 Device Authorization Grant (headless login).
-        #[arg(long)]
-        device: bool,
     },
-    /// Log in to SSO only (Hydra OIDC — for Planka, identity management).
-    #[command(long_about = r#"""Log in to SSO only.
-
-Useful when you only need access to SSO-protected services (Grafana, Planka,
-Kratos admin UI) and do not need Git access.
-
-Use --device for headless environments (RFC 8628 device code flow).
-
-EXAMPLE:
-  sunbeam auth sso
-  sunbeam auth sso --device
-""#)]
-    Sso {
-        /// Domain to authenticate against.
-        #[arg(long)]
-        domain: Option<String>,
-        /// Use the OAuth2 Device Authorization Grant (headless login).
-        #[arg(long)]
-        device: bool,
-    },
-    /// Log in with a device code (headless OAuth2 Device Authorization Grant).
-    #[command(long_about = r#"""Log in using a device code.
-
-For headless environments or when a browser cannot be opened. The CLI prints a
-URL and a user code; authorize the device in a browser, and the CLI polls for
-tokens. After SSO completes, run `sunbeam auth git` if you also need Git access.
-
-EXAMPLE:
-  sunbeam auth device
-  sunbeam auth device --domain staging.sunbeam.pt
-""#)]
-    Device {
-        /// Domain to authenticate against.
-        #[arg(long)]
-        domain: Option<String>,
-    },
-    /// Log in to Gitea only (personal access token).
-    #[command(long_about = r#"""Log in to Gitea only.
-
-Useful for CI pipelines or machines that only need Git access, not SSO.
-
-EXAMPLE:
-  sunbeam auth git
-""#)]
-    Git {
-        /// Domain to authenticate against.
-        #[arg(long)]
-        domain: Option<String>,
-    },
-    /// Log out (remove all cached tokens).
+    /// Log out (remove cached tokens).
     #[command(long_about = r#"""Clear all cached authentication tokens.
 
-Removes SSO access tokens, refresh tokens, and Gitea personal access tokens
-from ~/.sunbeam/config.json. Does not delete identities or server-side sessions.
+Removes the SSO access token, refresh token, and id token from
+~/.sunbeam/auth/{domain}.json. Does not delete identities or server-side
+sessions.
 
 EXAMPLE:
   sunbeam auth logout
 ""#)]
     Logout,
     /// Show current authentication status.
-    #[command(long_about = r#"""Show which services you are authenticated with.
+    #[command(long_about = r#"""Show current authentication status.
 
-Reports whether a valid SSO token and/or Gitea token is present, when it
-expires, and which domain it belongs to.
+Reports whether a valid SSO token is present, when it expires, and which
+domain it belongs to.
 
 EXAMPLE:
   sunbeam auth status
@@ -2445,24 +2386,8 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
 
         Some(Verb::Auth { action }) => match action {
             None => crate::auth::cmd_auth_status().await,
-            Some(AuthAction::Login { domain, device: true }) => {
-                crate::auth::cmd_auth_device_login(domain.as_deref()).await?;
-                crate::auth::cmd_auth_git_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Login { domain, device: false }) => {
-                crate::auth::cmd_auth_login_all(domain.as_deref()).await
-            }
-            Some(AuthAction::Sso { domain, device: true }) => {
-                crate::auth::cmd_auth_device_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Sso { domain, device: false }) => {
-                crate::auth::cmd_auth_sso_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Device { domain }) => {
-                crate::auth::cmd_auth_device_login(domain.as_deref()).await
-            }
-            Some(AuthAction::Git { domain }) => {
-                crate::auth::cmd_auth_git_login(domain.as_deref()).await
+            Some(AuthAction::Login { domain }) => {
+                crate::auth::cmd_auth_login(domain.as_deref()).await
             }
             Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
             Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
