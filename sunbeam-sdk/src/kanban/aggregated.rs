@@ -641,6 +641,10 @@ mod tests {
                         .as_ref()
                         .map(|m| m.paths == ["name"])
                         .unwrap_or(false)
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("agg_1")
             })
             .times(1)
             .returning(|_| Ok(board("agg_1", "Renamed")));

@@ -311,8 +311,14 @@ pub async fn run(
             )
         }
         ProjectAction::Get { project_id } => {
+            let req = crate::kanban::client::request_with_object_id(
+                GetProjectRequest {
+                    project_id: project_id.clone(),
+                },
+                &project_id,
+            )?;
             let resp = client
-                .get_project(tonic::Request::new(GetProjectRequest { project_id }))
+                .get_project(req)
                 .await
                 .with_ctx(|| "get project failed".to_string())?;
             render(&ProjectOut::from(resp), format)
@@ -397,10 +403,14 @@ pub async fn run(
         }
         ProjectAction::Member { action } => match action {
             MemberAction::List { project_id } => {
-                let resp = client
-                    .list_members(tonic::Request::new(ListMembersRequest {
+                let req = crate::kanban::client::request_with_object_id(
+                    ListMembersRequest {
                         project_id: project_id.clone(),
-                    }))
+                    },
+                    &project_id,
+                )?;
+                let resp = client
+                    .list_members(req)
                     .await
                     .with_ctx(|| "list members failed".to_string())?;
                 let members: Vec<MemberOut> = resp.members.into_iter().map(Into::into).collect();
@@ -534,7 +544,13 @@ mod tests {
     async fn get_project_renders() {
         let mut mock = MockProjectService::new();
         mock.expect_get_project()
-            .withf(|req| req.get_ref().project_id == "proj_1")
+            .withf(|req| {
+                req.get_ref().project_id == "proj_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("proj_1")
+            })
             .times(1)
             .returning(|_| Ok(sample_project()));
 

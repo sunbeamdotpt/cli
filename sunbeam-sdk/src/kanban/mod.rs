@@ -7,7 +7,6 @@ use clap::Subcommand;
 
 pub mod aggregated;
 pub mod attachments;
-pub mod auth;
 pub mod boards;
 pub mod card_templates;
 pub mod cards;
@@ -52,12 +51,6 @@ pub fn resolve_server_url(url_override: Option<&str>) -> Result<String> {
 #[derive(Debug, Subcommand)]
 #[command(name = "kanban")]
 pub enum KanbanCommand {
-    /// Authentication — whoami, logout.
-    Auth {
-        /// Auth subcommand to run.
-        #[command(subcommand)]
-        action: auth::AuthAction,
-    },
     /// Project management.
     Project {
         /// Project subcommand to run.
@@ -142,11 +135,6 @@ pub async fn dispatch(
     );
 
     match cmd {
-        KanbanCommand::Auth { action } => {
-            let token = require_token().await?;
-            let mut client = auth::build_client(logger, &server, &token).await?;
-            auth::run(action, format, &mut client).await
-        }
         KanbanCommand::Project { action } => {
             let token = require_token().await?;
             let mut client = projects::build_client(logger, &server, &token).await?;
@@ -415,19 +403,4 @@ mod tests {
         assert!(err.to_string().contains("invalid kanban server URL"));
     }
 
-    #[tokio::test]
-    async fn dispatch_auth_rejects_missing_token() {
-        let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let err = dispatch(
-            &logger,
-            KanbanCommand::Auth {
-                action: auth::AuthAction::WhoAmI,
-            },
-            OutputFormat::Json,
-            Some("http://localhost:8080"),
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("run `sunbeam auth login` first"));
-    }
 }

@@ -34,11 +34,14 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<client::BoardEventEnvelo
 #[async_trait]
 pub trait SubscriptionService {
     /// Subscribe to board-level events.
-    async fn subscribe_board(&mut self, req: client::SubscribeBoardRequest) -> Result<EventStream>;
+    async fn subscribe_board(
+        &mut self,
+        req: tonic::Request<client::SubscribeBoardRequest>,
+    ) -> Result<EventStream>;
     /// Subscribe to project-level events.
     async fn subscribe_project(
         &mut self,
-        req: client::SubscribeProjectRequest,
+        req: tonic::Request<client::SubscribeProjectRequest>,
     ) -> Result<EventStream>;
 }
 
@@ -64,14 +67,17 @@ impl SubscriptionServiceClientWrapper {
 
 #[async_trait]
 impl SubscriptionService for SubscriptionServiceClientWrapper {
-    async fn subscribe_board(&mut self, req: client::SubscribeBoardRequest) -> Result<EventStream> {
+    async fn subscribe_board(
+        &mut self,
+        req: tonic::Request<client::SubscribeBoardRequest>,
+    ) -> Result<EventStream> {
         let stream = self.board_client.subscribe_board(req).await?.into_inner();
         Ok(Box::pin(stream.map_err(|e| e.into())))
     }
 
     async fn subscribe_project(
         &mut self,
-        req: client::SubscribeProjectRequest,
+        req: tonic::Request<client::SubscribeProjectRequest>,
     ) -> Result<EventStream> {
         let stream = self
             .project_client
@@ -428,10 +434,10 @@ pub async fn run_with_client(
 ) -> Result<()> {
     match cmd {
         SubscribeAction::Board { board_id } => {
-            let req = client::SubscribeBoardRequest {
+            let req = tonic::Request::new(client::SubscribeBoardRequest {
                 board_id,
                 since_seq: 0,
-            };
+            });
             let mut stream = client
                 .subscribe_board(req)
                 .await
@@ -444,10 +450,13 @@ pub async fn run_with_client(
             }
         }
         SubscribeAction::Project { project_id } => {
-            let req = client::SubscribeProjectRequest {
-                project_id,
-                since_seq: 0,
-            };
+            let req = client::request_with_object_id(
+                client::SubscribeProjectRequest {
+                    project_id: project_id.clone(),
+                    since_seq: 0,
+                },
+                &project_id,
+            )?;
             let mut stream = client
                 .subscribe_project(req)
                 .await
@@ -500,7 +509,9 @@ mod tests {
     async fn subscribe_board_renders_events() {
         let mut mock = MockSubscriptionService::new();
         mock.expect_subscribe_board()
-            .withf(|req| req.board_id == "board_123" && req.since_seq == 0)
+            .withf(|req| {
+                req.get_ref().board_id == "board_123" && req.get_ref().since_seq == 0
+            })
             .times(1)
             .returning(|_| {
                 Ok(futures::stream::iter(vec![Ok(heartbeat_envelope("board_123"))]).boxed())
@@ -520,7 +531,14 @@ mod tests {
     async fn subscribe_project_renders_events() {
         let mut mock = MockSubscriptionService::new();
         mock.expect_subscribe_project()
-            .withf(|req| req.project_id == "proj_123" && req.since_seq == 0)
+            .withf(|req| {
+                req.get_ref().project_id == "proj_123"
+                    && req.get_ref().since_seq == 0
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("proj_123")
+            })
             .times(1)
             .returning(|_| Ok(futures::stream::iter(vec![Ok(heartbeat_envelope(""))]).boxed()));
 

@@ -26,6 +26,9 @@ pub enum AttachmentAction {
     },
     /// Download an attachment.
     Download {
+        /// Card ID.
+        #[arg(short, long)]
+        card: String,
         /// Attachment ID.
         attachment_id: String,
         /// Destination path.
@@ -33,6 +36,9 @@ pub enum AttachmentAction {
     },
     /// Delete an attachment.
     Delete {
+        /// Card ID.
+        #[arg(short, long)]
+        card: String,
         /// Attachment ID.
         attachment_id: String,
     },
@@ -304,12 +310,13 @@ pub async fn run(
                 attachment_id: init.attachment_id.clone(),
             };
             let confirmed = client
-                .confirm_upload(mutating_request(confirm_req, &init.attachment_id)?)
+                .confirm_upload(mutating_request(confirm_req, &card_id)?)
                 .await?;
 
             render(&attachment_out(confirmed), format)
         }
         AttachmentAction::Download {
+            card,
             attachment_id,
             path,
         } => {
@@ -317,7 +324,7 @@ pub async fn run(
                 attachment_id: attachment_id.clone(),
             };
             let dl = client
-                .request_presigned_download(client::request_with_object_id(req, &attachment_id)?)
+                .request_presigned_download(client::request_with_object_id(req, &card)?)
                 .await?;
 
             let http = reqwest::Client::new();
@@ -351,12 +358,12 @@ pub async fn run(
                 format,
             )
         }
-        AttachmentAction::Delete { attachment_id } => {
+        AttachmentAction::Delete { card, attachment_id } => {
             let req = client::DeleteAttachmentRequest {
                 attachment_id: attachment_id.clone(),
             };
             client
-                .delete_attachment(mutating_request(req, &attachment_id)?)
+                .delete_attachment(mutating_request(req, &card)?)
                 .await?;
             render(
                 &serde_json::json!({
@@ -394,7 +401,13 @@ mod tests {
     async fn list_renders_attachments() {
         let mut mock = MockAttachmentService::new();
         mock.expect_list_attachments_by_card()
-            .withf(|req| req.get_ref().card_id == "card_1")
+            .withf(|req| {
+                req.get_ref().card_id == "card_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| {
                 Ok(client::ListAttachmentsByCardResponse {
@@ -417,12 +430,19 @@ mod tests {
     async fn delete_renders_ok() {
         let mut mock = MockAttachmentService::new();
         mock.expect_delete_attachment()
-            .withf(|req| req.get_ref().attachment_id == "att_1")
+            .withf(|req| {
+                req.get_ref().attachment_id == "att_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| Ok(()));
 
         run(
             AttachmentAction::Delete {
+                card: "card_1".into(),
                 attachment_id: "att_1".into(),
             },
             OutputFormat::Json,
@@ -446,7 +466,13 @@ mod tests {
         mock.expect_request_presigned_upload()
             .withf(|req| {
                 let r = req.get_ref();
-                r.card_id == "card_1" && r.filename == "file.txt" && r.mime_type == "text/plain"
+                r.card_id == "card_1"
+                    && r.filename == "file.txt"
+                    && r.mime_type == "text/plain"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
             })
             .times(1)
             .returning(move |_| {
@@ -459,7 +485,13 @@ mod tests {
             });
 
         mock.expect_confirm_upload()
-            .withf(|req| req.get_ref().attachment_id == "att_1")
+            .withf(|req| {
+                req.get_ref().attachment_id == "att_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| Ok(sample_attachment("att_1")));
 
@@ -491,7 +523,13 @@ mod tests {
 
         let presigned_url = server.uri() + "/download";
         mock.expect_request_presigned_download()
-            .withf(|req| req.get_ref().attachment_id == "att_1")
+            .withf(|req| {
+                req.get_ref().attachment_id == "att_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(move |_| {
                 Ok(client::RequestPresignedDownloadResponse {
@@ -505,6 +543,7 @@ mod tests {
 
         run(
             AttachmentAction::Download {
+                card: "card_1".into(),
                 attachment_id: "att_1".into(),
                 path,
             },

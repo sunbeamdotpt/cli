@@ -18,7 +18,6 @@ fn main() {
     // Generate Kanban gRPC client stubs from vendored proto definitions.
     let kanban_proto_dir = manifest_dir.join("proto");
     let kanban_protos = &[
-        "sunbeam/kanban/v1/auth.proto",
         "sunbeam/kanban/v1/attachments.proto",
         "sunbeam/kanban/v1/boards.proto",
         "sunbeam/kanban/v1/cards.proto",

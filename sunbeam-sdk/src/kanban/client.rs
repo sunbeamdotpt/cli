@@ -15,7 +15,6 @@ include!(concat!(env!("OUT_DIR"), "/sunbeam.kanban.v1.rs"));
 /// Re-export the generated clients so subcommand modules can use them directly.
 pub use aggregated_board_service_client::AggregatedBoardServiceClient;
 pub use attachment_service_client::AttachmentServiceClient;
-pub use auth_service_client::AuthServiceClient;
 pub use board_service_client::BoardServiceClient;
 pub use card_service_client::CardServiceClient;
 pub use github_link_service_client::GithubLinkServiceClient;

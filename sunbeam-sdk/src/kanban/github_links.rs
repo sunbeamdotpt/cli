@@ -22,6 +22,9 @@ pub enum GitHubAction {
     },
     /// Unlink a GitHub issue/PR.
     Unlink {
+        /// Card ID.
+        #[arg(short, long)]
+        card: String,
         /// Link ID.
         link_id: String,
     },
@@ -32,6 +35,9 @@ pub enum GitHubAction {
     },
     /// Search GitHub issues.
     Search {
+        /// Card ID.
+        #[arg(short, long)]
+        card: String,
         /// Repository: owner/repo.
         repo: String,
         /// Search query.
@@ -39,6 +45,9 @@ pub enum GitHubAction {
     },
     /// Resync a link.
     Resync {
+        /// Card ID.
+        #[arg(short, long)]
+        card: String,
         /// Link ID.
         link_id: String,
     },
@@ -255,12 +264,12 @@ pub async fn run(
             let resp = client.link_issue(mutating_request(req, &card_id)?).await?;
             render(&link_detail_out(resp), format)
         }
-        GitHubAction::Unlink { link_id } => {
+        GitHubAction::Unlink { card, link_id } => {
             let req = client::UnlinkGitHubIssueRequest {
                 link_id: link_id.clone(),
             };
             client
-                .unlink_issue(mutating_request(req, &link_id)?)
+                .unlink_issue(mutating_request(req, &card)?)
                 .await?;
             render(
                 &serde_json::json!({
@@ -295,7 +304,7 @@ pub async fn run(
                 format,
             )
         }
-        GitHubAction::Search { repo, query } => {
+        GitHubAction::Search { card, repo, query } => {
             let (repo_owner, repo_name) = parse_repo(&repo)?;
             let req = client::SearchGithubIssuesRequest {
                 repo_owner,
@@ -304,7 +313,7 @@ pub async fn run(
                 limit: 20,
             };
             let resp = client
-                .search_github_issues(tonic::Request::new(req))
+                .search_github_issues(client::request_with_object_id(req, &card)?)
                 .await?;
             let results: Vec<_> = resp.results.into_iter().map(issue_result_out).collect();
             render_list(
@@ -323,11 +332,11 @@ pub async fn run(
                 format,
             )
         }
-        GitHubAction::Resync { link_id } => {
+        GitHubAction::Resync { card, link_id } => {
             let req = client::ResyncGitHubLinkRequest {
                 link_id: link_id.clone(),
             };
-            let resp = client.resync_link(mutating_request(req, &link_id)?).await?;
+            let resp = client.resync_link(mutating_request(req, &card)?).await?;
             render(&link_detail_out(resp), format)
         }
     }
@@ -362,6 +371,10 @@ mod tests {
                     && r.repo_owner == "sunbeam"
                     && r.repo_name == "cli"
                     && r.number == 42
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
             })
             .times(1)
             .returning(|_| Ok(sample_link_detail("link_1")));
@@ -382,12 +395,19 @@ mod tests {
     async fn unlink_renders_ok() {
         let mut mock = MockGithubLinkService::new();
         mock.expect_unlink_issue()
-            .withf(|req| req.get_ref().link_id == "link_1")
+            .withf(|req| {
+                req.get_ref().link_id == "link_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| Ok(()));
 
         run(
             GitHubAction::Unlink {
+                card: "card_1".into(),
                 link_id: "link_1".into(),
             },
             OutputFormat::Json,
@@ -401,7 +421,13 @@ mod tests {
     async fn list_renders_links() {
         let mut mock = MockGithubLinkService::new();
         mock.expect_list_links_by_card()
-            .withf(|req| req.get_ref().card_id == "card_1")
+            .withf(|req| {
+                req.get_ref().card_id == "card_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| {
                 Ok(client::ListGitHubLinksByCardResponse {
@@ -426,7 +452,13 @@ mod tests {
         mock.expect_search_github_issues()
             .withf(|req| {
                 let r = req.get_ref();
-                r.repo_owner == "sunbeam" && r.repo_name == "cli" && r.query == "crash"
+                r.repo_owner == "sunbeam"
+                    && r.repo_name == "cli"
+                    && r.query == "crash"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
             })
             .times(1)
             .returning(|_| {
@@ -445,6 +477,7 @@ mod tests {
 
         run(
             GitHubAction::Search {
+                card: "card_1".into(),
                 repo: "sunbeam/cli".into(),
                 query: "crash".into(),
             },
@@ -459,12 +492,19 @@ mod tests {
     async fn resync_renders_detail() {
         let mut mock = MockGithubLinkService::new();
         mock.expect_resync_link()
-            .withf(|req| req.get_ref().link_id == "link_1")
+            .withf(|req| {
+                req.get_ref().link_id == "link_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| Ok(sample_link_detail("link_1")));
 
         run(
             GitHubAction::Resync {
+                card: "card_1".into(),
                 link_id: "link_1".into(),
             },
             OutputFormat::Json,
@@ -513,6 +553,7 @@ mod tests {
 
         run(
             GitHubAction::Search {
+                card: "card_1".into(),
                 repo: "sunbeam/cli".into(),
                 query: "crash".into(),
             },

@@ -112,6 +112,9 @@ impl PriorityArg {
 pub enum DependencyAction {
     /// Add a dependency.
     Add {
+        /// Board ID.
+        #[arg(short, long)]
+        board: String,
         /// Card ID.
         card_id: String,
         /// Card this card depends on.
@@ -119,6 +122,9 @@ pub enum DependencyAction {
     },
     /// Remove a dependency.
     Remove {
+        /// Board ID.
+        #[arg(short, long)]
+        board: String,
         /// Card ID.
         card_id: String,
         /// Dependency card ID.
@@ -285,10 +291,13 @@ pub trait CardService {
     /// List cards on a board.
     async fn list_cards_by_board(
         &mut self,
-        req: client::ListCardsByBoardRequest,
+        req: tonic::Request<client::ListCardsByBoardRequest>,
     ) -> Result<client::ListCardsByBoardResponse>;
     /// Get a single card.
-    async fn get_card(&mut self, req: client::GetCardRequest) -> Result<client::Card>;
+    async fn get_card(
+        &mut self,
+        req: tonic::Request<client::GetCardRequest>,
+    ) -> Result<client::Card>;
     /// Create a new card.
     async fn create_card(
         &mut self,
@@ -335,13 +344,16 @@ impl CardServiceClientWrapper {
 impl CardService for CardServiceClientWrapper {
     async fn list_cards_by_board(
         &mut self,
-        req: client::ListCardsByBoardRequest,
+        req: tonic::Request<client::ListCardsByBoardRequest>,
     ) -> Result<client::ListCardsByBoardResponse> {
         let resp = self.inner.list_cards_by_board(req).await?;
         Ok(resp.into_inner())
     }
 
-    async fn get_card(&mut self, req: client::GetCardRequest) -> Result<client::Card> {
+    async fn get_card(
+        &mut self,
+        req: tonic::Request<client::GetCardRequest>,
+    ) -> Result<client::Card> {
         let resp = self.inner.get_card(req).await?;
         Ok(resp.into_inner())
     }
@@ -419,7 +431,7 @@ pub async fn run(
                 limit: 0,
             };
             let resp = client
-                .list_cards_by_board(req)
+                .list_cards_by_board(request_with_object_id(req, &board)?)
                 .await
                 .with_ctx(|| "list cards".to_string())?;
             let cards: Vec<_> = resp.cards.into_iter().map(CardOut::from_proto).collect();
@@ -447,7 +459,7 @@ pub async fn run(
                 card_id: card_id.clone(),
             };
             let resp = client
-                .get_card(req)
+                .get_card(request_with_object_id(req, &card_id)?)
                 .await
                 .with_ctx(|| format!("get card {card_id}"))?;
             render(&CardDetailOut::from_proto(resp), format)
@@ -541,6 +553,7 @@ pub async fn run(
         }
         CardAction::Dependency { action } => match action {
             DependencyAction::Add {
+                board,
                 card_id,
                 depends_on,
             } => {
@@ -550,12 +563,13 @@ pub async fn run(
                     idempotency_key: new_idempotency_key(),
                 };
                 let resp = client
-                    .add_card_dependency(request_with_object_id(req, &card_id)?)
+                    .add_card_dependency(request_with_object_id(req, &board)?)
                     .await
                     .with_ctx(|| format!("add dependency {depends_on} to card {card_id}"))?;
                 render(&CardDetailOut::from_proto(resp), format)
             }
             DependencyAction::Remove {
+                board,
                 card_id,
                 depends_on,
             } => {
@@ -565,7 +579,7 @@ pub async fn run(
                     idempotency_key: new_idempotency_key(),
                 };
                 let resp = client
-                    .remove_card_dependency(request_with_object_id(req, &card_id)?)
+                    .remove_card_dependency(request_with_object_id(req, &board)?)
                     .await
                     .with_ctx(|| format!("remove dependency {depends_on} from card {card_id}"))?;
                 render(&CardDetailOut::from_proto(resp), format)
@@ -619,7 +633,14 @@ mod tests {
     async fn list_cards_renders_list() {
         let mut mock = MockCardService::new();
         mock.expect_list_cards_by_board()
-            .withf(|req| req.board_id == "board_1" && req.column_id.is_empty())
+            .withf(|req| {
+                req.get_ref().board_id == "board_1"
+                    && req.get_ref().column_id.is_empty()
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("board_1")
+            })
             .times(1)
             .returning(|_| {
                 Ok(client::ListCardsByBoardResponse {
@@ -644,7 +665,13 @@ mod tests {
     async fn get_card_renders_detail() {
         let mut mock = MockCardService::new();
         mock.expect_get_card()
-            .withf(|req| req.card_id == "card_1")
+            .withf(|req| {
+                req.get_ref().card_id == "card_1"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("card_1")
+            })
             .times(1)
             .returning(|_| Ok(sample_card()));
 
@@ -771,7 +798,12 @@ mod tests {
         mock.expect_add_card_dependency()
             .withf(|req| {
                 let r = req.get_ref();
-                r.card_id == "card_1" && r.depends_on_card_id == "card_2"
+                r.card_id == "card_1"
+                    && r.depends_on_card_id == "card_2"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("board_1")
             })
             .times(1)
             .returning(|_| Ok(sample_card()));
@@ -779,6 +811,7 @@ mod tests {
         run(
             CardAction::Dependency {
                 action: DependencyAction::Add {
+                    board: "board_1".into(),
                     card_id: "card_1".into(),
                     depends_on: "card_2".into(),
                 },
@@ -796,7 +829,12 @@ mod tests {
         mock.expect_remove_card_dependency()
             .withf(|req| {
                 let r = req.get_ref();
-                r.card_id == "card_1" && r.depends_on_card_id == "card_2"
+                r.card_id == "card_1"
+                    && r.depends_on_card_id == "card_2"
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("board_1")
             })
             .times(1)
             .returning(|_| Ok(sample_card()));
@@ -804,6 +842,7 @@ mod tests {
         run(
             CardAction::Dependency {
                 action: DependencyAction::Remove {
+                    board: "board_1".into(),
                     card_id: "card_1".into(),
                     depends_on: "card_2".into(),
                 },

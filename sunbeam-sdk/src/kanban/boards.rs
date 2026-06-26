@@ -792,6 +792,10 @@ mod tests {
                         .as_ref()
                         .map(|m| m.paths == vec!["name"])
                         .unwrap_or(false)
+                    && req.metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("board_1")
             })
             .times(1)
             .returning(|_| {
