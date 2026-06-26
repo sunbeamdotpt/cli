@@ -24,7 +24,7 @@ futures = "0.3"
 async-trait = "0.1"
 
 # TLS / rustls
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
 webpki-roots = "1.0.6"
 rustls-pemfile = "2.2.0"
 

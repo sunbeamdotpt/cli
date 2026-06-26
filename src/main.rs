@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 #[tokio::main]
 async fn main() {
-    rustls::crypto::ring::default_provider()
+    rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
@@ -12,12 +12,21 @@ async fn main() {
     // calls in the codebase until the migration is fully complete.
     let base_filter = "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,kube_client::client::builder=off,warn";
     let level_override = if cli.quiet {
-        Some(format!("sunbeam=warn,{}", &base_filter["sunbeam=info,".len()..]))
+        Some(format!(
+            "sunbeam=warn,{}",
+            &base_filter["sunbeam=info,".len()..]
+        ))
     } else {
         match cli.verbose {
             0 => None,
-            1 => Some(format!("sunbeam=debug,{}", &base_filter["sunbeam=info,".len()..])),
-            _ => Some(format!("sunbeam=trace,{}", &base_filter["sunbeam=info,".len()..])),
+            1 => Some(format!(
+                "sunbeam=debug,{}",
+                &base_filter["sunbeam=info,".len()..]
+            )),
+            _ => Some(format!(
+                "sunbeam=trace,{}",
+                &base_filter["sunbeam=info,".len()..]
+            )),
         }
     };
     if let Err(e) = sunbeam_sdk::logging::init_subscriber(cli.log_mode, level_override.as_deref()) {
@@ -36,16 +45,12 @@ async fn main() {
     };
 
     let logger = match cli.log_mode {
-        sunbeam_sdk::logging::LogMode::Line => {
-            sunbeam_sdk::logger::Logger::new(
-                sunbeam_sdk::logger::LineSink::new().with_level(min_level),
-            )
-        }
-        sunbeam_sdk::logging::LogMode::Json => {
-            sunbeam_sdk::logger::Logger::new(
-                sunbeam_sdk::logger::JsonSink::new().with_level(min_level),
-            )
-        }
+        sunbeam_sdk::logging::LogMode::Line => sunbeam_sdk::logger::Logger::new(
+            sunbeam_sdk::logger::LineSink::new().with_level(min_level),
+        ),
+        sunbeam_sdk::logging::LogMode::Json => sunbeam_sdk::logger::Logger::new(
+            sunbeam_sdk::logger::JsonSink::new().with_level(min_level),
+        ),
         sunbeam_sdk::logging::LogMode::Threaded => {
             if std::io::stderr().is_terminal() {
                 sunbeam_sdk::logger::Logger::new(
@@ -63,7 +68,11 @@ async fn main() {
         eprintln!("panic: {info}");
     }));
 
-    sunbeam_sdk::debug!(logger, "sunbeam starting", log_mode = format!("{:?}", cli.log_mode));
+    sunbeam_sdk::debug!(
+        logger,
+        "sunbeam starting",
+        log_mode = format!("{:?}", cli.log_mode)
+    );
 
     match sunbeam_sdk::cli::dispatch(&logger, cli).await {
         Ok(()) => {}
