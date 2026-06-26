@@ -169,7 +169,10 @@ pub async fn cmd_update(logger: &crate::logger::Logger) -> Result<()> {
         verify_checksum(&binary_bytes, &wanted, &checksums_text)?;
         info!(logger, "SHA256 checksum verified.");
     } else {
-        info!(logger, "No checksums artifact found; skipping verification.");
+        info!(
+            logger,
+            "No checksums artifact found; skipping verification."
+        );
     }
 
     // 5. Atomic self-replace

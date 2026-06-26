@@ -63,12 +63,18 @@ pub async fn cmd_down(
     to_delete.retain(|ns| existing_names.contains(*ns));
 
     if to_delete.is_empty() {
-        info!(logger, "No Sunbeam-managed namespaces found — nothing to delete.");
+        info!(
+            logger,
+            "No Sunbeam-managed namespaces found — nothing to delete."
+        );
         return Ok(());
     }
 
     let ns_list = to_delete.join("\n  ");
-    info!(logger, &format!("The following namespaces will be deleted:\n  {ns_list}"));
+    info!(
+        logger,
+        &format!("The following namespaces will be deleted:\n  {ns_list}")
+    );
 
     if !yes {
         eprint!("\nProceed? [y/N] ");

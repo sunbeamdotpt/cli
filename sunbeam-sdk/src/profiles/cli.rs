@@ -4,9 +4,9 @@
 
 use crate::config::{self, ContainerShortcuts, Preset, Profile, ProfileRef, Rule, SunbeamConfig};
 use crate::error::{Result, SunbeamError};
+use crate::info;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::info;
 
 /// Dispatch a profile subcommand.
 pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> Result<()> {
@@ -23,13 +23,12 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
             shortcuts,
         } => {
             let rule = if let Some(path) = file {
-                let content = std::fs::read_to_string(&path)
-                    .map_err(|e| SunbeamError::Io {
-                        context: format!("read rule file: {}", path.display()),
-                        source: e,
-                    })?;
-                serde_json::from_str(&content)
-                    .map_err(|e| SunbeamError::Json(e))? } else {
+                let content = std::fs::read_to_string(&path).map_err(|e| SunbeamError::Io {
+                    context: format!("read rule file: {}", path.display()),
+                    source: e,
+                })?;
+                serde_json::from_str(&content).map_err(|e| SunbeamError::Json(e))?
+            } else {
                 build_rule_from_cli(&resource, namespace, kind, preset, &shortcuts)?
             };
             config.add_rule(&profile, rule);
@@ -40,9 +39,19 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
         ProfileAction::RmRule { profile, resource } => {
             if config.remove_rule(&profile, &resource) {
                 config::save_config(&config)?;
-                info!(logger, "Removed rule from profile", resource = resource, profile = profile);
+                info!(
+                    logger,
+                    "Removed rule from profile",
+                    resource = resource,
+                    profile = profile
+                );
             } else {
-                info!(logger, "No rule for resource in profile", resource = resource, profile = profile);
+                info!(
+                    logger,
+                    "No rule for resource in profile",
+                    resource = resource,
+                    profile = profile
+                );
             }
         }
 
@@ -53,18 +62,22 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
             values,
         } => {
             let p = if let Some(path) = file {
-                let content = std::fs::read_to_string(&path)
-                    .map_err(|e| SunbeamError::Io {
-                        context: format!("read preset file: {}", path.display()),
-                        source: e,
-                    })?;
-                serde_json::from_str(&content)
-                    .map_err(|e| SunbeamError::Json(e))? } else {
+                let content = std::fs::read_to_string(&path).map_err(|e| SunbeamError::Io {
+                    context: format!("read preset file: {}", path.display()),
+                    source: e,
+                })?;
+                serde_json::from_str(&content).map_err(|e| SunbeamError::Json(e))?
+            } else {
                 build_preset_from_cli(&values)?
             };
             config.add_preset(&profile, &preset, p);
             config::save_config(&config)?;
-            info!(logger, "Added preset to profile", preset = preset, profile = profile);
+            info!(
+                logger,
+                "Added preset to profile",
+                preset = preset,
+                profile = profile
+            );
         }
 
         ProfileAction::SetPreset {
@@ -75,15 +88,30 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
             let parsed = parse_cli_values(&values)?;
             config.set_preset(&profile, &preset, parsed);
             config::save_config(&config)?;
-            info!(logger, "Updated preset in profile", preset = preset, profile = profile);
+            info!(
+                logger,
+                "Updated preset in profile",
+                preset = preset,
+                profile = profile
+            );
         }
 
         ProfileAction::RmPreset { profile, preset } => {
             if config.remove_preset(&profile, &preset) {
                 config::save_config(&config)?;
-                info!(logger, "Removed preset from profile", preset = preset, profile = profile);
+                info!(
+                    logger,
+                    "Removed preset from profile",
+                    preset = preset,
+                    profile = profile
+                );
             } else {
-                info!(logger, "No preset in profile", preset = preset, profile = profile);
+                info!(
+                    logger,
+                    "No preset in profile",
+                    preset = preset,
+                    profile = profile
+                );
             }
         }
 
@@ -92,9 +120,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
                 config::save_config(&config)?;
                 info!(logger, "Copied profile", src = src, dst = dst);
             } else {
-                return Err(SunbeamError::Config(format!(
-                    "Profile '{src}' not found"
-                )));
+                return Err(SunbeamError::Config(format!("Profile '{src}' not found")));
             }
         }
 
@@ -115,15 +141,15 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProfileAction) -> 
                 .profiles
                 .get(&profile)
                 .ok_or_else(|| SunbeamError::Config(format!("Profile '{profile}' not found")))?;
-            let resources = crate::profiles::discover_manifests(&config::get_infra_dir().join("base"))
-                .await?;
+            let resources =
+                crate::profiles::discover_manifests(&config::get_infra_dir().join("base")).await?;
             crate::profiles::validate_profile(profile_obj, &config.presets, &resources)?;
             println!("Profile '{profile}' is valid.");
         }
 
         ProfileAction::Discover { output } => {
-            let resources = crate::profiles::discover_manifests(&config::get_infra_dir().join("base"))
-                .await?;
+            let resources =
+                crate::profiles::discover_manifests(&config::get_infra_dir().join("base")).await?;
             match output {
                 OutputFormat::Yaml => print_discover_yaml(&resources),
                 OutputFormat::Json => print_discover_json(&resources),
@@ -148,10 +174,7 @@ pub enum ProfileAction {
         shortcuts: Vec<String>,
     },
     /// Remove a rule from a profile.
-    RmRule {
-        profile: String,
-        resource: String,
-    },
+    RmRule { profile: String, resource: String },
     /// Add a preset to a profile.
     AddPreset {
         profile: String,
@@ -166,28 +189,15 @@ pub enum ProfileAction {
         values: Vec<String>,
     },
     /// Remove a preset from a profile.
-    RmPreset {
-        profile: String,
-        preset: String,
-    },
+    RmPreset { profile: String, preset: String },
     /// Copy a profile.
-    Cp {
-        src: String,
-        dst: String,
-    },
+    Cp { src: String, dst: String },
     /// Diff two profiles.
-    Diff {
-        a: String,
-        b: String,
-    },
+    Diff { a: String, b: String },
     /// Validate a profile against manifest tunables.
-    Validate {
-        profile: String,
-    },
+    Validate { profile: String },
     /// Discover all tunables across base manifests.
-    Discover {
-        output: OutputFormat,
-    },
+    Discover { output: OutputFormat },
 }
 
 /// Output format for `discover`.
@@ -224,9 +234,9 @@ fn build_rule_from_cli(
 
     for s in shortcuts {
         // Parse "key=value" or "key={json}"
-        let (key, val_str) = s.split_once('=').ok_or_else(|| {
-            SunbeamError::Config(format!("shortcut must be key=value: {s}"))
-        })?;
+        let (key, val_str) = s
+            .split_once('=')
+            .ok_or_else(|| SunbeamError::Config(format!("shortcut must be key=value: {s}")))?;
         let value = parse_value(val_str);
         rule.shortcuts.insert(key.to_string(), value);
     }
@@ -242,9 +252,9 @@ fn build_preset_from_cli(values: &[String]) -> Result<Preset> {
 fn parse_cli_values(values: &[String]) -> Result<HashMap<String, Value>> {
     let mut result = HashMap::new();
     for s in values {
-        let (key, val_str) = s.split_once('=').ok_or_else(|| {
-            SunbeamError::Config(format!("value must be key=value: {s}"))
-        })?;
+        let (key, val_str) = s
+            .split_once('=')
+            .ok_or_else(|| SunbeamError::Config(format!("value must be key=value: {s}")))?;
         result.insert(key.to_string(), parse_value(val_str));
     }
     Ok(result)
@@ -283,7 +293,11 @@ fn print_profile_diff(name_a: &str, a: &Profile, name_b: &str, b: &Profile) {
     let a_presets: HashMap<_, _> = a.presets.iter().collect();
     let b_presets: HashMap<_, _> = b.presets.iter().collect();
 
-    for key in a_presets.keys().chain(b_presets.keys()).collect::<std::collections::HashSet<_>>() {
+    for key in a_presets
+        .keys()
+        .chain(b_presets.keys())
+        .collect::<std::collections::HashSet<_>>()
+    {
         match (a_presets.get(key), b_presets.get(key)) {
             (Some(av), Some(bv)) => {
                 if av.values != bv.values {
@@ -299,7 +313,11 @@ fn print_profile_diff(name_a: &str, a: &Profile, name_b: &str, b: &Profile) {
     let a_rules: HashMap<_, _> = a.rules.iter().map(|r| (&r.resource, r)).collect();
     let b_rules: HashMap<_, _> = b.rules.iter().map(|r| (&r.resource, r)).collect();
 
-    for key in a_rules.keys().chain(b_rules.keys()).collect::<std::collections::HashSet<_>>() {
+    for key in a_rules
+        .keys()
+        .chain(b_rules.keys())
+        .collect::<std::collections::HashSet<_>>()
+    {
         match (a_rules.get(key), b_rules.get(key)) {
             (Some(ar), Some(br)) => {
                 if ar.shortcuts != br.shortcuts || ar.preset != br.preset {
@@ -355,10 +373,16 @@ fn print_discover_json(resources: &[crate::profiles::ManifestResource]) {
         obj.insert("resource".to_string(), Value::String(r.name.clone()));
         obj.insert("namespace".to_string(), Value::String(r.namespace.clone()));
         obj.insert("kind".to_string(), Value::String(r.kind.clone()));
-        obj.insert("tunables".to_string(), Value::Object(tunables.into_iter().collect()));
+        obj.insert(
+            "tunables".to_string(),
+            Value::Object(tunables.into_iter().collect()),
+        );
         out.push(Value::Object(obj.into_iter().collect()));
     }
-    println!("{}", serde_json::to_string_pretty(&Value::Array(out)).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&Value::Array(out)).unwrap()
+    );
 }
 
 #[cfg(test)]
@@ -390,11 +414,9 @@ mod tests {
 
     #[test]
     fn test_build_preset_from_cli() {
-        let preset = build_preset_from_cli(&[
-            "instances=1".to_string(),
-            "memory=512Mi".to_string(),
-        ])
-        .unwrap();
+        let preset =
+            build_preset_from_cli(&["instances=1".to_string(), "memory=512Mi".to_string()])
+                .unwrap();
         assert_eq!(preset.values["instances"], Value::Number(1.into()));
         assert_eq!(preset.values["memory"], Value::String("512Mi".into()));
     }

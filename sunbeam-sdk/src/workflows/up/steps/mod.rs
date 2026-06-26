@@ -25,7 +25,8 @@ pub use build_images::BuildProjectImages;
 pub use certificates::{EnsureTLSCert, EnsureTLSSecret, WaitForCertManagerWebhook};
 pub use finalize::PrintURLs;
 pub use infrastructure::{
-    EnsureBuildKit, EnsureCilium, EnsureSeaweedFSBuckets, WaitForCNPGWebhook, WaitForLonghornWebhook,
+    EnsureBuildKit, EnsureCilium, EnsureSeaweedFSBuckets, WaitForCNPGWebhook,
+    WaitForLonghornWebhook,
 };
 pub use lima::EnsureLimaVm;
 pub use vpn::MintVpnPreAuthKeys;

@@ -11,13 +11,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use k8s_openapi::api::core::v1::{Container, HostPathVolumeSource, Pod, PodSpec, Volume, VolumeMount};
+use k8s_openapi::api::core::v1::{
+    Container, HostPathVolumeSource, Pod, PodSpec, Volume, VolumeMount,
+};
 use kube::api::{Api, DeleteParams, ListParams, PostParams};
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::{error, info};
 use crate::workflows::data::UpData;
+use crate::{error, info};
 
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
@@ -48,17 +50,17 @@ impl StepBody for BootstrapCriticalImages {
             .unwrap_or("");
 
         if profile != "lima" {
-            info!(logger, "Profile is not 'lima' — skipping critical image bootstrap (Lima-specific).");
+            info!(
+                logger,
+                "Profile is not 'lima' — skipping critical image bootstrap (Lima-specific)."
+            );
             return Ok(ExecutionResult::next());
         }
 
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| step_err(e.to_string()))?;
 
-        let step_ctx = data
-            .ctx
-            .as_ref()
-            .ok_or_else(|| step_err("missing __ctx"))?;
+        let step_ctx = data.ctx.as_ref().ok_or_else(|| step_err("missing __ctx"))?;
 
         let domain = if data.domain.is_empty() {
             &step_ctx.domain
@@ -240,7 +242,10 @@ async fn delete_ctr_pod(pod_name: &str) {
 }
 
 /// Check if an image reference already exists in k3s containerd.
-async fn image_exists_in_k3s(logger: &crate::logger::Logger, image_ref: &str) -> wfe_core::Result<bool> {
+async fn image_exists_in_k3s(
+    logger: &crate::logger::Logger,
+    image_ref: &str,
+) -> wfe_core::Result<bool> {
     let node = get_node_name().await?;
     let pod_name = "sunbeam-ctr-check";
 
@@ -282,8 +287,10 @@ async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<P
     // Discover the workspace root (where sunbeam.workspace.yaml lives) rather
     // than assuming cwd is the workspace root. This step may be invoked from
     // anywhere (e.g. platform/cli when running `cargo run --bin sunbeam`).
-    let ws_root = crate::discovery::find_workspace_root(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
-        .map_err(|e| step_err(format!("Failed to find workspace root: {e}")))?;
+    let ws_root = crate::discovery::find_workspace_root(
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    )
+    .map_err(|e| step_err(format!("Failed to find workspace root: {e}")))?;
 
     let tar_path = std::env::temp_dir().join("sunbeam-proxy-bootstrap.tar");
 
@@ -302,7 +309,10 @@ async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<P
             "--opt",
             "filename=Dockerfile",
             "--output",
-            &format!("type=docker,name=sunbeam-proxy:bootstrap,dest={}", tar_path.display()),
+            &format!(
+                "type=docker,name=sunbeam-proxy:bootstrap,dest={}",
+                tar_path.display()
+            ),
         ])
         .current_dir(&ws_root)
         .output()
@@ -312,10 +322,18 @@ async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<P
         Ok(output) if output.status.success() => return Ok(tar_path),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            error!(logger, "buildctl failed, falling back to docker buildx: {}", err = stderr.to_string());
+            error!(
+                logger,
+                "buildctl failed, falling back to docker buildx: {}",
+                err = stderr.to_string()
+            );
         }
         Err(e) => {
-            error!(logger, "buildctl not available, falling back to docker buildx: {}", err = e.to_string());
+            error!(
+                logger,
+                "buildctl not available, falling back to docker buildx: {}",
+                err = e.to_string()
+            );
         }
     }
 
@@ -375,7 +393,10 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
         .args([
             "copy",
             &tar_path.display().to_string(),
-            &format!("{}:/tmp/sunbeam-proxy-bootstrap.tar", crate::constants::LIMA_VM_NAME),
+            &format!(
+                "{}:/tmp/sunbeam-proxy-bootstrap.tar",
+                crate::constants::LIMA_VM_NAME
+            ),
         ])
         .output()
         .await
@@ -392,7 +413,14 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
     let import_result = crate::kube::kube_exec(
         "default",
         pod_name,
-        &["/usr/local/bin/ctr", "-n", "k8s.io", "images", "import", host_tar],
+        &[
+            "/usr/local/bin/ctr",
+            "-n",
+            "k8s.io",
+            "images",
+            "import",
+            host_tar,
+        ],
         None,
     )
     .await;
@@ -404,9 +432,7 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
     if let Ok((code, stderr)) = import_result {
         if code != 0 {
             delete_ctr_pod(pod_name).await;
-            return Err(step_err(format!(
-                "ctr images import failed: {stderr}"
-            )));
+            return Err(step_err(format!("ctr images import failed: {stderr}")));
         }
     }
 
@@ -432,8 +458,7 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
         None => {
             delete_ctr_pod(pod_name).await;
             return Err(step_err(
-                "Image imported but 'sunbeam-proxy' not found in ctr images list."
-                    .to_string(),
+                "Image imported but 'sunbeam-proxy' not found in ctr images list.".to_string(),
             ));
         }
     };

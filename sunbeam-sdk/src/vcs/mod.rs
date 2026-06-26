@@ -26,9 +26,8 @@ pub async fn dispatch(_logger: &crate::logger::Logger, action: VcsAction) -> Res
                 context: "getting current directory".into(),
                 source: e,
             })?;
-            let start = Utf8PathBuf::from_path_buf(cwd).unwrap_or_else(|p| {
-                Utf8PathBuf::from(p.to_string_lossy().to_string())
-            });
+            let start = Utf8PathBuf::from_path_buf(cwd)
+                .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().to_string()));
             let ctx = repo_rs_engine::Context::load(&start, Arc::new(repo_rs_git::DefaultBackend))
                 .map_err(|e| SunbeamError::Other(format!("repo context load error: {e}").into()))?;
 
@@ -68,18 +67,21 @@ pub async fn dispatch(_logger: &crate::logger::Logger, action: VcsAction) -> Res
             if code == std::process::ExitCode::SUCCESS {
                 Ok(())
             } else {
-                Err(SunbeamError::Other(format!("repo command exited with non-zero status").into()))
+                Err(SunbeamError::Other(
+                    format!("repo command exited with non-zero status").into(),
+                ))
             }
         }
-        Err(e) => Err(SunbeamError::Other(format!("repo command error: {e}").into())),
+        Err(e) => Err(SunbeamError::Other(
+            format!("repo command error: {e}").into(),
+        )),
     }
 }
 
 fn make_minimal_context() -> repo_rs_engine::Context {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let repo_root = Utf8PathBuf::from_path_buf(cwd).unwrap_or_else(|p| {
-        Utf8PathBuf::from(p.to_string_lossy().to_string())
-    });
+    let repo_root = Utf8PathBuf::from_path_buf(cwd)
+        .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().to_string()));
     repo_rs_engine::Context {
         repo_root,
         client: repo_rs_model::RepoClient {

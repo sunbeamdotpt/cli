@@ -549,7 +549,13 @@ pub async fn cmd_restart(logger: &crate::logger::Logger, target: Option<&str>) -
 
     for (ns, dep) in &pairs {
         if let Err(e) = kube_rollout_restart(ns, dep).await {
-            info!(logger, "Failed to restart deployment", ns = ns, dep = dep, error = e);
+            info!(
+                logger,
+                "Failed to restart deployment",
+                ns = ns,
+                dep = dep,
+                error = e
+            );
         }
     }
     info!(logger, "Done.");

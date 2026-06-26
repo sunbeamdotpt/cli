@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::{span, Event, Subscriber};
+use tracing::{Event, Subscriber, span};
 use tracing_subscriber::layer::{Context, Layer};
 
 use super::span_state::SpanBar;
@@ -125,11 +125,12 @@ where
         let secs = elapsed.as_secs_f64();
 
         // Success style: green checkmark.
-        let style = indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}")
-            .unwrap();
+        let style = indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}").unwrap();
         span_bar.pb.set_style(style);
         span_bar.pb.set_prefix("✓");
-        span_bar.pb.finish_with_message(format!("{name}  {secs:.1}s"));
+        span_bar
+            .pb
+            .finish_with_message(format!("{name}  {secs:.1}s"));
     }
 }
 

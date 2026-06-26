@@ -23,7 +23,10 @@ pub async fn register(host: &wfe::WorkflowHost) {
 }
 
 /// Print a summary of the completed verify workflow.
-pub fn print_summary(logger: &crate::logger::Logger, instance: &wfe_core::models::WorkflowInstance) {
+pub fn print_summary(
+    logger: &crate::logger::Logger,
+    instance: &wfe_core::models::WorkflowInstance,
+) {
     info!(logger, "Verify workflow summary:");
     for ep in &instance.execution_pointers {
         let fallback = format!("step-{}", ep.step_id);

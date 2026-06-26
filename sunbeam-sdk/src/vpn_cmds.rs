@@ -531,9 +531,8 @@ async fn resolve_headscale_user_id(
             let id = u
                 .get("id")
                 .and_then(|id| {
-                    id.as_u64().or_else(|| {
-                        id.as_str().and_then(|s| s.parse::<u64>().ok())
-                    })
+                    id.as_u64()
+                        .or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok()))
                 })
                 .ok_or_else(|| {
                     SunbeamError::Other(format!("user '{user}' found but id is not a uint64"))
@@ -742,14 +741,9 @@ mod create_key_tests {
             .await;
 
         let client = make_client();
-        let id = resolve_headscale_user_id(
-            &client,
-            &server.uri(),
-            "test-api-key",
-            "sunbeam",
-        )
-        .await
-        .unwrap();
+        let id = resolve_headscale_user_id(&client, &server.uri(), "test-api-key", "sunbeam")
+            .await
+            .unwrap();
 
         assert_eq!(id, 42, "should resolve 'sunbeam' → numeric id 42");
     }

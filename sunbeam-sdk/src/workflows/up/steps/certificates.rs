@@ -121,11 +121,10 @@ fn configure_docker_insecure_registries(domain: &str) {
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
         .join(".docker/daemon.json");
 
-    let mut cfg: serde_json::Map<String, serde_json::Value> =
-        std::fs::read_to_string(&daemon_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+    let mut cfg: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&daemon_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
 
     let registries = vec![format!("src.{domain}"), format!("oci.{domain}")];
     let mut updated = false;
@@ -133,11 +132,17 @@ fn configure_docker_insecure_registries(domain: &str) {
     let existing: Vec<String> = cfg
         .get("insecure-registries")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
-    let mut new_list: Vec<serde_json::Value> =
-        existing.iter().map(|s| serde_json::Value::String(s.clone())).collect();
+    let mut new_list: Vec<serde_json::Value> = existing
+        .iter()
+        .map(|s| serde_json::Value::String(s.clone()))
+        .collect();
 
     for reg in &registries {
         if !existing.iter().any(|e| e == reg) {

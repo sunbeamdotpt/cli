@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use clap::Args;
 use wfe_server_protos::wfe::v1::StartWorkflowRequest;
 
-use crate::info;
 use super::client::AuthClient;
 use super::output::OutputFormat;
 use super::struct_util::json_object_to_struct;
+use crate::info;
 
 #[derive(Debug, Args)]
 /// Runargs.
@@ -34,7 +34,12 @@ pub struct RunArgs {
 
 /// Run.
 #[tracing::instrument(skip(logger))]
-pub async fn run(logger: &crate::logger::Logger, args: RunArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+pub async fn run(
+    logger: &crate::logger::Logger,
+    args: RunArgs,
+    mut client: AuthClient,
+    format: OutputFormat,
+) -> Result<()> {
     info!(logger, "wfectl run workflow", def_id = args.definition_id);
     let data_json = match (args.data_json.as_ref(), args.data.as_ref()) {
         (Some(json), _) => json.clone(),

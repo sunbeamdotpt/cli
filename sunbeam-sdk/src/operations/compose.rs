@@ -57,9 +57,7 @@ fn compose_file_path(workspace_root: &Path) -> PathBuf {
 }
 
 fn project_name<'a>(ws: &'a WorkspaceConfig, opts: &'a ComposeOptions) -> &'a str {
-    opts.project_name
-        .as_deref()
-        .unwrap_or(&ws.workspace.name)
+    opts.project_name.as_deref().unwrap_or(&ws.workspace.name)
 }
 
 /// Build the base `docker compose -f <path> -p <project>` argument prefix.
@@ -99,20 +97,14 @@ pub fn render(ws: &WorkspaceConfig) -> Result<String> {
     } else {
         serde_yaml::to_value(&ws.services)?
     };
-    doc.insert(
-        serde_yaml::Value::String("services".into()),
-        services_val,
-    );
+    doc.insert(serde_yaml::Value::String("services".into()), services_val);
 
     let volumes_val = if ws.volumes.is_empty() {
         serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
     } else {
         serde_yaml::to_value(&ws.volumes)?
     };
-    doc.insert(
-        serde_yaml::Value::String("volumes".into()),
-        volumes_val,
-    );
+    doc.insert(serde_yaml::Value::String("volumes".into()), volumes_val);
 
     Ok(serde_yaml::to_string(&serde_yaml::Value::Mapping(doc))?)
 }
@@ -123,12 +115,10 @@ pub fn render(ws: &WorkspaceConfig) -> Result<String> {
 pub fn materialize(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<PathBuf> {
     let path = compose_file_path(workspace_root);
     let parent = path.parent().expect("path always has a parent");
-    std::fs::create_dir_all(parent).with_ctx(|| {
-        format!("creating compose directory {}", parent.display())
-    })?;
+    std::fs::create_dir_all(parent)
+        .with_ctx(|| format!("creating compose directory {}", parent.display()))?;
     let content = render(ws)?;
-    std::fs::write(&path, &content)
-        .with_ctx(|| format!("writing {}", path.display()))?;
+    std::fs::write(&path, &content).with_ctx(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
 
@@ -328,7 +318,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::operations::config::{WorkspaceMeta, WorkspaceConfig};
+    use crate::operations::config::{WorkspaceConfig, WorkspaceMeta};
 
     fn minimal_ws() -> WorkspaceConfig {
         WorkspaceConfig {
@@ -431,10 +421,7 @@ volumes:
         assert_eq!(statuses[0].name, "sunbeam_postgres_1");
         assert_eq!(statuses[0].state, "running");
         assert_eq!(statuses[0].health.as_deref(), Some("healthy"));
-        assert_eq!(
-            statuses[0].ports.as_deref(),
-            Some("0.0.0.0:5432->5432/tcp")
-        );
+        assert_eq!(statuses[0].ports.as_deref(), Some("0.0.0.0:5432->5432/tcp"));
 
         assert_eq!(statuses[1].name, "sunbeam_valkey_1");
         assert_eq!(statuses[1].state, "running");

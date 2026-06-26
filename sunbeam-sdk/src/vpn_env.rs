@@ -295,12 +295,7 @@ mod tests {
     #[test]
     fn kubeconfig_writer_uses_fixed_socks_port() {
         let token = "cafebabe";
-        let port: u16 = VPN_SOCKS_PROXY
-            .rsplit(':')
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
+        let port: u16 = VPN_SOCKS_PROXY.rsplit(':').next().unwrap().parse().unwrap();
         let url = proxy_url_for(port, token);
         assert!(
             url.contains(":24424"),

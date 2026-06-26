@@ -16,7 +16,6 @@ use tokio::net::TcpListener;
 use crate::kube as k;
 use crate::openbao::BaoClient;
 
-
 // ── Constants ───────────────────────────────────────────────────────────────
 
 pub(crate) const ADMIN_USERNAME: &str = "estudio-admin";

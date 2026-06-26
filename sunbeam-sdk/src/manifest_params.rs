@@ -459,7 +459,11 @@ pub fn apply_overrides(manifests: &str, overrides: &Overrides) -> Result<String>
             if disabled[i] {
                 continue;
             }
-            let kind = doc.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let kind = doc
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let ns = doc
                 .get("metadata")
                 .and_then(|v| v.get("namespace"))
@@ -612,9 +616,16 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
         // Navigate deeper — create missing intermediates
         current = match current {
             Value::Object(map) => {
-                let next_is_index = parts.get(i + 1).map_or(false, |p| p.parse::<usize>().is_ok());
-                map.entry(part.to_string())
-                    .or_insert_with(|| if next_is_index { Value::Array(vec![]) } else { Value::Object(serde_json::Map::new()) })
+                let next_is_index = parts
+                    .get(i + 1)
+                    .map_or(false, |p| p.parse::<usize>().is_ok());
+                map.entry(part.to_string()).or_insert_with(|| {
+                    if next_is_index {
+                        Value::Array(vec![])
+                    } else {
+                        Value::Object(serde_json::Map::new())
+                    }
+                })
             }
             Value::Array(arr) => {
                 let idx = part.parse::<usize>().map_err(|_| {
@@ -622,8 +633,14 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
                 })?;
                 // Extend array if needed
                 while arr.len() <= idx {
-                    let next_is_index = parts.get(i + 1).map_or(false, |p| p.parse::<usize>().is_ok());
-                    arr.push(if next_is_index { Value::Array(vec![]) } else { Value::Object(serde_json::Map::new()) });
+                    let next_is_index = parts
+                        .get(i + 1)
+                        .map_or(false, |p| p.parse::<usize>().is_ok());
+                    arr.push(if next_is_index {
+                        Value::Array(vec![])
+                    } else {
+                        Value::Object(serde_json::Map::new())
+                    });
                 }
                 &mut arr[idx]
             }
@@ -837,12 +854,30 @@ spec:
         };
         let result = apply_overrides(manifest, &overrides).unwrap();
         // Verify env var names are preserved and values are correct
-        assert!(result.contains("name: discovery.type"), "missing discovery.type name");
-        assert!(result.contains("value: single-node"), "missing single-node value");
-        assert!(result.contains("name: OPENSEARCH_JAVA_OPTS"), "missing OPENSEARCH_JAVA_OPTS name");
-        assert!(result.contains("value: -Xms256m -Xmx512m"), "missing OPENSEARCH_JAVA_OPTS value");
-        assert!(result.contains("name: DISABLE_SECURITY_PLUGIN"), "missing DISABLE_SECURITY_PLUGIN name");
-        assert!(result.contains("value: 'true'"), "missing DISABLE_SECURITY_PLUGIN value");
+        assert!(
+            result.contains("name: discovery.type"),
+            "missing discovery.type name"
+        );
+        assert!(
+            result.contains("value: single-node"),
+            "missing single-node value"
+        );
+        assert!(
+            result.contains("name: OPENSEARCH_JAVA_OPTS"),
+            "missing OPENSEARCH_JAVA_OPTS name"
+        );
+        assert!(
+            result.contains("value: -Xms256m -Xmx512m"),
+            "missing OPENSEARCH_JAVA_OPTS value"
+        );
+        assert!(
+            result.contains("name: DISABLE_SECURITY_PLUGIN"),
+            "missing DISABLE_SECURITY_PLUGIN name"
+        );
+        assert!(
+            result.contains("value: 'true'"),
+            "missing DISABLE_SECURITY_PLUGIN value"
+        );
     }
 
     #[test]
@@ -871,7 +906,10 @@ spec:
         };
         let result = apply_overrides(manifest, &overrides).unwrap();
         // 90 must be quoted (string), not a bare number
-        assert!(result.contains("value: '90'"), "env value should be string, got: {result}");
+        assert!(
+            result.contains("value: '90'"),
+            "env value should be string, got: {result}"
+        );
     }
 
     #[test]
@@ -907,9 +945,15 @@ spec:
         };
         let result = apply_overrides(manifest, &overrides).unwrap();
         // max_connections must be quoted because "50" looks like a number
-        assert!(result.contains("max_connections: '50'"), "max_connections should be quoted string, got: {result}");
+        assert!(
+            result.contains("max_connections: '50'"),
+            "max_connections should be quoted string, got: {result}"
+        );
         // shared_buffers is already unambiguously a string (contains letters)
-        assert!(result.contains("shared_buffers: 64MB"), "shared_buffers should be present, got: {result}");
+        assert!(
+            result.contains("shared_buffers: 64MB"),
+            "shared_buffers should be present, got: {result}"
+        );
     }
 
     #[test]
@@ -932,15 +976,16 @@ spec:
     size: 10Gi
 "#;
         let overrides = Overrides {
-            items: vec![
-                Override::Set {
-                    resource: "cluster/data/postgres".into(),
-                    field_path: "spec/postgresql/parameters/max_connections".into(),
-                    value: "50".into(),
-                },
-            ],
+            items: vec![Override::Set {
+                resource: "cluster/data/postgres".into(),
+                field_path: "spec/postgresql/parameters/max_connections".into(),
+                value: "50".into(),
+            }],
         };
         let result = apply_overrides(manifest, &overrides).unwrap();
-        assert!(result.contains("max_connections: '50'"), "max_connections should be quoted string, got: {result}");
+        assert!(
+            result.contains("max_connections: '50'"),
+            "max_connections should be quoted string, got: {result}"
+        );
     }
 }

@@ -14,5 +14,5 @@ pub mod config;
 /// Stack.
 pub mod stack;
 pub use config::{
-    Repo, RepoBucket, RepoEntry, Repos, Stack, WorkspaceConfig, WorkspaceMeta, SCHEMA_VERSION,
+    Repo, RepoBucket, RepoEntry, Repos, SCHEMA_VERSION, Stack, WorkspaceConfig, WorkspaceMeta,
 };

@@ -50,7 +50,8 @@ impl StepBody for BuildProjectImages {
         // Prefer the workflow data domain (updated dynamically by EnsureCilium
         // from the live cluster/Lima IP) over the static step_ctx.domain which
         // is a snapshot from config at workflow start time.
-        let domain = ctx.workflow
+        let domain = ctx
+            .workflow
             .data
             .get("domain")
             .and_then(|v| v.as_str())
@@ -99,7 +100,10 @@ impl StepBody for BuildProjectImages {
         }
 
         if entries.is_empty() {
-            info!(logger, "No projects with package targets — skipping image build.");
+            info!(
+                logger,
+                "No projects with package targets — skipping image build."
+            );
             return Ok(ExecutionResult::next());
         }
 
@@ -140,19 +144,28 @@ impl StepBody for BuildProjectImages {
                 let project_name = project_name.clone();
 
                 info!(logger, "Building project", project = project_name);
-                match crate::project::runner::run(&logger, &cfg, &project_root, "package", &opts).await {
+                match crate::project::runner::run(&logger, &cfg, &project_root, "package", &opts)
+                    .await
+                {
                     Ok(RunOutcome::Ran) => info!(logger, "Built project", project = project_name),
                     Ok(RunOutcome::Skipped) => {
-                        info!(logger, "skipped (no package target)", project = project_name);
+                        info!(
+                            logger,
+                            "skipped (no package target)",
+                            project = project_name
+                        );
                     }
                     Err(e) => {
-                        error!(logger, "Image build failed", project = project_name, error = e.to_string());
+                        error!(
+                            logger,
+                            "Image build failed",
+                            project = project_name,
+                            error = e.to_string()
+                        );
                         // With strict failures enabled, we propagate the error so
                         // the workflow terminates. Remove this return if you prefer
                         // best-effort builds.
-                        return Err(step_err(format!(
-                            "Failed to build {project_name}: {e}"
-                        )));
+                        return Err(step_err(format!("Failed to build {project_name}: {e}")));
                     }
                 }
             }

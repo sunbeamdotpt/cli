@@ -3,8 +3,8 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::{error, info};
 use crate::workflows::data::UpData;
+use crate::{error, info};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,8 +14,7 @@ fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
 }
 
 /// Embedded Lima VM definition for the sunbeam stack.
-static LIMA_SUNBEAM_YAML: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/lima-sunbeam.yaml"));
+static LIMA_SUNBEAM_YAML: &str = include_str!(concat!(env!("OUT_DIR"), "/lima-sunbeam.yaml"));
 
 // ── EnsureLimaVm ────────────────────────────────────────────────────────────
 
@@ -49,10 +48,7 @@ impl StepBody for EnsureLimaVm {
             .map_err(|e| step_err(format!("UpData parse: {e}")))?;
 
         let domain = if data.domain.is_empty() {
-            data.ctx
-                .as_ref()
-                .map(|c| c.domain.as_str())
-                .unwrap_or("")
+            data.ctx.as_ref().map(|c| c.domain.as_str()).unwrap_or("")
         } else {
             &data.domain
         };
@@ -65,11 +61,18 @@ impl StepBody for EnsureLimaVm {
             .unwrap_or("");
 
         if profile != "lima" {
-            info!(logger, "Profile is not 'lima' — skipping Lima VM management.");
+            info!(
+                logger,
+                "Profile is not 'lima' — skipping Lima VM management."
+            );
             return Ok(ExecutionResult::next());
         }
 
-        info!(logger, "Ensuring Lima VM '{}'...", vm = crate::constants::LIMA_VM_NAME);
+        info!(
+            logger,
+            "Ensuring Lima VM '{}'...",
+            vm = crate::constants::LIMA_VM_NAME
+        );
 
         // Verify limactl is available
         let limactl_check = tokio::process::Command::new("limactl")
@@ -86,14 +89,27 @@ impl StepBody for EnsureLimaVm {
 
         match status.as_deref() {
             None | Some("") | Some("None") => {
-                info!(logger, "Creating Lima VM '{}'...", vm = crate::constants::LIMA_VM_NAME);
+                info!(
+                    logger,
+                    "Creating Lima VM '{}'...",
+                    vm = crate::constants::LIMA_VM_NAME
+                );
                 create_lima_vm().await.map_err(step_err)?;
             }
             Some("Running") => {
-                info!(logger, "Lima VM '{}' is already running.", vm = crate::constants::LIMA_VM_NAME);
+                info!(
+                    logger,
+                    "Lima VM '{}' is already running.",
+                    vm = crate::constants::LIMA_VM_NAME
+                );
             }
             Some(st) => {
-                info!(logger, "Lima VM '{}' is stopped — starting... (status: {})", vm = crate::constants::LIMA_VM_NAME, status = st);
+                info!(
+                    logger,
+                    "Lima VM '{}' is stopped — starting... (status: {})",
+                    vm = crate::constants::LIMA_VM_NAME,
+                    status = st
+                );
                 start_lima_vm().await.map_err(step_err)?;
             }
         }
@@ -104,11 +120,20 @@ impl StepBody for EnsureLimaVm {
         loop {
             attempt += 1;
             if std::time::Instant::now() > vm_deadline {
-                return Err(step_err(format!("Timed out waiting for Lima VM '{}' to reach Running status (5 min). Try: limactl list {}", crate::constants::LIMA_VM_NAME, crate::constants::LIMA_VM_NAME)));
+                return Err(step_err(format!(
+                    "Timed out waiting for Lima VM '{}' to reach Running status (5 min). Try: limactl list {}",
+                    crate::constants::LIMA_VM_NAME,
+                    crate::constants::LIMA_VM_NAME
+                )));
             }
             match lima_vm_status().await.as_deref() {
                 Some("Running") => {
-                    info!(logger, "Lima VM '{}' is running. (attempt: {})", vm = crate::constants::LIMA_VM_NAME, attempt = attempt);
+                    info!(
+                        logger,
+                        "Lima VM '{}' is running. (attempt: {})",
+                        vm = crate::constants::LIMA_VM_NAME,
+                        attempt = attempt
+                    );
                     break;
                 }
                 Some(st) => {
@@ -140,7 +165,10 @@ impl StepBody for EnsureLimaVm {
         // Paths for kubeconfig merging (used below).
         let lima_kc = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(format!(".lima/{}/copied-from-guest/kubeconfig.yaml", crate::constants::LIMA_VM_NAME));
+            .join(format!(
+                ".lima/{}/copied-from-guest/kubeconfig.yaml",
+                crate::constants::LIMA_VM_NAME
+            ));
         let host_kc = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join(".kube/config");
@@ -167,11 +195,7 @@ impl StepBody for EnsureLimaVm {
                 match load_kubeconfig_and_probe(&lima_kc).await {
                     Ok(true) => {
                         k3s_ready = true;
-                        info!(
-                            logger,
-                            "k3s API is reachable.",
-                            attempt = k3s_attempt,
-                        );
+                        info!(logger, "k3s API is reachable.", attempt = k3s_attempt,);
                         break;
                     }
                     Ok(false) => {
@@ -253,7 +277,12 @@ impl StepBody for EnsureLimaVm {
 /// Query the status of the Lima VM.
 async fn lima_vm_status() -> Option<String> {
     let output = tokio::process::Command::new("limactl")
-        .args(["list", crate::constants::LIMA_VM_NAME, "--format", "{{.Status}}"])
+        .args([
+            "list",
+            crate::constants::LIMA_VM_NAME,
+            "--format",
+            "{{.Status}}",
+        ])
         .output()
         .await
         .ok()?;
@@ -272,7 +301,12 @@ async fn create_lima_vm() -> Result<(), String> {
         .map_err(|e| format!("Failed to write temp lima yaml: {e}"))?;
 
     let status = tokio::process::Command::new("limactl")
-        .args(["create", "--name", crate::constants::LIMA_VM_NAME, "--tty=false"])
+        .args([
+            "create",
+            "--name",
+            crate::constants::LIMA_VM_NAME,
+            "--tty=false",
+        ])
         .arg(&tmp)
         .status()
         .await
@@ -304,8 +338,8 @@ async fn start_lima_vm() -> Result<(), String> {
 /// Load a kubeconfig file and attempt to list nodes to verify the cluster
 /// API is reachable.
 async fn load_kubeconfig_and_probe(path: &std::path::Path) -> Result<bool, String> {
-    use kube::config::{Config, KubeConfigOptions, Kubeconfig};
     use kube::Client;
+    use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 
     let kc = Kubeconfig::read_from(path)
         .map_err(|e| format!("Failed to read kubeconfig from {}: {e}", path.display()))?;
@@ -315,8 +349,7 @@ async fn load_kubeconfig_and_probe(path: &std::path::Path) -> Result<bool, Strin
         .await
         .map_err(|e| format!("Failed to build config: {e}"))?;
 
-    let client = Client::try_from(config)
-        .map_err(|e| format!("Failed to create client: {e}"))?;
+    let client = Client::try_from(config).map_err(|e| format!("Failed to create client: {e}"))?;
 
     let nodes: kube::Api<k8s_openapi::api::core::v1::Node> = kube::Api::all(client);
     match nodes.list(&kube::api::ListParams::default()).await {

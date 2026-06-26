@@ -3,7 +3,7 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::down::{INFRA_NAMESPACES, APP_NAMESPACES};
+use crate::down::{APP_NAMESPACES, INFRA_NAMESPACES};
 
 use crate::workflows::data::DownData;
 
@@ -59,10 +59,7 @@ impl StepBody for DiscoverNamespaces {
             return Ok(ExecutionResult::next());
         }
 
-        tracing::info!(
-            "Namespaces to delete:\n  {}",
-            to_delete.join("\n  ")
-        );
+        tracing::info!("Namespaces to delete:\n  {}", to_delete.join("\n  "));
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({
@@ -188,10 +185,7 @@ impl StepBody for WaitForTermination {
             return Ok(ExecutionResult::next());
         }
 
-        tracing::error!(
-            "Namespaces still terminating: {}",
-            remaining.join(", ")
-        );
+        tracing::error!("Namespaces still terminating: {}", remaining.join(", "));
 
         let mut result = ExecutionResult::next();
         result.output_data = Some(serde_json::json!({

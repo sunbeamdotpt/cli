@@ -3,11 +3,9 @@
 //! These run in a parallel branch alongside the main pipeline so the
 //! 10+ minute ML model download doesn't block everything else.
 
+use crate::info;
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
-use crate::info;
-
-
 
 /// Register and deploy the OpenSearch ML model (all-mpnet-base-v2).
 ///

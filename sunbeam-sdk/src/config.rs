@@ -343,11 +343,7 @@ pub fn load_config() -> SunbeamConfig {
             }
             if std::fs::copy(&legacy, &path).is_ok() {
                 let _ = std::fs::remove_file(&legacy);
-                tracing::info!(
-                    "Migrated config: {} → {}",
-                    legacy.display(),
-                    path.display()
-                );
+                tracing::info!("Migrated config: {} → {}", legacy.display(), path.display());
             }
         }
     }
@@ -357,17 +353,11 @@ pub fn load_config() -> SunbeamConfig {
     }
     let mut config: SunbeamConfig = match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-            tracing::error!(
-                "Failed to parse config from {}: {e}",
-                path.display()
-            );
+            tracing::error!("Failed to parse config from {}: {e}", path.display());
             SunbeamConfig::default()
         }),
         Err(e) => {
-            tracing::error!(
-                "Failed to read config from {}: {e}",
-                path.display()
-            );
+            tracing::error!("Failed to read config from {}: {e}", path.display());
             SunbeamConfig::default()
         }
     };
@@ -567,7 +557,12 @@ impl SunbeamConfig {
     }
 
     /// Merge values into an existing preset in a named profile.
-    pub fn set_preset(&mut self, profile_name: &str, preset_name: &str, values: HashMap<String, serde_json::Value>) {
+    pub fn set_preset(
+        &mut self,
+        profile_name: &str,
+        preset_name: &str,
+        values: HashMap<String, serde_json::Value>,
+    ) {
         let profile = self.profiles.entry(profile_name.to_string()).or_default();
         let preset = profile.presets.entry(preset_name.to_string()).or_default();
         preset.values.extend(values);
@@ -893,7 +888,11 @@ mod tests {
     #[test]
     fn test_resolve_profile_missing_name() {
         let config = SunbeamConfig::default();
-        assert!(config.resolve_profile(&ProfileRef::Name("nope".to_string())).is_none());
+        assert!(
+            config
+                .resolve_profile(&ProfileRef::Name("nope".to_string()))
+                .is_none()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -903,16 +902,19 @@ mod tests {
     #[test]
     fn test_add_rule_creates_profile() {
         let mut config = SunbeamConfig::default();
-        config.add_rule("lima", Rule {
-            resource: "pingora".to_string(),
-            namespace: Some("ingress".to_string()),
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "pingora".to_string(),
+                namespace: Some("ingress".to_string()),
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
         assert!(config.profiles.contains_key("lima"));
         assert_eq!(config.profiles["lima"].rules.len(), 1);
     }
@@ -920,43 +922,55 @@ mod tests {
     #[test]
     fn test_add_rule_replaces_existing() {
         let mut config = SunbeamConfig::default();
-        config.add_rule("lima", Rule {
-            resource: "pingora".to_string(),
-            namespace: None,
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
-        config.add_rule("lima", Rule {
-            resource: "pingora".to_string(),
-            namespace: Some("ingress".to_string()),
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "pingora".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "pingora".to_string(),
+                namespace: Some("ingress".to_string()),
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
         assert_eq!(config.profiles["lima"].rules.len(), 1);
-        assert_eq!(config.profiles["lima"].rules[0].namespace, Some("ingress".to_string()));
+        assert_eq!(
+            config.profiles["lima"].rules[0].namespace,
+            Some("ingress".to_string())
+        );
     }
 
     #[test]
     fn test_remove_rule() {
         let mut config = SunbeamConfig::default();
-        config.add_rule("lima", Rule {
-            resource: "pingora".to_string(),
-            namespace: None,
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "pingora".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
         assert!(config.remove_rule("lima", "pingora"));
         assert!(config.profiles["lima"].rules.is_empty());
         assert!(!config.remove_rule("lima", "pingora"));
@@ -972,24 +986,37 @@ mod tests {
     fn test_add_preset() {
         let mut config = SunbeamConfig::default();
         let mut preset = Preset::default();
-        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        preset
+            .values
+            .insert("instances".to_string(), serde_json::json!(1));
         config.add_preset("lima", "tiny", preset);
-        assert_eq!(config.profiles["lima"].presets["tiny"].values["instances"], 1);
+        assert_eq!(
+            config.profiles["lima"].presets["tiny"].values["instances"],
+            1
+        );
     }
 
     #[test]
     fn test_set_preset_merges() {
         let mut config = SunbeamConfig::default();
         let mut preset = Preset::default();
-        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        preset
+            .values
+            .insert("instances".to_string(), serde_json::json!(1));
         config.add_preset("lima", "tiny", preset);
 
         let mut updates = HashMap::new();
         updates.insert("memory".to_string(), serde_json::json!("512Mi"));
         config.set_preset("lima", "tiny", updates);
 
-        assert_eq!(config.profiles["lima"].presets["tiny"].values["instances"], 1);
-        assert_eq!(config.profiles["lima"].presets["tiny"].values["memory"], "512Mi");
+        assert_eq!(
+            config.profiles["lima"].presets["tiny"].values["instances"],
+            1
+        );
+        assert_eq!(
+            config.profiles["lima"].presets["tiny"].values["memory"],
+            "512Mi"
+        );
     }
 
     #[test]
@@ -1003,30 +1030,36 @@ mod tests {
     #[test]
     fn test_copy_profile() {
         let mut config = SunbeamConfig::default();
-        config.add_rule("lima", Rule {
-            resource: "pingora".to_string(),
-            namespace: None,
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "pingora".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
         assert!(config.copy_profile("lima", "lima-big"));
         assert!(config.profiles.contains_key("lima-big"));
         assert_eq!(config.profiles["lima-big"].rules.len(), 1);
         // Mutate copy without affecting original
-        config.add_rule("lima-big", Rule {
-            resource: "searxng".to_string(),
-            namespace: None,
-            kind: None,
-            preset: None,
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima-big",
+            Rule {
+                resource: "searxng".to_string(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
         assert_eq!(config.profiles["lima"].rules.len(), 1);
         assert_eq!(config.profiles["lima-big"].rules.len(), 2);
     }
@@ -1041,7 +1074,9 @@ mod tests {
     fn test_global_preset() {
         let mut config = SunbeamConfig::default();
         let mut preset = Preset::default();
-        preset.values.insert("scale".to_string(), serde_json::json!(0));
+        preset
+            .values
+            .insert("scale".to_string(), serde_json::json!(0));
         config.add_global_preset("off", preset);
         assert!(config.presets.contains_key("off"));
         assert!(config.remove_global_preset("off"));
@@ -1052,23 +1087,31 @@ mod tests {
     fn test_profile_crud_roundtrip() {
         let mut config = SunbeamConfig::default();
         let mut preset = Preset::default();
-        preset.values.insert("instances".to_string(), serde_json::json!(1));
+        preset
+            .values
+            .insert("instances".to_string(), serde_json::json!(1));
         config.add_preset("lima", "tiny", preset);
-        config.add_rule("lima", Rule {
-            resource: "postgres".to_string(),
-            namespace: None,
-            kind: None,
-            preset: Some("tiny".to_string()),
-            shortcuts: HashMap::new(),
-            containers: HashMap::new(),
-            volumes: HashMap::new(),
-            env: HashMap::new(),
-        });
+        config.add_rule(
+            "lima",
+            Rule {
+                resource: "postgres".to_string(),
+                namespace: None,
+                kind: None,
+                preset: Some("tiny".to_string()),
+                shortcuts: HashMap::new(),
+                containers: HashMap::new(),
+                volumes: HashMap::new(),
+                env: HashMap::new(),
+            },
+        );
 
         let json = serde_json::to_string_pretty(&config).unwrap();
         let loaded: SunbeamConfig = serde_json::from_str(&json).unwrap();
         assert!(loaded.profiles.contains_key("lima"));
-        assert_eq!(loaded.profiles["lima"].presets["tiny"].values["instances"], 1);
+        assert_eq!(
+            loaded.profiles["lima"].presets["tiny"].values["instances"],
+            1
+        );
         assert_eq!(loaded.profiles["lima"].rules[0].resource, "postgres");
     }
 

@@ -46,7 +46,11 @@ pub async fn cmd_preseed_image(
     wait_for_job("build", "proxy-image-puller", timeout_secs).await?;
 
     info!(logger, "Node has pulled image", image_ref = image_ref);
-    debug!(logger, "preseed_image completed", timeout_secs = timeout_secs);
+    debug!(
+        logger,
+        "preseed_image completed",
+        timeout_secs = timeout_secs
+    );
     Ok(())
 }
 
@@ -203,7 +207,10 @@ rules:
     fn bump_proxy_image_updates_image() {
         let result = bump_proxy_image(PROFILE, "new-image").unwrap();
         assert!(result.contains("image: \"new-image\""), "result={result}");
-        assert!(!result.contains("image: \"old-image\""), "old image still present");
+        assert!(
+            !result.contains("image: \"old-image\""),
+            "old image still present"
+        );
     }
 
     #[test]
@@ -230,7 +237,10 @@ rules:
     kind: Deployment
 ";
         let result = bump_proxy_image(input, "inserted-image").unwrap();
-        assert!(result.contains("image: \"inserted-image\""), "result={result}");
+        assert!(
+            result.contains("image: \"inserted-image\""),
+            "result={result}"
+        );
     }
 
     #[test]
@@ -243,10 +253,7 @@ rules:
     kind: Deployment
 ";
         let err = bump_proxy_image(input, "abcd1234").unwrap_err();
-        assert!(
-            err.to_string().contains("not found"),
-            "err={err}"
-        );
+        assert!(err.to_string().contains("not found"), "err={err}");
     }
 
     #[test]
@@ -270,9 +277,21 @@ rules:
     image: \"another-image\"
 ";
         let result = bump_proxy_image(input, "new-proxy-image").unwrap();
-        assert!(result.contains("image: \"other-image\""), "other-image changed");
-        assert!(result.contains("image: \"another-image\""), "another-image changed");
-        assert!(result.contains("image: \"new-proxy-image\""), "proxy not updated");
-        assert!(!result.contains("image: \"old-proxy-image\""), "old proxy image remains");
+        assert!(
+            result.contains("image: \"other-image\""),
+            "other-image changed"
+        );
+        assert!(
+            result.contains("image: \"another-image\""),
+            "another-image changed"
+        );
+        assert!(
+            result.contains("image: \"new-proxy-image\""),
+            "proxy not updated"
+        );
+        assert!(
+            !result.contains("image: \"old-proxy-image\""),
+            "old proxy image remains"
+        );
     }
 }

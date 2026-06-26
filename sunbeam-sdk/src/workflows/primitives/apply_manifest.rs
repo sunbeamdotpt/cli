@@ -6,8 +6,8 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-use crate::logger::{Logger, TracingSink};
 use crate::info;
+use crate::logger::{Logger, TracingSink};
 
 /// Global mutex that serializes ApplyManifest steps when running in serial mode.
 /// Single-node k3s cannot handle the pod-startup storm from many
@@ -109,8 +109,7 @@ impl StepBody for ApplyManifest {
             .get("domain")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty());
-        let domain = live_domain
-            .unwrap_or(&crate::config::active_context().domain);
+        let domain = live_domain.unwrap_or(&crate::config::active_context().domain);
         let skip_patterns = build_skip_patterns(config, domain);
 
         let skip_namespaces: Vec<String> = data
@@ -119,8 +118,10 @@ impl StepBody for ApplyManifest {
             .unwrap_or_default();
 
         if skip_namespaces.contains(&namespace.to_string()) {
-            self.logger
-                .info(&format!("Skipping {namespace} namespace apply (profile skip list)"), &[]);
+            self.logger.info(
+                &format!("Skipping {namespace} namespace apply (profile skip list)"),
+                &[],
+            );
             return Ok(ExecutionResult::next());
         }
 
@@ -160,12 +161,13 @@ impl StepBody for ApplyManifest {
             // Stagger parallel steps to avoid thundering-herd against k3s API.
             let stagger = stagger_millis_for(namespace);
             if stagger > 0 {
-                self.logger
-                    .info(&format!("Applying {namespace} (staggering {stagger}ms)..."), &[]);
+                self.logger.info(
+                    &format!("Applying {namespace} (staggering {stagger}ms)..."),
+                    &[],
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(stagger)).await;
             } else {
-                self.logger
-                    .info(&format!("Applying {namespace}..."), &[]);
+                self.logger.info(&format!("Applying {namespace}..."), &[]);
             }
             None
         };

@@ -45,10 +45,9 @@ const DEFAULT_FILTER: &str = "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,
 /// `level_override` takes precedence over the default filter but loses to
 /// the `RUST_LOG` environment variable.
 pub fn init_subscriber(mode: LogMode, level_override: Option<&str>) -> Result<()> {
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(level_override.unwrap_or(DEFAULT_FILTER))
-        });
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(level_override.unwrap_or(DEFAULT_FILTER))
+    });
 
     match mode {
         LogMode::Line => {
@@ -144,7 +143,8 @@ mod tests {
     #[test]
     fn line_format_includes_timestamp() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("hello world");
         });
@@ -160,49 +160,67 @@ mod tests {
     #[test]
     fn line_format_includes_level() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("hello world");
         });
         let output = writer.get_string();
-        assert!(output.contains("level=INFO"), "expected level=INFO, got: {output}");
+        assert!(
+            output.contains("level=INFO"),
+            "expected level=INFO, got: {output}"
+        );
     }
 
     #[test]
     fn line_format_quotes_message() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("hello world");
         });
         let output = writer.get_string();
-        assert!(output.contains("msg=\"hello world\""), "expected msg=\"hello world\", got: {output}");
+        assert!(
+            output.contains("msg=\"hello world\""),
+            "expected msg=\"hello world\", got: {output}"
+        );
     }
 
     #[test]
     fn line_format_includes_group_from_span() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             let span = tracing::info_span!("apply", namespace = "ory");
             let _guard = span.enter();
             tracing::info!("Applying manifests...");
         });
         let output = writer.get_string();
-        assert!(output.contains("group=apply"), "expected group=apply, got: {output}");
-        assert!(output.contains("namespace=\"ory\""), "expected namespace field, got: {output}");
+        assert!(
+            output.contains("group=apply"),
+            "expected group=apply, got: {output}"
+        );
+        assert!(
+            output.contains("namespace=\"ory\""),
+            "expected namespace field, got: {output}"
+        );
     }
 
     #[test]
     fn line_format_event_fields_before_message() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(count = 17, "Found services");
         });
         let output = writer.get_string();
         // Event fields should appear after the message in the new format.
-        let msg_idx = output.find("msg=\"Found services\"").expect("message not found");
+        let msg_idx = output
+            .find("msg=\"Found services\"")
+            .expect("message not found");
         let count_idx = output.find("count=17").expect("count field not found");
         assert!(
             count_idx > msg_idx,
@@ -213,7 +231,8 @@ mod tests {
     #[test]
     fn line_format_sanitizes_newlines() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("line one\nline two");
         });
@@ -222,13 +241,17 @@ mod tests {
             output.contains("line one\\nline two"),
             "expected escaped newline, got: {output}"
         );
-        assert!(!output.contains("line one\nline two"), "raw newline should be stripped, got: {output}");
+        assert!(
+            !output.contains("line one\nline two"),
+            "raw newline should be stripped, got: {output}"
+        );
     }
 
     #[test]
     fn line_format_escapes_quotes() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(line_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(r#"say "hello""#);
         });
@@ -242,7 +265,8 @@ mod tests {
     #[test]
     fn json_format_produces_valid_json() {
         let writer = TestWriter::default();
-        let subscriber = tracing_subscriber::registry().with(json_layer::build_with_writer(writer.clone()));
+        let subscriber =
+            tracing_subscriber::registry().with(json_layer::build_with_writer(writer.clone()));
         tracing::subscriber::with_default(subscriber, || {
             let span = tracing::info_span!("apply", namespace = "ory");
             let _guard = span.enter();
@@ -253,7 +277,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(line).expect("invalid JSON");
         assert_eq!(parsed["level"], "INFO");
         assert_eq!(parsed["fields"]["message"], "Applying manifests...");
-        assert!(parsed.get("timestamp").is_some() || parsed.get("time").is_some(), "expected timestamp in JSON output");
+        assert!(
+            parsed.get("timestamp").is_some() || parsed.get("time").is_some(),
+            "expected timestamp in JSON output"
+        );
     }
 
     #[test]
@@ -276,7 +303,10 @@ mod tests {
         let meta = span.metadata().unwrap();
         let field = meta.fields().field("count").unwrap();
         visitor.record_debug(&field, &42);
-        assert_eq!(visitor.fields, vec![("count".to_string(), "42".to_string())]);
+        assert_eq!(
+            visitor.fields,
+            vec![("count".to_string(), "42".to_string())]
+        );
     }
 
     #[test]

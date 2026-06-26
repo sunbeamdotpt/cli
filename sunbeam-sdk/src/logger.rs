@@ -310,8 +310,14 @@ impl Sink for JsonSink {
 
         let mut map = serde_json::Map::new();
         map.insert("timestamp".to_string(), serde_json::Value::String(ts));
-        map.insert("level".to_string(), serde_json::Value::String(level.to_string()));
-        map.insert("message".to_string(), serde_json::Value::String(msg.to_string()));
+        map.insert(
+            "level".to_string(),
+            serde_json::Value::String(level.to_string()),
+        );
+        map.insert(
+            "message".to_string(),
+            serde_json::Value::String(msg.to_string()),
+        );
 
         let mut field_map = serde_json::Map::new();
         for (k, v) in fields {
@@ -368,7 +374,6 @@ impl ThreadedSink {
         self.min_level = level;
         self
     }
-
 }
 
 impl Default for ThreadedSink {
@@ -406,8 +411,8 @@ impl Drop for ThreadedGroupGuard {
     fn drop(&mut self) {
         let mut state = self.state.lock().unwrap();
         if let Some(pb) = state.groups.remove(&self.name) {
-            let style = indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}")
-                .unwrap();
+            let style =
+                indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}").unwrap();
             pb.set_style(style);
             pb.set_prefix("✓");
             let elapsed = pb.elapsed();
@@ -531,9 +536,18 @@ mod tests {
         assert_eq!(ev.msg, "started");
         assert_eq!(ev.level, Level::Info);
         assert!(ev.fields.contains(&("ns".to_string(), "prod".to_string())));
-        assert!(ev.fields.contains(&("app".to_string(), "nginx".to_string())));
-        assert!(ev.fields.contains(&("pod".to_string(), "web-0".to_string())));
-        assert!(ev.fields.contains(&("port".to_string(), "8080".to_string())));
+        assert!(
+            ev.fields
+                .contains(&("app".to_string(), "nginx".to_string()))
+        );
+        assert!(
+            ev.fields
+                .contains(&("pod".to_string(), "web-0".to_string()))
+        );
+        assert!(
+            ev.fields
+                .contains(&("port".to_string(), "8080".to_string()))
+        );
     }
 
     #[test]
@@ -546,7 +560,10 @@ mod tests {
 
         let events = sink.take();
         assert_eq!(events[0].fields.len(), 1);
-        assert_eq!(events[0].fields[0], ("key".to_string(), "child".to_string()));
+        assert_eq!(
+            events[0].fields[0],
+            ("key".to_string(), "child".to_string())
+        );
     }
 
     #[test]
@@ -562,7 +579,10 @@ mod tests {
         info!(logger, "hello", name = "world", count = 42);
         let ev = sink.take().pop().unwrap();
         assert_eq!(ev.msg, "hello");
-        assert!(ev.fields.contains(&("name".to_string(), "world".to_string())));
+        assert!(
+            ev.fields
+                .contains(&("name".to_string(), "world".to_string()))
+        );
         assert!(ev.fields.contains(&("count".to_string(), "42".to_string())));
     }
 
@@ -620,5 +640,4 @@ mod tests {
         assert_eq!(format!("{}", Level::Warn), "WARN");
         assert_eq!(format!("{}", Level::Error), "ERROR");
     }
-
 }

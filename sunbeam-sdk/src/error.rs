@@ -6,25 +6,25 @@
 /// Exit codes for the sunbeam CLI.
 #[allow(dead_code)]
 pub mod exit {
-/// Success.
+    /// Success.
     pub const SUCCESS: i32 = 0;
-/// General.
+    /// General.
     pub const GENERAL: i32 = 1;
-/// Usage.
+    /// Usage.
     pub const USAGE: i32 = 2;
-/// Kube.
+    /// Kube.
     pub const KUBE: i32 = 3;
-/// Config.
+    /// Config.
     pub const CONFIG: i32 = 4;
-/// Network.
+    /// Network.
     pub const NETWORK: i32 = 5;
-/// Secrets.
+    /// Secrets.
     pub const SECRETS: i32 = 6;
-/// Build.
+    /// Build.
     pub const BUILD: i32 = 7;
-/// Identity.
+    /// Identity.
     pub const IDENTITY: i32 = 8;
-/// External tool.
+    /// External tool.
     pub const EXTERNAL_TOOL: i32 = 9;
 }
 
@@ -167,6 +167,27 @@ impl From<base64::DecodeError> for SunbeamError {
 impl From<std::string::FromUtf8Error> for SunbeamError {
     fn from(e: std::string::FromUtf8Error) -> Self {
         SunbeamError::Other(format!("UTF-8 error: {e}"))
+    }
+}
+
+impl From<tonic::transport::Error> for SunbeamError {
+    fn from(e: tonic::transport::Error) -> Self {
+        SunbeamError::Network {
+            context: format!("gRPC transport error: {e}"),
+            source: None,
+        }
+    }
+}
+
+impl From<tonic::Status> for SunbeamError {
+    fn from(e: tonic::Status) -> Self {
+        SunbeamError::Other(format!("gRPC error: {}", e.message()))
+    }
+}
+
+impl From<tonic::metadata::errors::InvalidMetadataValue> for SunbeamError {
+    fn from(e: tonic::metadata::errors::InvalidMetadataValue) -> Self {
+        SunbeamError::Other(format!("invalid gRPC metadata value: {e}"))
     }
 }
 

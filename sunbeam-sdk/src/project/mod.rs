@@ -14,6 +14,6 @@ pub mod config;
 pub mod runner;
 
 pub use config::{
-    Deps, ExecCommand, ExecTarget, ProjectConfig, ProjectMeta, SkipMarker, Target, Tenant,
-    WorkflowTarget, SCHEMA_VERSION, STANDARD_VERBS,
+    Deps, ExecCommand, ExecTarget, ProjectConfig, ProjectMeta, SCHEMA_VERSION, STANDARD_VERBS,
+    SkipMarker, Target, Tenant, WorkflowTarget,
 };

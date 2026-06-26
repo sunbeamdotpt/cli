@@ -45,7 +45,12 @@ impl StepBody for WaitForRollout {
             .get("deployment")
             .and_then(|v| v.as_str())
             .ok_or_else(|| step_err("WaitForRollout: missing deployment in step_config"))?;
-        debug!(logger, "wait_for_rollout", namespace = namespace, deployment = deployment);
+        debug!(
+            logger,
+            "wait_for_rollout",
+            namespace = namespace,
+            deployment = deployment
+        );
         let timeout_secs = config
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
@@ -57,7 +62,11 @@ impl StepBody for WaitForRollout {
             .get("serial_mode")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let timeout_secs = if serial_mode { timeout_secs * 2 } else { timeout_secs };
+        let timeout_secs = if serial_mode {
+            timeout_secs * 2
+        } else {
+            timeout_secs
+        };
 
         let skip_namespaces: Vec<String> = ctx
             .workflow
@@ -66,16 +75,31 @@ impl StepBody for WaitForRollout {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         if skip_namespaces.contains(&namespace.to_string()) {
-            info!(logger, "Skipping wait for rollout (profile skip list)", namespace = namespace, deployment = deployment);
+            info!(
+                logger,
+                "Skipping wait for rollout (profile skip list)",
+                namespace = namespace,
+                deployment = deployment
+            );
             return Ok(ExecutionResult::next());
         }
 
-        info!(logger, "Waiting for rollout", namespace = namespace, deployment = deployment);
+        info!(
+            logger,
+            "Waiting for rollout",
+            namespace = namespace,
+            deployment = deployment
+        );
 
         crate::cluster::wait_rollout(logger, namespace, deployment, timeout_secs)
             .await
             .map_err(|e| step_err(format!("WaitForRollout({namespace}/{deployment}): {e}")))?;
-        info!(logger, "Rollout complete.", namespace = namespace, deployment = deployment);
+        info!(
+            logger,
+            "Rollout complete.",
+            namespace = namespace,
+            deployment = deployment
+        );
 
         Ok(ExecutionResult::next())
     }

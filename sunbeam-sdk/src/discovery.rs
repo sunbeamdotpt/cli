@@ -116,7 +116,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         touch(&tmp.path().join(PROJECT_FILE));
         let found = find_project_root(tmp.path()).unwrap();
-        assert_eq!(fs::canonicalize(found).unwrap(), fs::canonicalize(tmp.path()).unwrap());
+        assert_eq!(
+            fs::canonicalize(found).unwrap(),
+            fs::canonicalize(tmp.path()).unwrap()
+        );
     }
 
     #[test]
@@ -126,7 +129,10 @@ mod tests {
         let nested = tmp.path().join("a").join("b").join("c");
         fs::create_dir_all(&nested).unwrap();
         let found = find_project_root(&nested).unwrap();
-        assert_eq!(fs::canonicalize(found).unwrap(), fs::canonicalize(tmp.path()).unwrap());
+        assert_eq!(
+            fs::canonicalize(found).unwrap(),
+            fs::canonicalize(tmp.path()).unwrap()
+        );
     }
 
     #[test]
@@ -148,7 +154,10 @@ mod tests {
         let nested = tmp.path().join("repo").join("src");
         fs::create_dir_all(&nested).unwrap();
         let found = find_workspace_root(&nested).unwrap();
-        assert_eq!(fs::canonicalize(found).unwrap(), fs::canonicalize(tmp.path()).unwrap());
+        assert_eq!(
+            fs::canonicalize(found).unwrap(),
+            fs::canonicalize(tmp.path()).unwrap()
+        );
     }
 
     #[test]
@@ -161,7 +170,10 @@ mod tests {
         // Call from an unrelated dir — env should still resolve.
         let elsewhere = TempDir::new().unwrap();
         let found = find_workspace_root(elsewhere.path()).unwrap();
-        assert_eq!(fs::canonicalize(found).unwrap(), fs::canonicalize(tmp.path()).unwrap());
+        assert_eq!(
+            fs::canonicalize(found).unwrap(),
+            fs::canonicalize(tmp.path()).unwrap()
+        );
     }
 
     #[test]
@@ -195,13 +207,19 @@ mod tests {
         fn set(key: &str, value: &str) -> Self {
             let prior = env::var(key).ok();
             unsafe { env::set_var(key, value) };
-            Self { key: key.to_string(), prior }
+            Self {
+                key: key.to_string(),
+                prior,
+            }
         }
 
         fn unset(key: &str) -> Self {
             let prior = env::var(key).ok();
             unsafe { env::remove_var(key) };
-            Self { key: key.to_string(), prior }
+            Self {
+                key: key.to_string(),
+                prior,
+            }
         }
     }
 

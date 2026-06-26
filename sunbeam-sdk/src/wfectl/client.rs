@@ -67,7 +67,11 @@ pub async fn connect(logger: &crate::logger::Logger, server: &str) -> Result<Cha
 
 /// Build an authenticated wfe client.
 #[tracing::instrument(skip(logger))]
-pub async fn build(logger: &crate::logger::Logger, server: &str, token: &str) -> Result<AuthClient> {
+pub async fn build(
+    logger: &crate::logger::Logger,
+    server: &str,
+    token: &str,
+) -> Result<AuthClient> {
     debug!(logger, "wfectl client connecting to", server = server);
     let channel = connect(logger, server).await?;
     let auth = BearerAuth::new(token)?;

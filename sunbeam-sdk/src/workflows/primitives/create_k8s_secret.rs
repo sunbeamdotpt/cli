@@ -9,7 +9,6 @@ use wfe_core::traits::{StepBody, StepExecutionContext};
 
 use crate::kube as k;
 
-
 fn step_err(msg: impl Into<String>) -> wfe_core::WfeError {
     wfe_core::WfeError::StepExecution(msg.into())
 }

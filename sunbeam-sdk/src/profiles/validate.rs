@@ -4,8 +4,8 @@ use crate::config::{Preset, Profile};
 use crate::error::{Result, SunbeamError};
 use std::collections::HashMap;
 
-use super::resolver::resolve;
 use super::ManifestResource;
+use super::resolver::resolve;
 
 /// Validate that every shortcut in every rule maps to a declared tunable
 /// (or has an in-tree default), and that preset references resolve.
@@ -89,7 +89,12 @@ mod tests {
 
     #[test]
     fn test_missing_preset_fails() {
-        let resources = vec![make_resource("gitea", "devtools", "Deployment", HashMap::new())];
+        let resources = vec![make_resource(
+            "gitea",
+            "devtools",
+            "Deployment",
+            HashMap::new(),
+        )];
         let profile = Profile {
             rules: vec![Rule {
                 resource: "gitea".to_string(),
@@ -143,7 +148,9 @@ mod tests {
         let resources = vec![make_resource("gitea", "devtools", "Deployment", tunables)];
 
         let mut preset = Preset::default();
-        preset.values.insert("scale".to_string(), Value::Number(0.into()));
+        preset
+            .values
+            .insert("scale".to_string(), Value::Number(0.into()));
 
         let mut profile = Profile::default();
         profile.presets.insert("off".to_string(), preset);

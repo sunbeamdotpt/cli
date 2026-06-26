@@ -166,8 +166,8 @@ pub struct Tenant {
 impl ProjectConfig {
     /// Load and validate a `sunbeam.yaml` from disk.
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_ctx(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_ctx(|| format!("reading {}", path.display()))?;
         Self::from_str(&text).with_ctx(|| format!("parsing {}", path.display()))
     }
 
@@ -212,7 +212,10 @@ impl ProjectConfig {
                     "target verb name must not be empty".into(),
                 ));
             }
-            if !verb.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            if !verb
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
                 return Err(SunbeamError::Config(format!(
                     "invalid target verb {verb:?}; allowed: ASCII letters, digits, '-', '_'"
                 )));
@@ -305,13 +308,20 @@ outputs:
         assert_eq!(cfg.outputs, vec!["target/release/sol"]);
 
         match cfg.target("build") {
-            Target::Exec(ExecTarget { exec: ExecCommand::Shell(s), .. }) => {
+            Target::Exec(ExecTarget {
+                exec: ExecCommand::Shell(s),
+                ..
+            }) => {
                 assert_eq!(s, "cargo build --release");
             }
             other => panic!("expected shell exec, got {other:?}"),
         }
         match cfg.target("test") {
-            Target::Exec(ExecTarget { exec: ExecCommand::Argv(v), env, .. }) => {
+            Target::Exec(ExecTarget {
+                exec: ExecCommand::Argv(v),
+                env,
+                ..
+            }) => {
                 assert_eq!(v, vec!["cargo", "nextest", "run"]);
                 assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("debug"));
             }
@@ -320,10 +330,7 @@ outputs:
         match cfg.target("package") {
             Target::Workflow(WorkflowTarget { workflow, inputs }) => {
                 assert_eq!(workflow, ".sunbeam/workflows/package.yaml");
-                assert_eq!(
-                    inputs.get("tag").and_then(|v| v.as_str()),
-                    Some("latest")
-                );
+                assert_eq!(inputs.get("tag").and_then(|v| v.as_str()), Some("latest"));
             }
             other => panic!("expected workflow, got {other:?}"),
         }

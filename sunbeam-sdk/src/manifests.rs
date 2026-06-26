@@ -66,11 +66,10 @@ pub fn filter_skip_namespaces(manifests: &str, skip_namespaces: &[String]) -> St
         let in_skip_ns = skip_namespaces
             .iter()
             .any(|ns| doc.contains(&format!("namespace: {ns}")));
-        let is_skip_ns = skip_namespaces.iter().any(|ns| {
-            doc.contains("kind: Namespace") && doc.contains(&format!("name: {ns}"))
-        });
-        let is_cluster_scoped =
-            !doc.contains("namespace: ") && !doc.contains("kind: Namespace");
+        let is_skip_ns = skip_namespaces
+            .iter()
+            .any(|ns| doc.contains("kind: Namespace") && doc.contains(&format!("name: {ns}")));
+        let is_cluster_scoped = !doc.contains("namespace: ") && !doc.contains("kind: Namespace");
         let is_system_ns = doc.contains("namespace: kube-system");
 
         if is_cluster_scoped || is_system_ns || (!in_skip_ns && !is_skip_ns) {
@@ -124,8 +123,8 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let has_kustomization =
-                path.join("kustomization.yaml").is_file() || path.join("kustomization.yml").is_file();
+            let has_kustomization = path.join("kustomization.yaml").is_file()
+                || path.join("kustomization.yml").is_file();
             if has_kustomization {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     services.push(name.to_string());
@@ -146,7 +145,10 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
 ///
 /// Domain and email are read from `config::active_context()`, which is
 /// guaranteed to be fully resolved by the time this is called.
-pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions) -> Result<String> {
+pub async fn apply_manifests(
+    logger: &crate::logger::Logger,
+    opts: &ApplyOptions,
+) -> Result<String> {
     let ctx = crate::config::active_context();
     let resolved_domain = opts
         .domain
@@ -167,7 +169,12 @@ pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions
     } else {
         format!(" [{namespace}]")
     };
-    info!(logger, "Applying manifests", domain = resolved_domain, scope = scope);
+    info!(
+        logger,
+        "Applying manifests",
+        domain = resolved_domain,
+        scope = scope
+    );
 
     // Pre-clean partial helm-chart extracts under any `<base>/charts/` dir.
     clean_partial_chart_extracts(&infra_dir);
@@ -185,7 +192,11 @@ pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions
     if !namespace.is_empty() {
         manifests = filter_by_namespace(&manifests, namespace, &opts.skip_patterns);
         if manifests.trim().is_empty() {
-            error!(logger, "No resources found for namespace -- check the name and try again", namespace = namespace);
+            error!(
+                logger,
+                "No resources found for namespace -- check the name and try again",
+                namespace = namespace
+            );
             return Ok(String::new());
         }
     }
@@ -212,9 +223,11 @@ pub async fn apply_manifests(logger: &crate::logger::Logger, opts: &ApplyOptions
         && namespace.is_empty()
         && wait_for_webhook("cert-manager", "cert-manager-webhook", 120).await
     {
-        info!(logger, "Running convergence pass for cert-manager resources...");
-        let mut manifests2 =
-            crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
+        info!(
+            logger,
+            "Running convergence pass for cert-manager resources..."
+        );
+        let mut manifests2 = crate::kube::kustomize_build(&overlay, resolved_domain, email).await?;
         if let Some(ov) = &opts.overrides {
             manifests2 = crate::manifest_params::apply_overrides(&manifests2, ov)?;
         }
@@ -409,7 +422,9 @@ async fn prune_stale_vault_static_secrets(namespaces: &[&str]) {
 }
 
 /// Snapshot ConfigMap resourceVersions across managed namespaces.
-async fn snapshot_configmaps(logger: &crate::logger::Logger) -> std::collections::HashMap<String, String> {
+async fn snapshot_configmaps(
+    logger: &crate::logger::Logger,
+) -> std::collections::HashMap<String, String> {
     let mut result = std::collections::HashMap::new();
     let client = match crate::kube::get_client().await {
         Ok(c) => c,
@@ -482,9 +497,7 @@ async fn restart_for_changed_configmaps(
                         }
                     });
                     if mounts_changed {
-                        tracing::info!(
-                            "Restarting {ns}/{dep_name} (ConfigMap updated)..."
-                        );
+                        tracing::info!("Restarting {ns}/{dep_name} (ConfigMap updated)...");
                         let _ = crate::kube::kube_rollout_restart(ns, dep_name).await;
                     }
                 }
@@ -495,9 +508,7 @@ async fn restart_for_changed_configmaps(
 
 /// Wait for a webhook endpoint to become ready.
 async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
-    tracing::info!(
-        "Waiting for {ns}/{svc} webhook (up to {timeout_secs}s)..."
-    );
+    tracing::info!("Waiting for {ns}/{svc} webhook (up to {timeout_secs}s)...");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     let client = match crate::kube::get_client().await {
@@ -509,9 +520,7 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
 
     loop {
         if std::time::Instant::now() > deadline {
-            tracing::info!(
-                "  {ns}/{svc} not ready after {timeout_secs}s -- continuing anyway."
-            );
+            tracing::info!("  {ns}/{svc} not ready after {timeout_secs}s -- continuing anyway.");
             return false;
         }
 
@@ -534,16 +543,15 @@ async fn wait_for_webhook(ns: &str, svc: &str, timeout_secs: u64) -> bool {
 
 /// Patch the tuwunel OAuth2Client redirect URI with the actual client_id.
 async fn patch_tuwunel_oauth2_redirect(domain: &str) {
-    let client_id =
-        match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID").await {
-            Ok(id) if !id.is_empty() => id,
-            _ => {
-                tracing::info!(
-                    "oidc-tuwunel secret not yet available -- skipping redirect URI patch.",
-                );
-                return;
-            }
-        };
+    let client_id = match crate::kube::kube_get_secret_field("matrix", "oidc-tuwunel", "CLIENT_ID")
+        .await
+    {
+        Ok(id) if !id.is_empty() => id,
+        _ => {
+            tracing::info!("oidc-tuwunel secret not yet available -- skipping redirect URI patch.",);
+            return;
+        }
+    };
 
     let redirect_uri =
         format!("https://messages.{domain}/_matrix/client/unstable/login/sso/callback/{client_id}");
@@ -645,7 +653,10 @@ pub async fn inject_opensearch_model_id(logger: &crate::logger::Logger) {
         });
 
     let Some(model_id) = model_id else {
-        info!(logger, "No model_id in ingest pipeline -- tuwunel hybrid search unavailable.");
+        info!(
+            logger,
+            "No model_id in ingest pipeline -- tuwunel hybrid search unavailable."
+        );
         return;
     };
 
@@ -780,10 +791,7 @@ pub async fn ensure_opensearch_ml() {
     }
 
     if !to_clean.is_empty() {
-        tracing::info!(
-            "Cleaning up {} stale ML model(s)...",
-            to_clean.len()
-        );
+        tracing::info!("Cleaning up {} stale ML model(s)...", to_clean.len());
         for stale in &to_clean {
             // Undeploy first (safe to call even if not deployed)
             os_api(
@@ -1217,7 +1225,9 @@ spec:
         // Nested directory inside a service dir — should not be listed
         fs::create_dir_all(base.join("stalwart").join("sub-component")).unwrap();
         fs::write(
-            base.join("stalwart").join("sub-component").join("kustomization.yaml"),
+            base.join("stalwart")
+                .join("sub-component")
+                .join("kustomization.yaml"),
             "resources: []\n",
         )
         .unwrap();
@@ -1300,15 +1310,25 @@ spec:
     fn test_filter_skip_namespaces_drops_skipped() {
         let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\ndata:\n  key: val\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm2\n  namespace: matrix\ndata:\n  key: val\n---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: ory\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: reader\n";
         let result = filter_skip_namespaces(input, &["ory".to_string()]);
-        assert!(!result.contains("namespace: ory"), "should drop ory namespace resources");
-        assert!(!result.contains("name: ory\n"), "should drop ory Namespace resource");
+        assert!(
+            !result.contains("namespace: ory"),
+            "should drop ory namespace resources"
+        );
+        assert!(
+            !result.contains("name: ory\n"),
+            "should drop ory Namespace resource"
+        );
         assert!(result.contains("namespace: matrix"), "should keep matrix");
-        assert!(result.contains("kind: ClusterRole"), "should keep cluster-scoped");
+        assert!(
+            result.contains("kind: ClusterRole"),
+            "should keep cluster-scoped"
+        );
     }
 
     #[test]
     fn test_filter_skip_namespaces_keeps_all_when_empty() {
-        let input = "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\n";
+        let input =
+            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n  namespace: ory\n";
         let result = filter_skip_namespaces(input, &[]);
         assert!(result.contains("namespace: ory"));
     }

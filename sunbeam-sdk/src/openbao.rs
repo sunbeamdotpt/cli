@@ -68,7 +68,7 @@ impl BaoClient {
 
     // ── System operations ───────────────────────────────────────────────
 
-/// Seal status.
+    /// Seal status.
     #[tracing::instrument(skip(self))]
     pub async fn seal_status(&self) -> Result<SealStatusResponse> {
         tracing::debug!("seal_status");
@@ -93,7 +93,7 @@ impl BaoClient {
         }
     }
 
-/// Init.
+    /// Init.
     #[tracing::instrument(skip(self))]
     pub async fn init(&self, key_shares: u32, key_threshold: u32) -> Result<InitResponse> {
         tracing::debug!("init key_shares={key_shares} key_threshold={key_threshold}");
@@ -107,7 +107,7 @@ impl BaoClient {
         .map_err(|e| crate::error::SunbeamError::Other(format!("OpenBao init failed: {e}")))
     }
 
-/// Unseal.
+    /// Unseal.
     #[tracing::instrument(skip(self))]
     pub async fn unseal(&self, key: &str) -> Result<UnsealResponse> {
         tracing::debug!("unseal");
@@ -123,7 +123,7 @@ impl BaoClient {
 
     // ── Secrets engine management ───────────────────────────────────────
 
-/// Enable secrets engine.
+    /// Enable secrets engine.
     #[tracing::instrument(skip(self))]
     pub async fn enable_secrets_engine(&self, path: &str, engine_type: &str) -> Result<()> {
         tracing::debug!("enable_secrets_engine {path} type={engine_type}");
@@ -144,7 +144,7 @@ impl BaoClient {
 
     // ── KV v2 operations ────────────────────────────────────────────────
 
-/// Kv get.
+    /// Kv get.
     #[tracing::instrument(skip(self))]
     pub async fn kv_get(&self, mount: &str, path: &str) -> Result<Option<HashMap<String, String>>> {
         tracing::debug!("kv_get {mount}/{path}");
@@ -177,7 +177,7 @@ impl BaoClient {
         }
     }
 
-/// Kv get field.
+    /// Kv get field.
     #[tracing::instrument(skip(self))]
     pub async fn kv_get_field(&self, mount: &str, path: &str, field: &str) -> Result<String> {
         tracing::debug!("kv_get_field {mount}/{path} field={field}");
@@ -187,7 +187,7 @@ impl BaoClient {
         }
     }
 
-/// Kv put.
+    /// Kv put.
     #[tracing::instrument(skip(self))]
     pub async fn kv_put(
         &self,
@@ -238,7 +238,7 @@ impl BaoClient {
         Ok(())
     }
 
-/// Kv delete.
+    /// Kv delete.
     #[tracing::instrument(skip(self))]
     pub async fn kv_delete(&self, mount: &str, path: &str) -> Result<()> {
         tracing::debug!("kv_delete {mount}/{path}");
@@ -259,7 +259,7 @@ impl BaoClient {
 
     // ── Auth operations ─────────────────────────────────────────────────
 
-/// Auth enable.
+    /// Auth enable.
     #[tracing::instrument(skip(self))]
     pub async fn auth_enable(&self, path: &str, method_type: &str) -> Result<()> {
         tracing::debug!("auth_enable {path} type={method_type}");
@@ -278,7 +278,7 @@ impl BaoClient {
         }
     }
 
-/// Write policy.
+    /// Write policy.
     #[tracing::instrument(skip(self))]
     pub async fn write_policy(&self, name: &str, policy_hcl: &str) -> Result<()> {
         tracing::debug!("write_policy {name}");
@@ -331,7 +331,11 @@ impl BaoClient {
     #[tracing::instrument(skip(self))]
     pub async fn list(&self, path: &str) -> Result<Option<serde_json::Value>> {
         tracing::debug!("list {path}");
-        let url = format!("{}/v1/{}?list=true", self.base_url, path.trim_start_matches('/'));
+        let url = format!(
+            "{}/v1/{}?list=true",
+            self.base_url,
+            path.trim_start_matches('/')
+        );
         let mut req = reqwest::Client::new().get(&url);
         if let Some(token) = self.token_header() {
             req = req.header("X-Vault-Token", token);
@@ -362,7 +366,7 @@ impl BaoClient {
 
     // ── Generic write (for auth config, roles, etc.) ────────────────────
 
-/// Write.
+    /// Write.
     #[tracing::instrument(skip(self))]
     pub async fn write(&self, path: &str, data: &serde_json::Value) -> Result<serde_json::Value> {
         tracing::debug!("write {path}");
@@ -392,7 +396,7 @@ impl BaoClient {
 
     // ── Database secrets engine ─────────────────────────────────────────
 
-/// Write db config.
+    /// Write db config.
     #[tracing::instrument(skip(self))]
     pub async fn write_db_config(
         &self,
@@ -416,7 +420,7 @@ impl BaoClient {
         Ok(())
     }
 
-/// Write db static role.
+    /// Write db static role.
     pub async fn write_db_static_role(
         &self,
         name: &str,

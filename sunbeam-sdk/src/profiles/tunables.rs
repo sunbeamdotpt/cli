@@ -34,9 +34,9 @@ pub fn parse_tunable_annotation(text: &str) -> Result<HashMap<String, Tunable>> 
     let value: serde_yaml::Value = serde_yaml::from_str(text)
         .map_err(|e| SunbeamError::Config(format!("invalid tunable annotation YAML: {e}")))?;
 
-    let mapping = value.as_mapping().ok_or_else(|| {
-        SunbeamError::Config("tunable annotation must be a YAML mapping".into())
-    })?;
+    let mapping = value
+        .as_mapping()
+        .ok_or_else(|| SunbeamError::Config("tunable annotation must be a YAML mapping".into()))?;
 
     for (key, val) in mapping {
         let key_str = key.as_str().ok_or_else(|| {
@@ -65,7 +65,9 @@ fn parse_tunable_value(val: &serde_yaml::Value) -> Result<(&str, Option<&str>)> 
 
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return Err(SunbeamError::Config("tunable value must not be empty".into()));
+        return Err(SunbeamError::Config(
+            "tunable value must not be empty".into(),
+        ));
     }
 
     // Split on " @ " — the space-around-at is required to avoid splitting
@@ -100,14 +102,20 @@ scale: integer
 memory: quantity
 "#;
         let map = parse_tunable_annotation(text).unwrap();
-        assert_eq!(map["scale"], Tunable {
-            type_hint: "integer".into(),
-            path: None,
-        });
-        assert_eq!(map["memory"], Tunable {
-            type_hint: "quantity".into(),
-            path: None,
-        });
+        assert_eq!(
+            map["scale"],
+            Tunable {
+                type_hint: "integer".into(),
+                path: None,
+            }
+        );
+        assert_eq!(
+            map["memory"],
+            Tunable {
+                type_hint: "quantity".into(),
+                path: None,
+            }
+        );
     }
 
     #[test]
@@ -118,18 +126,27 @@ storage: quantity @ spec.storage.size
 config: object @ spec.postgresql.parameters
 "#;
         let map = parse_tunable_annotation(text).unwrap();
-        assert_eq!(map["instances"], Tunable {
-            type_hint: "integer".into(),
-            path: Some("spec.instances".into()),
-        });
-        assert_eq!(map["storage"], Tunable {
-            type_hint: "quantity".into(),
-            path: Some("spec.storage.size".into()),
-        });
-        assert_eq!(map["config"], Tunable {
-            type_hint: "object".into(),
-            path: Some("spec.postgresql.parameters".into()),
-        });
+        assert_eq!(
+            map["instances"],
+            Tunable {
+                type_hint: "integer".into(),
+                path: Some("spec.instances".into()),
+            }
+        );
+        assert_eq!(
+            map["storage"],
+            Tunable {
+                type_hint: "quantity".into(),
+                path: Some("spec.storage.size".into()),
+            }
+        );
+        assert_eq!(
+            map["config"],
+            Tunable {
+                type_hint: "object".into(),
+                path: Some("spec.postgresql.parameters".into()),
+            }
+        );
     }
 
     #[test]

@@ -7,8 +7,6 @@ use std::collections::HashMap;
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
-
-
 /// Credential mapping: maps a global cred key to a service + field.
 /// E.g., `("hydra-system-secret", "hydra", "system-secret")` means
 /// `creds["hydra-system-secret"] = creds_hydra["system-secret"]`.

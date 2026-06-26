@@ -5,8 +5,8 @@ use crate::error::{Result, SunbeamError};
 use crate::manifest_params::{Override, Overrides};
 use std::collections::HashMap;
 
-use super::shortcuts::expand_shortcut;
 use super::ManifestResource;
+use super::shortcuts::expand_shortcut;
 
 /// Resolve a profile into a collection of overrides.
 ///
@@ -139,7 +139,10 @@ fn resolve_resource<'a>(
     // 1. Exact match
     if let Some(n) = ns {
         if let Some(k) = kind {
-            if let Some(r) = resources.iter().find(|r| r.name == *name && r.namespace == *n && r.kind == *k) {
+            if let Some(r) = resources
+                .iter()
+                .find(|r| r.name == *name && r.namespace == *n && r.kind == *k)
+            {
                 return Ok(r);
             }
         }
@@ -152,11 +155,7 @@ fn resolve_resource<'a>(
     if let Some(n) = ns {
         let matches: Vec<_> = resources
             .iter()
-            .filter(|r| {
-                r.name == *name
-                    && r.namespace == *n
-                    && kind.map_or(true, |k| r.kind == k)
-            })
+            .filter(|r| r.name == *name && r.namespace == *n && kind.map_or(true, |k| r.kind == k))
             .collect();
         if matches.len() == 1 {
             return Ok(matches[0]);
@@ -165,7 +164,10 @@ fn resolve_resource<'a>(
 
     // 3. Name + kind (namespace may be empty due to Helm charts)
     if let Some(k) = kind {
-        let matches: Vec<_> = resources.iter().filter(|r| r.name == *name && r.kind == *k).collect();
+        let matches: Vec<_> = resources
+            .iter()
+            .filter(|r| r.name == *name && r.kind == *k)
+            .collect();
         if matches.len() == 1 {
             return Ok(matches[0]);
         }
@@ -175,7 +177,8 @@ fn resolve_resource<'a>(
     let matches: Vec<_> = resources.iter().filter(|r| r.name == *name).collect();
     match matches.len() {
         0 => Err(SunbeamError::Config(format!(
-            "resource '{}' not found in manifests", name
+            "resource '{}' not found in manifests",
+            name
         ))),
         1 => Ok(matches[0]),
         _ => Err(SunbeamError::Config(format!(
@@ -194,7 +197,13 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
 
-    fn make_resource_with_doc(name: &str, namespace: &str, kind: &str, tunables: HashMap<String, Tunable>, doc: serde_json::Value) -> ManifestResource {
+    fn make_resource_with_doc(
+        name: &str,
+        namespace: &str,
+        kind: &str,
+        tunables: HashMap<String, Tunable>,
+        doc: serde_json::Value,
+    ) -> ManifestResource {
         ManifestResource {
             kind: kind.to_string(),
             name: name.to_string(),
@@ -204,21 +213,32 @@ mod tests {
         }
     }
 
-    fn make_resource(name: &str, namespace: &str, kind: &str, tunables: HashMap<String, Tunable>) -> ManifestResource {
-        make_resource_with_doc(name, namespace, kind, tunables, serde_json::json!({
-            "kind": kind,
-            "metadata": { "name": name, "namespace": namespace },
-            "spec": {
-                "replicas": 1,
-                "template": {
-                    "spec": {
-                        "containers": [
-                            {"name": "main", "image": "busybox"}
-                        ]
+    fn make_resource(
+        name: &str,
+        namespace: &str,
+        kind: &str,
+        tunables: HashMap<String, Tunable>,
+    ) -> ManifestResource {
+        make_resource_with_doc(
+            name,
+            namespace,
+            kind,
+            tunables,
+            serde_json::json!({
+                "kind": kind,
+                "metadata": { "name": name, "namespace": namespace },
+                "spec": {
+                    "replicas": 1,
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {"name": "main", "image": "busybox"}
+                            ]
+                        }
                     }
                 }
-            }
-        }))
+            }),
+        )
     }
 
     #[test]
@@ -254,11 +274,14 @@ mod tests {
 
         let overrides = resolve(&profile, &HashMap::new(), &resources).unwrap();
         assert_eq!(overrides.items.len(), 1);
-        assert_eq!(overrides.items[0], Override::Set {
-            resource: "deployment/devtools/gitea".into(),
-            field_path: "spec/replicas".into(),
-            value: "3".into(),
-        });
+        assert_eq!(
+            overrides.items[0],
+            Override::Set {
+                resource: "deployment/devtools/gitea".into(),
+                field_path: "spec/replicas".into(),
+                value: "3".into(),
+            }
+        );
     }
 
     #[test]
@@ -282,8 +305,12 @@ mod tests {
         let resources = vec![make_resource("gitea", "devtools", "Deployment", tunables)];
 
         let mut preset = Preset::default();
-        preset.values.insert("scale".to_string(), Value::Number(1.into()));
-        preset.values.insert("memory".to_string(), Value::String("512Mi".into()));
+        preset
+            .values
+            .insert("scale".to_string(), Value::Number(1.into()));
+        preset
+            .values
+            .insert("memory".to_string(), Value::String("512Mi".into()));
 
         let mut profile = Profile::default();
         profile.presets.insert("tiny".to_string(), preset);
@@ -316,7 +343,9 @@ mod tests {
         let resources = vec![make_resource("gitea", "devtools", "Deployment", tunables)];
 
         let mut preset = Preset::default();
-        preset.values.insert("scale".to_string(), Value::Number(1.into()));
+        preset
+            .values
+            .insert("scale".to_string(), Value::Number(1.into()));
 
         let mut profile = Profile::default();
         profile.presets.insert("tiny".to_string(), preset);
@@ -354,10 +383,14 @@ mod tests {
         let resources = vec![make_resource("gitea", "devtools", "Deployment", tunables)];
 
         let mut global_preset = Preset::default();
-        global_preset.values.insert("scale".to_string(), Value::Number(1.into()));
+        global_preset
+            .values
+            .insert("scale".to_string(), Value::Number(1.into()));
 
         let mut profile_preset = Preset::default();
-        profile_preset.values.insert("scale".to_string(), Value::Number(2.into()));
+        profile_preset
+            .values
+            .insert("scale".to_string(), Value::Number(2.into()));
 
         let mut profile = Profile::default();
         profile.presets.insert("tiny".to_string(), profile_preset);
@@ -381,7 +414,12 @@ mod tests {
 
     #[test]
     fn test_missing_preset_errors() {
-        let resources = vec![make_resource("gitea", "devtools", "Deployment", HashMap::new())];
+        let resources = vec![make_resource(
+            "gitea",
+            "devtools",
+            "Deployment",
+            HashMap::new(),
+        )];
 
         let profile = Profile {
             rules: vec![Rule {
@@ -480,7 +518,9 @@ mod tests {
         };
 
         let overrides = resolve(&profile, &HashMap::new(), &resources).unwrap();
-        assert!(matches!(&overrides.items[0], Override::Set { resource, .. } if resource == "deployment/devtools/gitea"));
+        assert!(
+            matches!(&overrides.items[0], Override::Set { resource, .. } if resource == "deployment/devtools/gitea")
+        );
     }
 
     #[test]
@@ -509,7 +549,13 @@ mod tests {
                 }
             }
         });
-        let resources = vec![make_resource_with_doc("gitea", "devtools", "Deployment", tunables, doc)];
+        let resources = vec![make_resource_with_doc(
+            "gitea",
+            "devtools",
+            "Deployment",
+            tunables,
+            doc,
+        )];
 
         let mut profile = Profile::default();
         let mut cs = ContainerShortcuts::default();

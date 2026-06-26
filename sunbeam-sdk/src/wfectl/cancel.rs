@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::Args;
 use wfe_server_protos::wfe::v1::CancelWorkflowRequest;
 
-use crate::info;
 use super::client::AuthClient;
+use crate::info;
 
 #[derive(Debug, Args)]
 /// Cancelargs.
@@ -16,7 +16,11 @@ pub struct CancelArgs {
 
 /// Run.
 #[tracing::instrument(skip(logger))]
-pub async fn run(logger: &crate::logger::Logger, args: CancelArgs, mut client: AuthClient) -> Result<()> {
+pub async fn run(
+    logger: &crate::logger::Logger,
+    args: CancelArgs,
+    mut client: AuthClient,
+) -> Result<()> {
     info!(logger, "wfectl cancel workflow", id = args.workflow_id);
     client
         .cancel_workflow(CancelWorkflowRequest {

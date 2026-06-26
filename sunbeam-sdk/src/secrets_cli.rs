@@ -311,9 +311,7 @@ pub async fn dispatch(
             let client = BaoClient::with_token(addr, token);
             dispatch_with_client(&client, output, action).await
         }
-        (Some(_), None) => Err(SunbeamError::Config(
-            "--addr requires --token".into(),
-        )),
+        (Some(_), None) => Err(SunbeamError::Config("--addr requires --token".into())),
         (None, token_override) => {
             let ob_pod = find_openbao_pod().await?;
             let pf = crate::secrets::port_forward("openbao", &ob_pod, 8200).await?;
@@ -489,9 +487,7 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
         TransitAction::DeleteKey { mount, name } => {
             let mount = mount.trim_matches('/');
             let key_path = format!("{mount}/keys/{name}");
-            client
-                .write(&key_path, &serde_json::json!({}))
-                .await?;
+            client.write(&key_path, &serde_json::json!({})).await?;
             tracing::info!("Key {key_path} deleted.");
             Ok(())
         }
@@ -537,9 +533,7 @@ async fn cmd_delete(client: &BaoClient, path: &str) -> Result<()> {
     // BaoClient doesn't expose token directly for raw HTTP.
     // Use the write method with empty body as a delete workaround.
     tracing::info!("Delete {path} — using generic write with empty body");
-    client
-        .write(path, &serde_json::json!({}))
-        .await?;
+    client.write(path, &serde_json::json!({})).await?;
     Ok(())
 }
 
@@ -577,7 +571,10 @@ async fn cmd_status(client: &BaoClient) -> Result<()> {
 async fn cmd_init(client: &BaoClient) -> Result<()> {
     let resp = client.init(1, 1).await?;
     tracing::info!("OpenBao initialized.");
-    tracing::info!("Root token: {}", resp.keys_base64.first().unwrap_or(&"???".to_string()));
+    tracing::info!(
+        "Root token: {}",
+        resp.keys_base64.first().unwrap_or(&"???".to_string())
+    );
     Ok(())
 }
 
@@ -603,7 +600,9 @@ async fn find_openbao_pod() -> Result<String> {
 
 async fn read_token() -> Result<String> {
     // 1. Try K8s secret
-    match crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await {
+    match crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
+        .await
+    {
         Ok(token) if !token.is_empty() => return Ok(token),
         _ => {}
     }
@@ -626,9 +625,9 @@ async fn read_token() -> Result<String> {
 fn parse_kv_pairs(pairs: &[String]) -> Result<std::collections::HashMap<String, String>> {
     let mut map = std::collections::HashMap::new();
     for pair in pairs {
-        let (k, v) = pair.split_once('=').ok_or_else(|| {
-            SunbeamError::Config(format!("Expected key=value, got: {pair}"))
-        })?;
+        let (k, v) = pair
+            .split_once('=')
+            .ok_or_else(|| SunbeamError::Config(format!("Expected key=value, got: {pair}")))?;
         map.insert(k.to_string(), v.to_string());
     }
     Ok(map)

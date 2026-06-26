@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::Args;
 use wfe_server_protos::wfe::v1::ResumeWorkflowRequest;
 
-use crate::info;
 use super::client::AuthClient;
+use crate::info;
 
 #[derive(Debug, Args)]
 /// Resumeargs.
@@ -16,7 +16,11 @@ pub struct ResumeArgs {
 
 /// Run.
 #[tracing::instrument(skip(logger))]
-pub async fn run(logger: &crate::logger::Logger, args: ResumeArgs, mut client: AuthClient) -> Result<()> {
+pub async fn run(
+    logger: &crate::logger::Logger,
+    args: ResumeArgs,
+    mut client: AuthClient,
+) -> Result<()> {
     info!(logger, "wfectl resume workflow", id = args.workflow_id);
     client
         .resume_workflow(ResumeWorkflowRequest {

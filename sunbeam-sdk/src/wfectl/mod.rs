@@ -36,8 +36,8 @@ pub mod validate;
 /// Watch.
 pub mod watch;
 
-use output::OutputFormat;
 use crate::info;
+use output::OutputFormat;
 
 #[derive(Debug, clap::Subcommand)]
 /// Workflowscommand.

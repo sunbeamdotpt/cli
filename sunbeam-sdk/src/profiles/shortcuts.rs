@@ -235,12 +235,16 @@ fn expand_memory(
             .and_then(|v| v.get("spec"))
             .and_then(|v| v.get("containers"))
             .and_then(|v| v.as_array())
-            .ok_or_else(|| SunbeamError::Config("no containers found for memory shortcut".into()))?;
+            .ok_or_else(|| {
+                SunbeamError::Config("no containers found for memory shortcut".into())
+            })?;
 
         for idx in 0..containers.len() {
             overrides.push(Override::Set {
                 resource: addr.into(),
-                field_path: format!("spec/template/spec/containers/{idx}/resources/requests/memory"),
+                field_path: format!(
+                    "spec/template/spec/containers/{idx}/resources/requests/memory"
+                ),
                 value: val_str.clone(),
             });
             overrides.push(Override::Set {
@@ -385,7 +389,8 @@ fn expand_volume_named(
         .ok_or_else(|| SunbeamError::Config("no volumes found".into()))?;
 
     for (idx, vol) in volumes.iter().enumerate() {
-        if vol.get("name")
+        if vol
+            .get("name")
             .and_then(|v| v.as_str())
             .is_some_and(|n| n == vol_name)
         {
@@ -469,9 +474,7 @@ fn expand_container_env_named(
             {
                 return Ok(vec![Override::Set {
                     resource: addr.into(),
-                    field_path: format!(
-                        "spec/template/spec/containers/{idx}/env/{env_idx}/value"
-                    ),
+                    field_path: format!("spec/template/spec/containers/{idx}/env/{env_idx}/value"),
                     value: json_to_string(value),
                 }]);
             }
@@ -587,9 +590,7 @@ fn find_container_index(doc: &Value, name: &str) -> Result<usize> {
                 .filter(|n| *n == name)
                 .map(|_| idx)
         })
-        .ok_or_else(|| {
-            SunbeamError::Config(format!("container '{name}' not found"))
-        })
+        .ok_or_else(|| SunbeamError::Config(format!("container '{name}' not found")))
 }
 
 fn json_to_string(value: &Value) -> String {
@@ -727,11 +728,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert_eq!(overrides[0], Override::Set {
-            resource: "deployment/devtools/gitea".into(),
-            field_path: "spec/replicas".into(),
-            value: "3".into(),
-        });
+        assert_eq!(
+            overrides[0],
+            Override::Set {
+                resource: "deployment/devtools/gitea".into(),
+                field_path: "spec/replicas".into(),
+                value: "3".into(),
+            }
+        );
     }
 
     #[test]
@@ -763,7 +767,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/instances"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/instances")
+        );
     }
 
     #[test]
@@ -795,7 +801,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/resources/requests/storage"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/resources/requests/storage")
+        );
         assert!(matches!(&overrides[0], Override::Set { value, .. } if value == "10Gi"));
     }
 
@@ -834,8 +842,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 2);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/1/resources/requests/memory"));
-        assert!(matches!(&overrides[1], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/1/resources/limits/memory"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/1/resources/requests/memory")
+        );
+        assert!(
+            matches!(&overrides[1], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/1/resources/limits/memory")
+        );
     }
 
     // -- cpu --
@@ -870,7 +882,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/env/0/value"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/env/0/value")
+        );
         assert!(matches!(&overrides[0], Override::Set { value, .. } if value == "baz"));
     }
 
@@ -887,7 +901,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path.contains("env")));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path.contains("env"))
+        );
     }
 
     #[test]
@@ -903,7 +919,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path.contains("containers/1/env")));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path.contains("containers/1/env"))
+        );
     }
 
     // -- volumes --
@@ -921,7 +939,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/volumes/0"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/volumes/0")
+        );
     }
 
     #[test]
@@ -953,7 +973,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/image"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/image")
+        );
     }
 
     // -- ports --
@@ -970,7 +992,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/ports"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/template/spec/containers/0/ports")
+        );
     }
 
     // -- schedule --
@@ -987,7 +1011,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/schedule"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/schedule")
+        );
     }
 
     // -- type --
@@ -1009,7 +1035,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overrides.len(), 1);
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/type"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/type")
+        );
         assert!(matches!(&overrides[0], Override::Set { value, .. } if value == "ClusterIP"));
     }
 
@@ -1042,7 +1070,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/instances"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/instances")
+        );
     }
 
     #[test]
@@ -1057,7 +1087,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/postgresql/parameters/max_connections"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/postgresql/parameters/max_connections")
+        );
     }
 
     #[test]
@@ -1072,7 +1104,9 @@ mod tests {
             &doc,
         )
         .unwrap();
-        assert!(matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/postgresql/parameters"));
+        assert!(
+            matches!(&overrides[0], Override::Set { field_path, .. } if field_path == "spec/postgresql/parameters")
+        );
         // Value should be a JSON object with the new key merged in
         assert!(matches!(&overrides[0], Override::Set { value, .. } if value.contains("work_mem")));
     }

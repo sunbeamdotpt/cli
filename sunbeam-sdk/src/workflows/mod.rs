@@ -8,12 +8,12 @@ pub mod host;
 /// Primitives.
 pub mod primitives;
 
+/// Down.
+pub mod down;
 /// Shared steps.
 pub mod steps;
 /// Up.
 pub mod up;
-/// Down.
-pub mod down;
 /// Verify.
 pub mod verify;
 

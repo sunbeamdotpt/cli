@@ -8,8 +8,8 @@
 use std::fmt;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::{
-    format::{DefaultFields, Writer},
     FmtContext, FormatEvent, FormatFields,
+    format::{DefaultFields, Writer},
 };
 use tracing_subscriber::layer::Layer;
 use tracing_subscriber::registry::LookupSpan;

@@ -6,9 +6,9 @@
 use crate::cli::{SecretsAction, ServiceAction};
 use crate::error::{Result, SunbeamError};
 use crate::logger::Logger;
+use crate::registry::{self, ServiceRegistry};
 use crate::{debug, info};
 use tracing::Instrument;
-use crate::registry::{self, ServiceRegistry};
 
 /// Discover the service registry from the cluster.
 async fn get_registry(logger: &crate::logger::Logger) -> Result<ServiceRegistry> {
@@ -52,10 +52,7 @@ fn resolve_service_profile_inner(
     if let Some(name) = profile_to_load {
         let path = infra_dir.join("profiles").join(format!("{name}.yaml"));
         if path.exists() {
-            Ok(Some((
-                name.clone(),
-                crate::profiles::load_profile(&path)?,
-            )))
+            Ok(Some((name.clone(), crate::profiles::load_profile(&path)?)))
         } else if let Some(p) =
             config.resolve_profile(&crate::config::ProfileRef::Name(name.clone()))
         {
@@ -101,7 +98,11 @@ async fn build_profile_context(
     set: &[String],
     disable: &[String],
     enable: &[String],
-) -> Result<(Option<(String, crate::config::Profile)>, crate::manifest_params::Overrides, Vec<String>)> {
+) -> Result<(
+    Option<(String, crate::config::Profile)>,
+    crate::manifest_params::Overrides,
+    Vec<String>,
+)> {
     let profile = resolve_service_profile(profile_flag).await?;
     let cli_overrides = crate::manifest_params::Overrides::from_cli(set, disable, enable)?;
     let mut skip_namespaces = Vec::new();
@@ -122,12 +123,20 @@ async fn build_profile_context(
                         return Ok((profile, overrides, skip_namespaces));
                     }
                     Err(e) => {
-                        info!(logger, "Failed to resolve profile overrides", error = e.to_string());
+                        info!(
+                            logger,
+                            "Failed to resolve profile overrides",
+                            error = e.to_string()
+                        );
                     }
                 }
             }
             Err(e) => {
-                info!(logger, "Failed to discover manifests for profile resolution", error = e.to_string());
+                info!(
+                    logger,
+                    "Failed to discover manifests for profile resolution",
+                    error = e.to_string()
+                );
             }
         }
     }
@@ -139,12 +148,26 @@ async fn build_profile_context(
 pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> Result<()> {
     debug!(logger, "service dispatch", action = format!("{:?}", action));
     match action {
-        ServiceAction::Status { target } => crate::services::cmd_status(logger, target.as_deref()).await,
-        ServiceAction::Logs { target, follow } => crate::services::cmd_logs(logger, &target, follow).await,
-        ServiceAction::Get { target, output } => crate::services::cmd_get(logger, &target, &output).await,
-        ServiceAction::Restart { target } => crate::services::cmd_restart(logger, target.as_deref()).await,
-        ServiceAction::Check { target } => crate::checks::cmd_check(logger, target.as_deref()).await,
-        ServiceAction::Deploy { target, all, profile } => match target {
+        ServiceAction::Status { target } => {
+            crate::services::cmd_status(logger, target.as_deref()).await
+        }
+        ServiceAction::Logs { target, follow } => {
+            crate::services::cmd_logs(logger, &target, follow).await
+        }
+        ServiceAction::Get { target, output } => {
+            crate::services::cmd_get(logger, &target, &output).await
+        }
+        ServiceAction::Restart { target } => {
+            crate::services::cmd_restart(logger, target.as_deref()).await
+        }
+        ServiceAction::Check { target } => {
+            crate::checks::cmd_check(logger, target.as_deref()).await
+        }
+        ServiceAction::Deploy {
+            target,
+            all,
+            profile,
+        } => match target {
             Some(t) if !all => {
                 let span = tracing::info_span!("deploy", target = %t);
                 cmd_deploy(logger, &t, profile).instrument(span).await
@@ -222,7 +245,10 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
             Ok(())
         }
         ServiceAction::Seed => {
-            info!(logger, "`sunbeam service seed` is deprecated. Use `sunbeam up` instead.");
+            info!(
+                logger,
+                "`sunbeam service seed` is deprecated. Use `sunbeam up` instead."
+            );
             Ok(())
         }
         ServiceAction::Verify => {
@@ -240,7 +266,9 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ServiceAction) -> 
             container,
             command,
         } => cmd_exec(logger, &service, container.as_deref(), &command).await,
-        ServiceAction::PortForward { service, ports } => cmd_port_forward(logger, &service, &ports).await,
+        ServiceAction::PortForward { service, ports } => {
+            cmd_port_forward(logger, &service, &ports).await
+        }
         ServiceAction::Scale { service, replicas } => cmd_scale(logger, &service, replicas).await,
         ServiceAction::Top { service } => cmd_top(logger, &service).await,
         ServiceAction::Edit { service } => cmd_edit(logger, &service).await,
@@ -278,7 +306,6 @@ async fn cmd_delete_job(logger: &Logger, target: &str) -> Result<()> {
     }
 }
 
-
 /// Helper: run a named workflow via the in-process engine.
 async fn run_workflow(
     logger: &Logger,
@@ -301,7 +328,10 @@ async fn run_workflow(
     // Register the workflow definition
     match name {
         "seed" => {
-            info!(logger, "The seed workflow has been merged into up. Use sunbeam up instead.");
+            info!(
+                logger,
+                "The seed workflow has been merged into up. Use sunbeam up instead."
+            );
         }
         "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
@@ -400,7 +430,11 @@ async fn cmd_deploy(
         let all_resolved = reg.resolve(target);
         let skipped_count = all_resolved.len() - resolved.len();
         if skipped_count > 0 {
-            info!(logger, "Skipped services in excluded namespaces", count = skipped_count);
+            info!(
+                logger,
+                "Skipped services in excluded namespaces",
+                count = skipped_count
+            );
         }
     }
 
@@ -421,7 +455,12 @@ async fn cmd_deploy(
 
     for svc in &resolved {
         for deploy in &svc.deployments {
-            info!(logger, "Restarting deployment", namespace = svc.namespace.as_str(), deployment = deploy.as_str());
+            info!(
+                logger,
+                "Restarting deployment",
+                namespace = svc.namespace.as_str(),
+                deployment = deploy.as_str()
+            );
             crate::kube::kube_rollout_restart(&svc.namespace, deploy).await?;
         }
     }
@@ -441,24 +480,32 @@ async fn cmd_secrets(logger: &Logger, service: &str, action: Option<SecretsActio
         SunbeamError::Other(format!("Service '{service}' has no secrets in OpenBao"))
     })?;
 
-    let ob_pod =
-        crate::kube::find_pod_by_label("openbao", "app.kubernetes.io/name=openbao,component=server")
-            .await
-            .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
+    let ob_pod = crate::kube::find_pod_by_label(
+        "openbao",
+        "app.kubernetes.io/name=openbao,component=server",
+    )
+    .await
+    .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
 
     let pf = crate::secrets::port_forward("openbao", &ob_pod, 8200).await?;
     let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
 
-    let token = crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
-        .await
-        .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
+    let token =
+        crate::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
+            .await
+            .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
 
     let bao = crate::openbao::BaoClient::with_token(&bao_url, &token);
 
     match action {
         None => match bao.kv_get("secret", kv_path).await? {
             Some(data) => {
-                info!(logger, "Secrets for service", service = service, path = format!("secret/{kv_path}"));
+                info!(
+                    logger,
+                    "Secrets for service",
+                    service = service,
+                    path = format!("secret/{kv_path}")
+                );
                 let mut keys: Vec<&String> = data.keys().collect();
                 keys.sort();
                 for key in keys {
@@ -472,13 +519,22 @@ async fn cmd_secrets(logger: &Logger, service: &str, action: Option<SecretsActio
                 }
             }
             None => {
-                info!(logger, "No secrets found", path = format!("secret/{kv_path}"));
+                info!(
+                    logger,
+                    "No secrets found",
+                    path = format!("secret/{kv_path}")
+                );
             }
         },
         Some(SecretsAction::Get { key }) => {
             let value = bao.kv_get_field("secret", kv_path, &key).await?;
             if value.is_empty() {
-                info!(logger, "Field not found", key = key, path = format!("secret/{kv_path}"));
+                info!(
+                    logger,
+                    "Field not found",
+                    key = key,
+                    path = format!("secret/{kv_path}")
+                );
             } else {
                 println!("{value}");
             }
@@ -525,7 +581,12 @@ async fn cmd_shell(logger: &Logger, service: &str) -> Result<()> {
         bail!("Service '{service}' has an empty shell-command annotation");
     }
 
-    info!(logger, "Connecting to service", service = service, pod = pod);
+    info!(
+        logger,
+        "Connecting to service",
+        service = service,
+        pod = pod
+    );
     let client = crate::kube::get_client().await?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &svc.namespace);
     let code = crate::exec::pod_exec_interactive(&pods, &pod, None, &argv).await?;
@@ -545,7 +606,12 @@ async fn cmd_describe(logger: &Logger, service: &str) -> Result<()> {
 }
 
 /// Exec into a service pod with an optional command.
-async fn cmd_exec(logger: &Logger, service: &str, container: Option<&str>, command: &[String]) -> Result<()> {
+async fn cmd_exec(
+    logger: &Logger,
+    service: &str,
+    container: Option<&str>,
+    command: &[String],
+) -> Result<()> {
     use k8s_openapi::api::core::v1::Pod;
     use kube::api::Api;
 
@@ -595,7 +661,12 @@ async fn cmd_port_forward(logger: &Logger, service: &str, ports: &[String]) -> R
         mappings.push((local, remote));
     }
 
-    info!(logger, "Port-forwarding to service", service = service, pod = pod);
+    info!(
+        logger,
+        "Port-forwarding to service",
+        service = service,
+        pod = pod
+    );
     crate::port_forward::serve_port_forward(logger, ns, pod, mappings).await
 }
 
@@ -605,7 +676,12 @@ async fn cmd_scale(logger: &Logger, service: &str, replicas: u32) -> Result<()> 
     use kube::api::{Api, Patch, PatchParams};
 
     let (ns, deploy) = resolve_service(logger, service).await?;
-    info!(logger, "Scaling service to replicas", service = service, replicas = replicas);
+    info!(
+        logger,
+        "Scaling service to replicas",
+        service = service,
+        replicas = replicas
+    );
 
     let client = crate::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
@@ -614,7 +690,12 @@ async fn cmd_scale(logger: &Logger, service: &str, replicas: u32) -> Result<()> 
         .await
         .map_err(|e| SunbeamError::Other(format!("scale patch failed: {e}")))?;
 
-    info!(logger, "scaled to replicas", service = service, replicas = replicas);
+    info!(
+        logger,
+        "scaled to replicas",
+        service = service,
+        replicas = replicas
+    );
     Ok(())
 }
 
@@ -785,8 +866,8 @@ async fn cmd_edit(logger: &Logger, service: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::config::{Context, Profile, ProfileRef, Rule, SunbeamConfig};
+    use std::collections::HashMap;
 
     // -------------------------------------------------------------------
     // resolve_service_profile_inner
@@ -805,7 +886,8 @@ mod tests {
         std::fs::write(&profile_path, serde_yaml::to_string(&profile).unwrap()).unwrap();
 
         let config = SunbeamConfig::default();
-        let result = resolve_service_profile_inner(Some("test".to_string()), &config, tmp.path()).unwrap();
+        let result =
+            resolve_service_profile_inner(Some("test".to_string()), &config, tmp.path()).unwrap();
         assert!(result.is_some());
         let (name, p) = result.unwrap();
         assert_eq!(name, "test");
@@ -843,12 +925,9 @@ mod tests {
         profile.skip_ory = true;
         config.profiles.insert("lima".to_string(), profile);
 
-        let result = resolve_service_profile_inner(
-            None,
-            &config,
-            std::path::Path::new("/nonexistent"),
-        )
-        .unwrap();
+        let result =
+            resolve_service_profile_inner(None, &config, std::path::Path::new("/nonexistent"))
+                .unwrap();
         assert!(result.is_some());
         let (name, _) = result.unwrap();
         assert_eq!(name, "lima");
@@ -871,12 +950,9 @@ mod tests {
     #[test]
     fn test_resolve_service_profile_no_profile_configured() {
         let config = SunbeamConfig::default();
-        let result = resolve_service_profile_inner(
-            None,
-            &config,
-            std::path::Path::new("/nonexistent"),
-        )
-        .unwrap();
+        let result =
+            resolve_service_profile_inner(None, &config, std::path::Path::new("/nonexistent"))
+                .unwrap();
         assert!(result.is_none());
     }
 

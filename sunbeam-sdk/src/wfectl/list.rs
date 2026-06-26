@@ -4,9 +4,9 @@ use anyhow::Result;
 use clap::{Args, ValueEnum};
 use wfe_server_protos::wfe::v1::{SearchWorkflowsRequest, WorkflowStatus};
 
-use crate::info;
 use super::client::AuthClient;
 use super::output::{OutputFormat, fmt_proto_time, render_table};
+use crate::info;
 
 #[derive(Debug, Args)]
 /// Listargs.
@@ -52,7 +52,12 @@ impl From<StatusFilter> for WorkflowStatus {
 
 /// Run.
 #[tracing::instrument(skip(logger))]
-pub async fn run(logger: &crate::logger::Logger, args: ListArgs, mut client: AuthClient, format: OutputFormat) -> Result<()> {
+pub async fn run(
+    logger: &crate::logger::Logger,
+    args: ListArgs,
+    mut client: AuthClient,
+    format: OutputFormat,
+) -> Result<()> {
     info!(logger, "wfectl list workflows");
     let status: WorkflowStatus = args
         .status

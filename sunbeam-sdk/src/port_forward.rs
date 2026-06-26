@@ -32,7 +32,12 @@ pub async fn serve_port_forward(
         let listener = TcpListener::bind(("127.0.0.1", local))
             .await
             .map_err(|e| SunbeamError::Other(format!("failed to bind 127.0.0.1:{local}: {e}")))?;
-        info!(logger, "Port-forward mapping active", local = local, remote = remote);
+        info!(
+            logger,
+            "Port-forward mapping active",
+            local = local,
+            remote = remote
+        );
 
         let handle = tokio::spawn(async move {
             loop {
@@ -50,7 +55,13 @@ pub async fn serve_port_forward(
                     let mut pf = match pods.portforward(&pod_name, &[remote]).await {
                         Ok(pf) => pf,
                         Err(e) => {
-                            info!(logger_inner, "portforward failed", pod = pod_name, remote = remote, error = e);
+                            info!(
+                                logger_inner,
+                                "portforward failed",
+                                pod = pod_name,
+                                remote = remote,
+                                error = e
+                            );
                             return;
                         }
                     };

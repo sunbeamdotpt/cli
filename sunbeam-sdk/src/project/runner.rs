@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::error::{Result, SunbeamError};
-use crate::project::{ProjectConfig, Target};
 use crate::project::config::{ExecCommand, ExecTarget, WorkflowTarget};
+use crate::project::{ProjectConfig, Target};
 use crate::{error, info};
 
 /// Outcome of attempting to run a verb.
@@ -49,7 +49,12 @@ pub async fn run(
     verb: &str,
     opts: &RunOptions,
 ) -> Result<RunOutcome> {
-    info!(logger, "project run", verb = verb, project = cfg.project.name);
+    info!(
+        logger,
+        "project run",
+        verb = verb,
+        project = cfg.project.name
+    );
     match cfg.target(verb) {
         Target::Skip(_) => Ok(RunOutcome::Skipped),
         Target::Exec(t) => run_exec(verb, project_root, &t, opts).await,
@@ -150,12 +155,12 @@ async fn run_workflow(
     };
     let host = crate::workflows::host::create_host(&ctx_name).await?;
 
-    let workflow_id = workflow_path
-        .to_str()
-        .ok_or_else(|| SunbeamError::Config(format!(
+    let workflow_id = workflow_path.to_str().ok_or_else(|| {
+        SunbeamError::Config(format!(
             "workflow path contains non-UTF-8: {}",
             workflow_path.display()
-        )))?;
+        ))
+    })?;
 
     let instance = wfe::run_workflow_sync(
         &host,
@@ -325,7 +330,9 @@ mod tests {
         let cfg = empty_cfg();
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Skipped);
     }
 
@@ -334,7 +341,9 @@ mod tests {
         let cfg = cfg_with_target("test", Target::Skip(SkipMarker::Skip));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Skipped);
     }
 
@@ -343,7 +352,9 @@ mod tests {
         let cfg = cfg_with_target("build", shell("true"));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -352,7 +363,9 @@ mod tests {
         let cfg = cfg_with_target("build", shell("false"));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let err = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default()).await.unwrap_err();
+        let err = run(&logger, &cfg, tmp.path(), "build", &RunOptions::default())
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("build"), "msg={msg}");
         assert!(msg.contains("exit status"), "msg={msg}");
@@ -363,7 +376,9 @@ mod tests {
         let cfg = cfg_with_target("lint", argv(&["echo", "hi"]));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let out = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -372,7 +387,9 @@ mod tests {
         let cfg = cfg_with_target("lint", argv(&["this-binary-should-not-exist-anywhere"]));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let err = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default()).await.unwrap_err();
+        let err = run(&logger, &cfg, tmp.path(), "lint", &RunOptions::default())
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("lint"));
     }
 
@@ -412,7 +429,9 @@ mod tests {
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let mut opts = RunOptions::default();
         opts.dry_run = true;
-        let out = run(&logger, &cfg, tmp.path(), "build", &opts).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "build", &opts)
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
@@ -429,16 +448,17 @@ mod tests {
             env: BTreeMap::new(),
         });
         let cfg = cfg_with_target("test", target);
-        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default()).await.unwrap();
+        let out = run(&logger, &cfg, tmp.path(), "test", &RunOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out, RunOutcome::Ran);
     }
 
     #[test]
     fn yaml_to_json_covers_all_variants() {
-        let y: serde_yaml::Value = serde_yaml::from_str(
-            "- null\n- true\n- 42\n- 3.5\n- hi\n- [1, 2]\n- {a: 1}\n",
-        )
-        .unwrap();
+        let y: serde_yaml::Value =
+            serde_yaml::from_str("- null\n- true\n- 42\n- 3.5\n- hi\n- [1, 2]\n- {a: 1}\n")
+                .unwrap();
         let j = yaml_to_json(&y);
         let arr = j.as_array().unwrap();
         assert!(arr[0].is_null());

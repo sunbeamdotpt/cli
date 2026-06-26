@@ -15,7 +15,11 @@ use crate::info;
 /// Lock and queue providers are in-memory (single-process, non-distributed).
 pub async fn create_host_at(db_path: &std::path::Path) -> Result<wfe::WorkflowHost> {
     let logger = crate::logger::Logger::new(crate::logger::TracingSink);
-    info!(logger, "Opening workflow database...", path = db_path.display());
+    info!(
+        logger,
+        "Opening workflow database...",
+        path = db_path.display()
+    );
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SunbeamError::Io {
             context: format!("create workflow db dir: {}", parent.display()),

@@ -324,12 +324,22 @@ pub async fn discover(
     .await?;
 
     // Query DaemonSets
-    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(logger, client, &mut services, "DaemonSet")
-        .await?;
+    discover_resources::<k8s_openapi::api::apps::v1::DaemonSet>(
+        logger,
+        client,
+        &mut services,
+        "DaemonSet",
+    )
+    .await?;
 
     // Query ConfigMaps (for virtual/external services)
-    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(logger, client, &mut services, "ConfigMap")
-        .await?;
+    discover_resources::<k8s_openapi::api::core::v1::ConfigMap>(
+        logger,
+        client,
+        &mut services,
+        "ConfigMap",
+    )
+    .await?;
 
     Ok(ServiceRegistry { services })
 }
@@ -355,7 +365,12 @@ where
         .list(&lp)
         .await
         .map_err(|e| crate::error::SunbeamError::kube(format!("discover {kind}: {e}")))?;
-    debug!(logger, "discover_resources", kind = kind, count = list.items.len());
+    debug!(
+        logger,
+        "discover_resources",
+        kind = kind,
+        count = list.items.len()
+    );
 
     for resource in &list.items {
         let meta = resource.meta();
@@ -439,7 +454,13 @@ where
             })
             .unwrap_or_default();
 
-        debug!(logger, "discover_resources added", kind = kind, service_name = service_name, ns = ns);
+        debug!(
+            logger,
+            "discover_resources added",
+            kind = kind,
+            service_name = service_name,
+            ns = ns
+        );
         services.insert(
             service_name.clone(),
             ServiceDefinition {

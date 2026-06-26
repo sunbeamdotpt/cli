@@ -3,9 +3,9 @@
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
+use crate::info;
 use crate::kube as k;
 use crate::openbao::BaoClient;
-use crate::info;
 
 use crate::secrets;
 use crate::workflows::data::VerifyData;
@@ -71,9 +71,14 @@ pub struct GetRootToken;
 impl StepBody for GetRootToken {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         tracing::debug!("get_root_token");
-        let root_token = k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
-            .await
-            .map_err(|e| step_err(format!("Could not read openbao-bootstrap-token secret: {e}")))?;
+        let root_token =
+            k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
+                .await
+                .map_err(|e| {
+                    step_err(format!(
+                        "Could not read openbao-bootstrap-token secret: {e}"
+                    ))
+                })?;
 
         tracing::info!("Root token retrieved.");
 
@@ -142,9 +147,16 @@ impl Default for ApplyVaultAuth {
 impl StepBody for ApplyVaultAuth {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let logger = &self.logger;
-        info!(logger, "Creating VaultAuth", namespace = TEST_NS, name = TEST_NAME);
-        k::kube_apply(logger, &format!(
-            r#"
+        info!(
+            logger,
+            "Creating VaultAuth",
+            namespace = TEST_NS,
+            name = TEST_NAME
+        );
+        k::kube_apply(
+            logger,
+            &format!(
+                r#"
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultAuth
 metadata:
@@ -157,7 +169,8 @@ spec:
     role: vso
     serviceAccount: default
 "#
-        ))
+            ),
+        )
         .await
         .map_err(|e| step_err(e.to_string()))?;
 
@@ -184,9 +197,16 @@ impl Default for ApplyVaultStaticSecret {
 impl StepBody for ApplyVaultStaticSecret {
     async fn run(&mut self, _ctx: &StepExecutionContext<'_>) -> wfe_core::Result<ExecutionResult> {
         let logger = &self.logger;
-        info!(logger, "Creating VaultStaticSecret", namespace = TEST_NS, name = TEST_NAME);
-        k::kube_apply(logger, &format!(
-            r#"
+        info!(
+            logger,
+            "Creating VaultStaticSecret",
+            namespace = TEST_NS,
+            name = TEST_NAME
+        );
+        k::kube_apply(
+            logger,
+            &format!(
+                r#"
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultStaticSecret
 metadata:
@@ -203,7 +223,8 @@ spec:
     create: true
     overwrite: true
 "#
-        ))
+            ),
+        )
         .await
         .map_err(|e| step_err(e.to_string()))?;
 

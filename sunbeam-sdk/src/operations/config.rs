@@ -174,8 +174,8 @@ impl RepoBucket {
 impl WorkspaceConfig {
     /// Load and validate a `sunbeam.workspace.yaml`.
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_ctx(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_ctx(|| format!("reading {}", path.display()))?;
         Self::from_str(&text).with_ctx(|| format!("parsing {}", path.display()))
     }
 
@@ -345,7 +345,10 @@ repos:
         let tuwunel = &cfg.repos.owned["tuwunel"];
         assert_eq!(tuwunel.path, "tuwunel");
         assert_eq!(tuwunel.kind.as_deref(), Some("owned-fork"));
-        assert_eq!(tuwunel.upstream.as_deref(), Some("matrix-construct/tuwunel"));
+        assert_eq!(
+            tuwunel.upstream.as_deref(),
+            Some("matrix-construct/tuwunel")
+        );
     }
 
     #[test]

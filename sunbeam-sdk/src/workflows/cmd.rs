@@ -133,23 +133,28 @@ EXAMPLE:
 ""#)]
     Definitions(crate::wfectl::definitions::DefinitionsArgs),
     /// Start a registered workflow instance on the server.
-    #[command(name = "start", long_about = r#"""Start a registered workflow on the remote server.
+    #[command(
+        name = "start",
+        long_about = r#"""Start a registered workflow on the remote server.
 
 Creates a new workflow instance from a previously registered definition.
 Returns the instance ID for tracking.
 
 EXAMPLE:
   sunbeam workflow -t builds start --definition deploy --version 1
-""#)]
+""#
+    )]
     Start(crate::wfectl::run::RunArgs),
     /// Get a workflow instance by ID or name.
-    #[command(long_about = r#"""Get workflow instance details from the remote server.
+    #[command(
+        long_about = r#"""Get workflow instance details from the remote server.
 
 Similar to `status` but queries the server-side state rather than local SQLite.
 
 EXAMPLE:
   sunbeam workflow -t builds get <instance-id>
-""#)]
+""#
+    )]
     Get(crate::wfectl::get::GetArgs),
     /// Suspend a running workflow.
     #[command(long_about = r#"""Suspend a running workflow instance.
@@ -386,7 +391,11 @@ async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) 
 
 /// Inner dispatch that operates on an already-created host. Testable.
 #[tracing::instrument(skip(h, logger))]
-pub async fn dispatch_with_host(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, action: WorkflowAction) -> Result<()> {
+pub async fn dispatch_with_host(
+    logger: &crate::logger::Logger,
+    h: &wfe::WorkflowHost,
+    action: WorkflowAction,
+) -> Result<()> {
     match action {
         WorkflowAction::List { status, .. } => list_workflows(logger, h, &status).await,
         WorkflowAction::Status { id } => show_workflow_status(logger, h, &id).await,
@@ -421,14 +430,19 @@ async fn dispatch_remote(
             .map_err(|e| SunbeamError::Other(format!("{e:#}")));
     }
 
-    let token = crate::wfectl::resolve_token(&domain)
-        .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
+    let token =
+        crate::wfectl::resolve_token(&domain).map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
     let client = crate::wfectl::client::build(logger, &target.url, &token)
         .await
         .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
 
     let result = match action {
-        WorkflowAction::List { query, status, limit, skip } => {
+        WorkflowAction::List {
+            query,
+            status,
+            limit,
+            skip,
+        } => {
             let args = crate::wfectl::list::ListArgs {
                 query,
                 status: parse_status_filter(&status),
@@ -441,33 +455,17 @@ async fn dispatch_remote(
             let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
             crate::wfectl::cancel::run(logger, args, client).await
         }
-        WorkflowAction::Register(args) => {
-            crate::wfectl::register::run(args, client, output).await
-        }
+        WorkflowAction::Register(args) => crate::wfectl::register::run(args, client, output).await,
         WorkflowAction::Definitions(args) => {
             crate::wfectl::definitions::run(args, client, output).await
         }
-        WorkflowAction::Start(args) => {
-            crate::wfectl::run::run(logger, args, client, output).await
-        }
-        WorkflowAction::Get(args) => {
-            crate::wfectl::get::run(logger, args, client, output).await
-        }
-        WorkflowAction::Suspend(args) => {
-            crate::wfectl::suspend::run(logger, args, client).await
-        }
-        WorkflowAction::Resume(args) => {
-            crate::wfectl::resume::run(logger, args, client).await
-        }
-        WorkflowAction::Publish(args) => {
-            crate::wfectl::publish::run(args, client, output).await
-        }
-        WorkflowAction::Watch(args) => {
-            crate::wfectl::watch::run(args, client).await
-        }
-        WorkflowAction::Logs(args) => {
-            crate::wfectl::logs::run(logger, args, client).await
-        }
+        WorkflowAction::Start(args) => crate::wfectl::run::run(logger, args, client, output).await,
+        WorkflowAction::Get(args) => crate::wfectl::get::run(logger, args, client, output).await,
+        WorkflowAction::Suspend(args) => crate::wfectl::suspend::run(logger, args, client).await,
+        WorkflowAction::Resume(args) => crate::wfectl::resume::run(logger, args, client).await,
+        WorkflowAction::Publish(args) => crate::wfectl::publish::run(args, client, output).await,
+        WorkflowAction::Watch(args) => crate::wfectl::watch::run(args, client).await,
+        WorkflowAction::Logs(args) => crate::wfectl::logs::run(logger, args, client).await,
         WorkflowAction::SearchLogs(args) => {
             crate::wfectl::search_logs::run(args, client, output).await
         }
@@ -484,7 +482,10 @@ async fn dispatch_remote(
 
 fn extract_domain(url: &str) -> Result<String> {
     // Strip scheme if present.
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
     // Strip path/port if present.
     let host = rest.split('/').next().unwrap_or(rest);
     Ok(host.to_string())
@@ -553,7 +554,12 @@ fn list_targets() -> Result<()> {
         });
     }
 
-    output::render_list(&rows, &["NAME", "URL"], target_row, crate::output::OutputFormat::Table)?;
+    output::render_list(
+        &rows,
+        &["NAME", "URL"],
+        target_row,
+        crate::output::OutputFormat::Table,
+    )?;
     Ok(())
 }
 
@@ -563,7 +569,11 @@ fn list_targets() -> Result<()> {
 
 /// List workflow instances.
 #[tracing::instrument(skip(h, logger))]
-pub async fn list_workflows(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, _status_filter: &str) -> Result<()> {
+pub async fn list_workflows(
+    logger: &crate::logger::Logger,
+    h: &wfe::WorkflowHost,
+    _status_filter: &str,
+) -> Result<()> {
     let now = chrono::Utc::now();
     let ids = h
         .persistence()
@@ -599,10 +609,18 @@ pub async fn list_workflows(logger: &crate::logger::Logger, h: &wfe::WorkflowHos
 
 /// Show status of a single workflow instance.
 #[tracing::instrument(skip(h, logger))]
-pub async fn show_workflow_status(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+pub async fn show_workflow_status(
+    logger: &crate::logger::Logger,
+    h: &wfe::WorkflowHost,
+    id: &str,
+) -> Result<()> {
     match h.get_workflow(id).await {
         Ok(wf) => {
-            info!(logger, "Workflow:", definition_id = wf.workflow_definition_id);
+            info!(
+                logger,
+                "Workflow:",
+                definition_id = wf.workflow_definition_id
+            );
             info!(logger, "Status:", status = format!("{:?}", wf.status));
             info!(logger, "Created:", create_time = wf.create_time);
             if let Some(ct) = wf.complete_time {
@@ -642,7 +660,11 @@ pub async fn show_workflow_status(logger: &crate::logger::Logger, h: &wfe::Workf
 
 /// Resume a suspended/failed workflow.
 #[tracing::instrument(skip(h, logger))]
-pub async fn retry_workflow(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+pub async fn retry_workflow(
+    logger: &crate::logger::Logger,
+    h: &wfe::WorkflowHost,
+    id: &str,
+) -> Result<()> {
     h.resume_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("resume workflow: {e}")))?;
@@ -652,7 +674,11 @@ pub async fn retry_workflow(logger: &crate::logger::Logger, h: &wfe::WorkflowHos
 
 /// Terminate a running workflow.
 #[tracing::instrument(skip(h, logger))]
-pub async fn cancel_workflow(logger: &crate::logger::Logger, h: &wfe::WorkflowHost, id: &str) -> Result<()> {
+pub async fn cancel_workflow(
+    logger: &crate::logger::Logger,
+    h: &wfe::WorkflowHost,
+    id: &str,
+) -> Result<()> {
     h.terminate_workflow(id)
         .await
         .map_err(|e| SunbeamError::Other(format!("terminate workflow: {e}")))?;

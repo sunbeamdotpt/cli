@@ -3,6 +3,6 @@
 pub mod teardown;
 
 pub use teardown::{
-    delete_lima_vm, DeleteLimaVm, DeleteNamespaces, DiscoverNamespaces,
-    ForceDeleteStuckNamespaces, WaitForTermination,
+    DeleteLimaVm, DeleteNamespaces, DiscoverNamespaces, ForceDeleteStuckNamespaces,
+    WaitForTermination, delete_lima_vm,
 };

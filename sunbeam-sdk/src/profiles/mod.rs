@@ -49,13 +49,13 @@ pub struct ManifestResource {
 
 /// Load a profile from a YAML file on disk.
 pub fn load_profile(path: &std::path::Path) -> Result<Profile> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| crate::error::SunbeamError::Io {
-            context: format!("read profile {}", path.display()),
-            source: e,
-        })?;
-    serde_yaml::from_str(&content)
-        .map_err(|e| crate::error::SunbeamError::Config(format!("parse profile {}: {e}", path.display())))
+    let content = std::fs::read_to_string(path).map_err(|e| crate::error::SunbeamError::Io {
+        context: format!("read profile {}", path.display()),
+        source: e,
+    })?;
+    serde_yaml::from_str(&content).map_err(|e| {
+        crate::error::SunbeamError::Config(format!("parse profile {}: {e}", path.display()))
+    })
 }
 
 /// Discover all manifest resources under the given base directory.
@@ -65,11 +65,10 @@ pub fn load_profile(path: &std::path::Path) -> Result<Profile> {
 pub async fn discover_manifests(base_dir: &std::path::Path) -> Result<Vec<ManifestResource>> {
     let mut resources = Vec::new();
 
-    let entries = std::fs::read_dir(base_dir)
-        .map_err(|e| crate::error::SunbeamError::Io {
-            context: format!("read base dir: {}", base_dir.display()),
-            source: e,
-        })?;
+    let entries = std::fs::read_dir(base_dir).map_err(|e| crate::error::SunbeamError::Io {
+        context: format!("read base dir: {}", base_dir.display()),
+        source: e,
+    })?;
 
     for entry in entries.flatten() {
         let path = entry.path();

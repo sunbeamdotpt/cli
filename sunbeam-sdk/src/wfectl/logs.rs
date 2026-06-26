@@ -5,8 +5,8 @@ use clap::Args;
 use futures::StreamExt;
 use wfe_server_protos::wfe::v1::{LogStream, StreamLogsRequest};
 
-use crate::info;
 use super::client::AuthClient;
+use crate::info;
 
 #[derive(Debug, Args)]
 /// Logsargs.
@@ -23,7 +23,11 @@ pub struct LogsArgs {
 
 /// Run.
 #[tracing::instrument(skip(logger))]
-pub async fn run(logger: &crate::logger::Logger, args: LogsArgs, mut client: AuthClient) -> Result<()> {
+pub async fn run(
+    logger: &crate::logger::Logger,
+    args: LogsArgs,
+    mut client: AuthClient,
+) -> Result<()> {
     info!(logger, "wfectl logs workflow", id = args.workflow_id);
     let mut stream = client
         .stream_logs(StreamLogsRequest {

@@ -174,12 +174,7 @@ mod tests {
 
     #[test]
     fn diamond_deps() {
-        let g = graph(&[
-            ("d", &["b", "c"]),
-            ("b", &["a"]),
-            ("c", &["a"]),
-            ("a", &[]),
-        ]);
+        let g = graph(&[("d", &["b", "c"]), ("b", &["a"]), ("c", &["a"]), ("a", &[])]);
         let sorted = sort(&g).unwrap();
         assert_eq!(sorted.0.len(), 3);
         assert_eq!(sorted.0[0], vec!["a".to_string()]);
@@ -226,7 +221,12 @@ mod tests {
         let flat = sorted.flatten();
         assert_eq!(
             flat,
-            vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()]
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string()
+            ]
         );
     }
 }

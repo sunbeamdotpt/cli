@@ -141,12 +141,13 @@ impl StepBody for EnsureBuildKit {
                 tracing::info!(msg = "BuildKit is present.", count = list.items.len());
                 Ok(ExecutionResult::next())
             }
-            Ok(list) => Err(wfe_core::WfeError::StepExecution(
-                format!("BuildKit pods not found (count={}) -- image builds may not work.", list.items.len())
-            )),
-            Err(e) => Err(wfe_core::WfeError::StepExecution(
-                format!("BuildKit pod list failed: {e}")
-            )),
+            Ok(list) => Err(wfe_core::WfeError::StepExecution(format!(
+                "BuildKit pods not found (count={}) -- image builds may not work.",
+                list.items.len()
+            ))),
+            Err(e) => Err(wfe_core::WfeError::StepExecution(format!(
+                "BuildKit pod list failed: {e}"
+            ))),
         }
     }
 }
@@ -179,8 +180,7 @@ impl StepBody for EnsureSeaweedFSBuckets {
             .map_err(|e| wfe_core::WfeError::StepExecution(e.to_string()))?;
         let pods: kube::Api<k8s_openapi::api::core::v1::Pod> =
             kube::Api::namespaced(client.clone(), "storage");
-        let lp = kube::api::ListParams::default()
-            .labels("app=seaweedfs-master");
+        let lp = kube::api::ListParams::default().labels("app=seaweedfs-master");
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         let mut attempt = 0;
@@ -290,7 +290,8 @@ impl StepBody for WaitForCNPGWebhook {
             attempt += 1;
             if Instant::now() > deadline {
                 return Err(wfe_core::WfeError::StepExecution(
-                    "Timed out waiting for CNPG webhook (3 min). Check: kubectl get pods -n data".into(),
+                    "Timed out waiting for CNPG webhook (3 min). Check: kubectl get pods -n data"
+                        .into(),
                 ));
             }
 
@@ -301,7 +302,9 @@ impl StepBody for WaitForCNPGWebhook {
                     .as_ref()
                     .and_then(|s| s.conditions.as_ref())
                     .map_or(false, |conds| {
-                        conds.iter().any(|c| c.type_ == "Available" && c.status == "True")
+                        conds
+                            .iter()
+                            .any(|c| c.type_ == "Available" && c.status == "True")
                     }),
                 Ok(None) => false,
                 Err(e) => {

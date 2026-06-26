@@ -1,7 +1,7 @@
 //! Dispatch for `sunbeam operations` subcommands.
 
 use crate::cli::{ComposeAction, OperationsAction, StackAction};
-use crate::discovery::{find_workspace_root, WORKSPACE_FILE};
+use crate::discovery::{WORKSPACE_FILE, find_workspace_root};
 use crate::error::Result;
 use crate::operations::compose::ComposeOptions;
 use crate::operations::config::{RepoBucket, WorkspaceConfig};
@@ -10,8 +10,16 @@ use crate::{debug, info};
 /// Dispatch.
 #[tracing::instrument(skip(logger))]
 pub async fn dispatch(logger: &crate::logger::Logger, action: OperationsAction) -> Result<()> {
-    debug!(logger, "operations dispatch", action = format!("{:?}", action));
-    info!(logger, "operations dispatch", action = format!("{:?}", action));
+    debug!(
+        logger,
+        "operations dispatch",
+        action = format!("{:?}", action)
+    );
+    info!(
+        logger,
+        "operations dispatch",
+        action = format!("{:?}", action)
+    );
     match action {
         OperationsAction::Compose { action } => {
             let (ws, ws_root) = load_workspace().await?;
@@ -36,16 +44,18 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: OperationsAction) 
                 RepoBucket::Retired,
             ];
             for bucket in buckets {
-                let entries: Vec<_> = ws
-                    .iter_repos()
-                    .filter(|e| e.bucket == bucket)
-                    .collect();
+                let entries: Vec<_> = ws.iter_repos().filter(|e| e.bucket == bucket).collect();
                 if entries.is_empty() {
                     continue;
                 }
                 info!(logger, "bucket", name = bucket.as_str());
                 for e in entries {
-                    info!(logger, "repo entry", name = e.name, path = e.repo.path.as_str());
+                    info!(
+                        logger,
+                        "repo entry",
+                        name = e.name,
+                        path = e.repo.path.as_str()
+                    );
                 }
             }
             Ok(())
@@ -149,12 +159,9 @@ async fn dispatch_stack(
             )?;
             crate::operations::stack::save(&ws, &ws_root)
         }
-        StackAction::Apply { name } => {
-            crate::operations::stack::apply(&ws, &ws_root, &name).await
-        }
+        StackAction::Apply { name } => crate::operations::stack::apply(&ws, &ws_root, &name).await,
         StackAction::Diff { left, right } => {
-            let entries =
-                crate::operations::stack::diff(&ws, &ws_root, &left, right.as_deref())?;
+            let entries = crate::operations::stack::diff(&ws, &ws_root, &left, right.as_deref())?;
             print_diff(logger, entries);
             Ok(())
         }
@@ -182,12 +189,19 @@ fn print_stack_table(summaries: Vec<crate::operations::stack::StackSummary>) {
     println!("{table}");
 }
 
-fn print_diff(logger: &crate::logger::Logger, entries: Vec<crate::operations::stack::StackDiffEntry>) {
+fn print_diff(
+    logger: &crate::logger::Logger,
+    entries: Vec<crate::operations::stack::StackDiffEntry>,
+) {
     for e in entries {
         let left = e.left.as_deref().unwrap_or("(missing)");
         let right = e.right.as_deref().unwrap_or("(missing)");
-        info!(logger, "diff entry", project = e.project, left = left, right = right);
+        info!(
+            logger,
+            "diff entry",
+            project = e.project,
+            left = left,
+            right = right
+        );
     }
 }
-
-

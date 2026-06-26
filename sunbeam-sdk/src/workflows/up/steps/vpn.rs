@@ -115,7 +115,10 @@ impl StepBody for MintVpnPreAuthKeys {
             write_router_secret(&key).await.map_err(|e| {
                 wfe_core::WfeError::StepExecution(format!("write router secret: {e}"))
             })?;
-            info!(logger, "Minted router pre-auth key -> Secret vpn/subnet-router-authkey");
+            info!(
+                logger,
+                "Minted router pre-auth key -> Secret vpn/subnet-router-authkey"
+            );
         } else {
             info!(logger, "Router Secret already present - skipping mint.");
         }
@@ -130,7 +133,10 @@ impl StepBody for MintVpnPreAuthKeys {
                     "Failed to persist user key to config: {e}"
                 ))
             })?;
-            info!(logger, "Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)");
+            info!(
+                logger,
+                "Minted user pre-auth key -> ~/.sunbeam/config.json (vpn-auth-key)"
+            );
         } else {
             info!(logger, "User vpn-auth-key already present - skipping mint.");
         }

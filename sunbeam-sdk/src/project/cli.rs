@@ -9,14 +9,14 @@ use tokio::task::JoinSet;
 
 use crate::cli::{ProjectAction, ProjectRunArgs};
 use crate::config::get_infra_dir;
-use crate::discovery::{find_project_root, find_workspace_root, WORKSPACE_FILE};
+use crate::discovery::{WORKSPACE_FILE, find_project_root, find_workspace_root};
 use crate::error::{Result, SunbeamError};
 use crate::operations::config::WorkspaceConfig;
 use crate::{debug, info};
 
-use crate::project::config::{is_standard_verb, ProjectConfig, STANDARD_VERBS};
+use crate::project::config::{ProjectConfig, STANDARD_VERBS, is_standard_verb};
 use crate::project::runner::{RunOptions, RunOutcome};
-use crate::topo::{sort, Graph};
+use crate::topo::{Graph, sort};
 
 /// Dispatch.
 #[tracing::instrument(skip(logger))]
@@ -44,7 +44,11 @@ pub async fn dispatch(logger: &crate::logger::Logger, action: ProjectAction) -> 
     }
 }
 
-async fn cmd_preseed_image(logger: &crate::logger::Logger, image_ref: &str, timeout: u64) -> Result<()> {
+async fn cmd_preseed_image(
+    logger: &crate::logger::Logger,
+    image_ref: &str,
+    timeout: u64,
+) -> Result<()> {
     // 1. Apply the puller Job and wait for the node pull to complete.
     crate::proxy::cmd_preseed_image(logger, image_ref, timeout).await?;
 
@@ -55,23 +59,22 @@ async fn cmd_preseed_image(logger: &crate::logger::Logger, image_ref: &str, time
         .join("ingress")
         .join("kustomization.yaml");
 
-    let current = std::fs::read_to_string(&kustomization_path).map_err(|e| {
-        SunbeamError::Io {
-            context: format!("reading {}", kustomization_path.display()),
-            source: e,
-        }
+    let current = std::fs::read_to_string(&kustomization_path).map_err(|e| SunbeamError::Io {
+        context: format!("reading {}", kustomization_path.display()),
+        source: e,
     })?;
 
     let updated = crate::proxy::bump_proxy_image(&current, tag)?;
-    std::fs::write(&kustomization_path, updated.as_bytes()).map_err(|e| {
-        SunbeamError::Io {
-            context: format!("writing {}", kustomization_path.display()),
-            source: e,
-        }
+    std::fs::write(&kustomization_path, updated.as_bytes()).map_err(|e| SunbeamError::Io {
+        context: format!("writing {}", kustomization_path.display()),
+        source: e,
     })?;
 
     info!(logger, "Bumped kustomization newTag", tag = tag);
-    info!(logger, "Run sunbeam service apply ingress to roll out the new proxy image");
+    info!(
+        logger,
+        "Run sunbeam service apply ingress to roll out the new proxy image"
+    );
     Ok(())
 }
 
@@ -100,7 +103,12 @@ async fn run_single(logger: &crate::logger::Logger, verb: &str, opts: RunOptions
     Ok(())
 }
 
-async fn run_workspace(logger: &crate::logger::Logger, verb: &str, args: &ProjectRunArgs, opts: RunOptions) -> Result<()> {
+async fn run_workspace(
+    logger: &crate::logger::Logger,
+    verb: &str,
+    args: &ProjectRunArgs,
+    opts: RunOptions,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     run_workspace_at(logger, &cwd, verb, args, opts).await
 }
@@ -201,7 +209,8 @@ async fn run_workspace_at(
             let logger = logger.clone();
             set.spawn(async move {
                 let outcome = throttled(sem, async move {
-                    crate::project::runner::run(&logger, &cfg, &project_root, &verb_s, &task_opts).await
+                    crate::project::runner::run(&logger, &cfg, &project_root, &verb_s, &task_opts)
+                        .await
                 })
                 .await?;
                 Ok((project_name, outcome))
@@ -209,8 +218,8 @@ async fn run_workspace_at(
         }
 
         while let Some(res) = set.join_next().await {
-            let (name, outcome) = res
-                .map_err(|e| SunbeamError::Other(format!("task join error: {e}")))??;
+            let (name, outcome) =
+                res.map_err(|e| SunbeamError::Other(format!("task join error: {e}")))??;
             if matches!(outcome, RunOutcome::Skipped) {
                 info!(logger, "skipped (no target)", name = name, verb = verb);
             }
@@ -239,10 +248,7 @@ where
 }
 
 /// Expand a starting set of project names to include all transitive deps.
-fn expand_with_deps(
-    graph: &BTreeMap<String, Vec<String>>,
-    seeds: &[String],
-) -> BTreeSet<String> {
+fn expand_with_deps(graph: &BTreeMap<String, Vec<String>>, seeds: &[String]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut stack: Vec<String> = seeds.to_vec();
     while let Some(name) = stack.pop() {
@@ -279,7 +285,11 @@ async fn cmd_order(logger: &crate::logger::Logger, verb: &str) -> Result<()> {
 }
 
 /// Inner `cmd_order` that takes an explicit cwd for testability.
-async fn cmd_order_at(logger: &crate::logger::Logger, cwd: &std::path::Path, verb: &str) -> Result<()> {
+async fn cmd_order_at(
+    logger: &crate::logger::Logger,
+    cwd: &std::path::Path,
+    verb: &str,
+) -> Result<()> {
     let ws_root = find_workspace_root(cwd)?;
     let ws = WorkspaceConfig::load(&ws_root.join(WORKSPACE_FILE))?;
 
@@ -392,7 +402,9 @@ async fn cmd_graph_at(cwd: &std::path::Path, all: bool) -> Result<()> {
         let name = cfg.project.name.clone();
         // Use the project's own deps even if the workspace doesn't list it.
         let mut local_graph = graph;
-        local_graph.entry(name.clone()).or_insert_with(|| cfg.deps.projects.clone());
+        local_graph
+            .entry(name.clone())
+            .or_insert_with(|| cfg.deps.projects.clone());
         println!("{name}");
         if local_graph.get(&name).is_none_or(|d| d.is_empty()) {
             println!("└── (no deps)");
@@ -443,7 +455,11 @@ async fn cmd_check(logger: &crate::logger::Logger, all: bool) -> Result<()> {
 
 /// Inner `cmd_check` that takes an explicit cwd. Exposed so tests can target
 /// a tempdir without racing on the process-global cwd.
-async fn cmd_check_at(logger: &crate::logger::Logger, cwd: &std::path::Path, all: bool) -> Result<()> {
+async fn cmd_check_at(
+    logger: &crate::logger::Logger,
+    cwd: &std::path::Path,
+    all: bool,
+) -> Result<()> {
     let ws_root = find_workspace_root(cwd)?;
     let ws = WorkspaceConfig::load(&ws_root.join(WORKSPACE_FILE))?;
     let owned = load_owned_projects(&ws, &ws_root);
@@ -458,7 +474,10 @@ async fn cmd_check_at(logger: &crate::logger::Logger, cwd: &std::path::Path, all
         .collect();
 
     let mut targets: Vec<(String, ProjectConfig)> = if all {
-        owned.iter().map(|(n, _, cfg)| (n.clone(), cfg.clone())).collect()
+        owned
+            .iter()
+            .map(|(n, _, cfg)| (n.clone(), cfg.clone()))
+            .collect()
     } else {
         let project_root = find_project_root(cwd)?;
         let cfg = ProjectConfig::load(&project_root.join("sunbeam.yaml"))?;
@@ -491,9 +510,17 @@ async fn cmd_check_at(logger: &crate::logger::Logger, cwd: &std::path::Path, all
             }
         }
         if bad_proj_deps.is_empty() {
-            info!(logger, "deps.projects all resolve", count = cfg.deps.projects.len());
+            info!(
+                logger,
+                "deps.projects all resolve",
+                count = cfg.deps.projects.len()
+            );
         } else {
-            info!(logger, "deps.projects unknown", deps = format!("{bad_proj_deps:?}"));
+            info!(
+                logger,
+                "deps.projects unknown",
+                deps = format!("{bad_proj_deps:?}")
+            );
             failed = true;
         }
 
@@ -505,9 +532,17 @@ async fn cmd_check_at(logger: &crate::logger::Logger, cwd: &std::path::Path, all
             }
         }
         if bad_svc_deps.is_empty() {
-            info!(logger, "deps.services all resolve", count = cfg.deps.services.len());
+            info!(
+                logger,
+                "deps.services all resolve",
+                count = cfg.deps.services.len()
+            );
         } else {
-            info!(logger, "deps.services unknown", deps = format!("{bad_svc_deps:?}"));
+            info!(
+                logger,
+                "deps.services unknown",
+                deps = format!("{bad_svc_deps:?}")
+            );
             failed = true;
         }
 
@@ -603,8 +638,14 @@ mod tests {
         graph.insert("b".to_string(), vec!["a".to_string()]);
 
         let result = expand_with_deps(&graph, &["a".to_string()]);
-        assert!(result.contains("a"), "cycle handling: 'a' should be in result");
-        assert!(result.contains("b"), "cycle handling: 'b' should be in result");
+        assert!(
+            result.contains("a"),
+            "cycle handling: 'a' should be in result"
+        );
+        assert!(
+            result.contains("b"),
+            "cycle handling: 'b' should be in result"
+        );
         // No panic or infinite loop = success
     }
 
@@ -634,10 +675,7 @@ mod tests {
 
     /// Extract the pure rendering logic without printing.
     /// Returns the sequence of lines that would be printed.
-    fn render_lines(
-        node: &str,
-        graph: &BTreeMap<String, Vec<String>>,
-    ) -> Vec<String> {
+    fn render_lines(node: &str, graph: &BTreeMap<String, Vec<String>>) -> Vec<String> {
         let mut lines = Vec::new();
         lines.push(node.to_string());
         let mut path = Vec::new();
@@ -706,13 +744,13 @@ mod tests {
         // │   └── d
         // └── c
         //     └── d
-        let d_lines: Vec<_> = lines
-            .iter()
-            .filter(|l| l.contains("d"))
-            .collect();
+        let d_lines: Vec<_> = lines.iter().filter(|l| l.contains("d")).collect();
         assert_eq!(d_lines.len(), 2, "d should appear twice");
         for d_line in d_lines {
-            assert!(!d_line.contains("(cycle)"), "shared dep d should not be marked cycle: {d_line}");
+            assert!(
+                !d_line.contains("(cycle)"),
+                "shared dep d should not be marked cycle: {d_line}"
+            );
         }
     }
 
@@ -724,11 +762,11 @@ mod tests {
         graph.insert("b".to_string(), vec!["a".to_string()]);
 
         let lines = render_lines("a", &graph);
-        let cycle_lines: Vec<_> = lines
-            .iter()
-            .filter(|l| l.contains("(cycle)"))
-            .collect();
-        assert!(!cycle_lines.is_empty(), "real cycle should be marked (cycle)");
+        let cycle_lines: Vec<_> = lines.iter().filter(|l| l.contains("(cycle)")).collect();
+        assert!(
+            !cycle_lines.is_empty(),
+            "real cycle should be marked (cycle)"
+        );
     }
 
     #[test]
@@ -739,12 +777,12 @@ mod tests {
         // Note: b is NOT in the graph
 
         let lines = render_lines("a", &graph);
-        let b_lines: Vec<_> = lines
-            .iter()
-            .filter(|l| l.contains("b"))
-            .collect();
+        let b_lines: Vec<_> = lines.iter().filter(|l| l.contains("b")).collect();
         assert_eq!(b_lines.len(), 1);
-        assert!(b_lines[0].contains("(external)"), "unknown dep should be marked external");
+        assert!(
+            b_lines[0].contains("(external)"),
+            "unknown dep should be marked external"
+        );
     }
 
     // ============================================================================
@@ -766,8 +804,13 @@ mod tests {
         fn set(key: &str, value: &str) -> Self {
             let prior = std::env::var_os(key);
             // SAFETY: tests serialize via ENV_LOCK so no concurrent setenv races.
-            unsafe { std::env::set_var(key, value); }
-            Self { key: key.to_string(), prior }
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                prior,
+            }
         }
     }
 
@@ -860,11 +903,8 @@ targets:
         let _env = EnvGuard::set("SUNBEAM_WORKSPACE", ws_root.to_str().expect("ws_root utf8"));
 
         // Write workspace.yaml
-        std::fs::write(
-            ws_root.join(WORKSPACE_FILE),
-            minimal_workspace_yaml(),
-        )
-        .expect("write workspace");
+        std::fs::write(ws_root.join(WORKSPACE_FILE), minimal_workspace_yaml())
+            .expect("write workspace");
 
         // Write foo/sunbeam.yaml
         std::fs::create_dir(ws_root.join("foo")).expect("create foo dir");
@@ -888,11 +928,8 @@ targets:
         let ws_root = tmpdir.path();
         let _env = EnvGuard::set("SUNBEAM_WORKSPACE", ws_root.to_str().expect("ws_root utf8"));
 
-        std::fs::write(
-            ws_root.join(WORKSPACE_FILE),
-            minimal_workspace_yaml(),
-        )
-        .expect("write workspace");
+        std::fs::write(ws_root.join(WORKSPACE_FILE), minimal_workspace_yaml())
+            .expect("write workspace");
 
         std::fs::create_dir(ws_root.join("foo")).expect("create foo dir");
         std::fs::write(
@@ -915,11 +952,8 @@ targets:
         let ws_root = tmpdir.path();
         let _env = EnvGuard::set("SUNBEAM_WORKSPACE", ws_root.to_str().expect("ws_root utf8"));
 
-        std::fs::write(
-            ws_root.join(WORKSPACE_FILE),
-            minimal_workspace_yaml(),
-        )
-        .expect("write workspace");
+        std::fs::write(ws_root.join(WORKSPACE_FILE), minimal_workspace_yaml())
+            .expect("write workspace");
 
         std::fs::create_dir(ws_root.join("foo")).expect("create foo dir");
         std::fs::write(
@@ -1108,9 +1142,7 @@ targets:
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws_root = tmp.path();
 
-        let mut ws_yaml = String::from(
-            "schema: 1\nworkspace:\n  name: test\nrepos:\n  owned:\n",
-        );
+        let mut ws_yaml = String::from("schema: 1\nworkspace:\n  name: test\nrepos:\n  owned:\n");
         for (name, _) in projects {
             ws_yaml.push_str(&format!("    {name}:\n      path: {name}\n"));
         }
@@ -1136,11 +1168,7 @@ targets:
     exec: "true"
 "#
             );
-            std::fs::write(
-                ws_root.join(name).join("sunbeam.yaml"),
-                proj_yaml,
-            )
-            .expect("write proj");
+            std::fs::write(ws_root.join(name).join("sunbeam.yaml"), proj_yaml).expect("write proj");
         }
 
         tmp
@@ -1155,7 +1183,10 @@ targets:
             tmp.path().to_str().expect("ws_root utf8"),
         );
         let result = cmd_info_at(&tmp.path().join("foo")).await;
-        assert!(result.is_ok(), "cmd_info_at should succeed for valid project");
+        assert!(
+            result.is_ok(),
+            "cmd_info_at should succeed for valid project"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1168,7 +1199,10 @@ targets:
         );
         // Empty tempdir — no sunbeam.yaml anywhere.
         let result = cmd_info_at(tmp.path()).await;
-        assert!(result.is_err(), "cmd_info_at should fail when no project found");
+        assert!(
+            result.is_err(),
+            "cmd_info_at should fail when no project found"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1196,7 +1230,10 @@ targets:
         // 'test' isn't defined in any project → all marked (skip), still Ok.
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let result = cmd_order_at(&logger, tmp.path(), "test").await;
-        assert!(result.is_ok(), "cmd_order_at handles verbs that no project defines");
+        assert!(
+            result.is_ok(),
+            "cmd_order_at handles verbs that no project defines"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1208,7 +1245,10 @@ targets:
             tmp.path().to_str().expect("ws_root utf8"),
         );
         let result = cmd_graph_at(&tmp.path().join("bar"), false).await;
-        assert!(result.is_ok(), "cmd_graph_at(false) should succeed in a project");
+        assert!(
+            result.is_ok(),
+            "cmd_graph_at(false) should succeed in a project"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1233,17 +1273,16 @@ targets:
         );
         // No roots (every project is depended on) — falls back to flat list.
         let result = cmd_graph_at(tmp.path(), true).await;
-        assert!(result.is_ok(), "cmd_graph_at(true) should not panic on pure cycles");
+        assert!(
+            result.is_ok(),
+            "cmd_graph_at(true) should not panic on pure cycles"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_workspace_at_runs_all_projects_in_topo_order() {
         let _lock = ENV_LOCK.lock().await;
-        let tmp = make_workspace(&[
-            ("foo", &[]),
-            ("bar", &["foo"]),
-            ("baz", &["bar"]),
-        ]);
+        let tmp = make_workspace(&[("foo", &[]), ("bar", &["foo"]), ("baz", &["bar"])]);
         let _env = EnvGuard::set(
             "SUNBEAM_WORKSPACE",
             tmp.path().to_str().expect("ws_root utf8"),
@@ -1256,17 +1295,16 @@ targets:
         let opts = RunOptions::default();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let result = run_workspace_at(&logger, tmp.path(), "build", &args, opts).await;
-        assert!(result.is_ok(), "run_workspace_at --all should succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "run_workspace_at --all should succeed: {result:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_workspace_at_with_deps_expands_seed() {
         let _lock = ENV_LOCK.lock().await;
-        let tmp = make_workspace(&[
-            ("foo", &[]),
-            ("bar", &["foo"]),
-            ("baz", &[]),
-        ]);
+        let tmp = make_workspace(&[("foo", &[]), ("bar", &["foo"]), ("baz", &[])]);
         let _env = EnvGuard::set(
             "SUNBEAM_WORKSPACE",
             tmp.path().to_str().expect("ws_root utf8"),
@@ -1287,12 +1325,7 @@ targets:
     #[tokio::test(flavor = "current_thread")]
     async fn run_workspace_at_with_jobs_caps_concurrency() {
         let _lock = ENV_LOCK.lock().await;
-        let tmp = make_workspace(&[
-            ("a", &[]),
-            ("b", &[]),
-            ("c", &[]),
-            ("d", &[]),
-        ]);
+        let tmp = make_workspace(&[("a", &[]), ("b", &[]), ("c", &[]), ("d", &[])]);
         let _env = EnvGuard::set(
             "SUNBEAM_WORKSPACE",
             tmp.path().to_str().expect("ws_root utf8"),
@@ -1307,7 +1340,10 @@ targets:
         let opts = RunOptions::default();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
         let result = run_workspace_at(&logger, tmp.path(), "build", &args, opts).await;
-        assert!(result.is_ok(), "run_workspace_at with --jobs should succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "run_workspace_at with --jobs should succeed: {result:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1315,10 +1351,7 @@ targets:
         let _lock = ENV_LOCK.lock().await;
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws_root = tmp.path();
-        let _env = EnvGuard::set(
-            "SUNBEAM_WORKSPACE",
-            ws_root.to_str().expect("ws_root utf8"),
-        );
+        let _env = EnvGuard::set("SUNBEAM_WORKSPACE", ws_root.to_str().expect("ws_root utf8"));
 
         // Workspace with one project whose build deliberately fails.
         std::fs::write(
@@ -1333,9 +1366,13 @@ targets:
         )
         .expect("write proj");
 
-        let args = ProjectRunArgs { all: true, ..Default::default() };
+        let args = ProjectRunArgs {
+            all: true,
+            ..Default::default()
+        };
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let result = run_workspace_at(&logger, ws_root, "build", &args, RunOptions::default()).await;
+        let result =
+            run_workspace_at(&logger, ws_root, "build", &args, RunOptions::default()).await;
         assert!(result.is_err(), "failing build should bubble up as Err");
     }
 
@@ -1394,10 +1431,18 @@ targets:
         // run_workspace_at from inside the worktree's foo/ should resolve the
         // worktree's manifest, not the outer one (which has no `foo`).
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let args = ProjectRunArgs { all: true, ..Default::default() };
-        let result =
-            run_workspace_at(&logger, &worktree_root.join("foo"), "build", &args, RunOptions::default())
-                .await;
+        let args = ProjectRunArgs {
+            all: true,
+            ..Default::default()
+        };
+        let result = run_workspace_at(
+            &logger,
+            &worktree_root.join("foo"),
+            "build",
+            &args,
+            RunOptions::default(),
+        )
+        .await;
         assert!(
             result.is_ok(),
             "worktree-rooted run_workspace_at should succeed: {result:?}"

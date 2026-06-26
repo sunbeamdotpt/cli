@@ -48,10 +48,7 @@ mod tests {
     #[test]
     fn test_first_step_is_discover() {
         let def = build();
-        assert_eq!(
-            def.steps[0].name,
-            Some("discover-namespaces".into())
-        );
+        assert_eq!(def.steps[0].name, Some("discover-namespaces".into()));
     }
 
     #[test]

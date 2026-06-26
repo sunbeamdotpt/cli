@@ -13,7 +13,7 @@ use crate::kube as k;
 use crate::openbao::BaoClient;
 
 use crate::secrets;
-use crate::vault_keystore::{keystore_exists, load_keystore, save_keystore, VaultKeystore};
+use crate::vault_keystore::{VaultKeystore, keystore_exists, load_keystore, save_keystore};
 use crate::workflows::StepContext;
 use chrono::Utc;
 
@@ -218,7 +218,8 @@ impl StepBody for InitOrUnsealOpenBao {
             {
                 unseal_key = key;
             }
-            if let Ok(token) = k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await
+            if let Ok(token) =
+                k::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await
                 && !token.is_empty()
             {
                 root_token = token;
@@ -228,7 +229,9 @@ impl StepBody for InitOrUnsealOpenBao {
             if (root_token.is_empty() || unseal_key.is_empty()) && local_keystore.is_some() {
                 let ks = local_keystore.as_ref().unwrap();
                 if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
-                    tracing::error!("Cluster secret missing keys — restoring from local keystore...");
+                    tracing::error!(
+                        "Cluster secret missing keys — restoring from local keystore..."
+                    );
                     let mut unseal_data = HashMap::new();
                     unseal_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
                     k::create_secret("openbao", "openbao-unseal-key", unseal_data)
@@ -248,7 +251,9 @@ impl StepBody for InitOrUnsealOpenBao {
             // If vault is initialized but we lost the root token, reset storage
             // and wait for the pod to restart so we can re-initialize inline.
             if root_token.is_empty() {
-                tracing::error!("Vault is initialized but root token is missing -- resetting storage...");
+                tracing::error!(
+                    "Vault is initialized but root token is missing -- resetting storage..."
+                );
                 let _ = secrets::delete_resource("openbao", "pvc", "data-openbao-0").await;
                 let _ = secrets::delete_resource("openbao", "pod", &ob_pod).await;
                 tracing::info!("Waiting for OpenBao pod to restart...");
@@ -374,7 +379,9 @@ impl StepBody for InitOrUnsealOpenBao {
                     k::create_secret("openbao", "openbao-bootstrap-token", token_data)
                         .await
                         .map_err(|e| step_err(e.to_string()))?;
-                    tracing::info!("Initialized -- keys stored in openbao-unseal-key and openbao-bootstrap-token.");
+                    tracing::info!(
+                        "Initialized -- keys stored in openbao-unseal-key and openbao-bootstrap-token."
+                    );
 
                     // Save to local keystore
                     if !domain.is_empty() {
@@ -420,7 +427,11 @@ impl StepBody for InitOrUnsealOpenBao {
         }
 
         // If we read keys from cluster but local keystore is missing, backfill
-        if already_initialized && !root_token.is_empty() && !domain.is_empty() && !keystore_exists(&domain) {
+        if already_initialized
+            && !root_token.is_empty()
+            && !domain.is_empty()
+            && !keystore_exists(&domain)
+        {
             let ks = VaultKeystore {
                 version: 1,
                 domain: domain.clone(),

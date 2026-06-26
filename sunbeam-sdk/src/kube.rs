@@ -178,7 +178,11 @@ pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Resul
         .await
         .unwrap_or_default();
     if !broken_groups.is_empty() {
-        info!(logger, "Excluding broken API groups from discovery", groups = broken_groups.join(", "));
+        info!(
+            logger,
+            "Excluding broken API groups from discovery",
+            groups = broken_groups.join(", ")
+        );
     }
 
     let mut disc = None;
@@ -192,7 +196,12 @@ pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Resul
                 break;
             }
             Err(e) => {
-                error!(logger, "API discovery attempt failed", attempt = attempt, error = e);
+                error!(
+                    logger,
+                    "API discovery attempt failed",
+                    attempt = attempt,
+                    error = e
+                );
                 last_err = Some(e);
                 if attempt < 20 {
                     // Exponential backoff capped at 10 s — total wait ~130 s.
@@ -292,7 +301,11 @@ pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Resul
         }
     }
     if !seen_ns.is_empty() {
-        info!(logger, "Ensuring namespaces", namespaces = seen_ns.iter().cloned().collect::<Vec<_>>().join(", "));
+        info!(
+            logger,
+            "Ensuring namespaces",
+            namespaces = seen_ns.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
     }
     for ns in seen_ns {
         debug!(logger, "Ensuring namespace", namespace = ns);
@@ -395,7 +408,14 @@ async fn apply_one_doc(
         .and_then(|m| m.get("namespace"))
         .and_then(|v| v.as_str());
 
-    debug!(logger, "kube_apply", api_version = api_version, kind = kind, name = name, namespace = format!("{:?}", namespace));
+    debug!(
+        logger,
+        "kube_apply",
+        api_version = api_version,
+        kind = kind,
+        name = name,
+        namespace = format!("{:?}", namespace)
+    );
 
     if name.is_empty() || kind.is_empty() {
         return Ok(String::new()); // skip incomplete documents
@@ -604,7 +624,10 @@ fn resolve_api_resource(
 /// Cluster-scoped resources (e.g. `CiliumClusterwideNetworkPolicy`) must always
 /// use `Api::all_with`, even when kustomize injects `metadata.namespace` into
 /// the manifest. `kubectl` behaves the same way.
-pub(crate) fn api_scope_for_resource(scope: Scope, namespace: Option<&str>) -> (bool, Option<&str>) {
+pub(crate) fn api_scope_for_resource(
+    scope: Scope,
+    namespace: Option<&str>,
+) -> (bool, Option<&str>) {
     if scope == Scope::Cluster {
         (true, None)
     } else {

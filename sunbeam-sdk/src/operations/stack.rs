@@ -76,9 +76,9 @@ pub fn pin(
     let mut pinned: BTreeMap<String, String> = BTreeMap::new();
 
     for name in &project_names {
-        let entry = ws.find_repo(name).with_ctx(|| {
-            format!("unknown project {name:?}: not found in workspace repos")
-        })?;
+        let entry = ws
+            .find_repo(name)
+            .with_ctx(|| format!("unknown project {name:?}: not found in workspace repos"))?;
         let abs_path = workspace_root.join(&entry.repo.path);
         let abs_str = abs_path.to_string_lossy();
 
@@ -131,20 +131,17 @@ pub fn save(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<()> {
 
 /// Apply.
 #[tracing::instrument]
-pub async fn apply(
-    ws: &WorkspaceConfig,
-    workspace_root: &Path,
-    stack_name: &str,
-) -> Result<()> {
+pub async fn apply(ws: &WorkspaceConfig, workspace_root: &Path, stack_name: &str) -> Result<()> {
     tracing::info!("stack apply");
-    let stack = ws.stacks.get(stack_name).with_ctx(|| {
-        format!("stack {stack_name:?} not found in workspace")
-    })?;
+    let stack = ws
+        .stacks
+        .get(stack_name)
+        .with_ctx(|| format!("stack {stack_name:?} not found in workspace"))?;
 
     for (project, sha) in &stack.projects {
-        let entry = ws.find_repo(project).with_ctx(|| {
-            format!("stack {stack_name:?} references unknown project {project:?}")
-        })?;
+        let entry = ws
+            .find_repo(project)
+            .with_ctx(|| format!("stack {stack_name:?} references unknown project {project:?}"))?;
         let abs_path = workspace_root.join(&entry.repo.path);
         let abs_str = abs_path.to_string_lossy().into_owned();
 
@@ -189,17 +186,19 @@ pub fn diff<'a>(
     left: &str,
     right: Option<&str>,
 ) -> Result<Vec<StackDiffEntry>> {
-    let left_stack = ws.stacks.get(left).with_ctx(|| {
-        format!("stack {left:?} not found in workspace")
-    })?;
+    let left_stack = ws
+        .stacks
+        .get(left)
+        .with_ctx(|| format!("stack {left:?} not found in workspace"))?;
 
     let mut entries: Vec<StackDiffEntry> = Vec::new();
 
     match right {
         Some(right_name) => {
-            let right_stack = ws.stacks.get(right_name).with_ctx(|| {
-                format!("stack {right_name:?} not found in workspace")
-            })?;
+            let right_stack = ws
+                .stacks
+                .get(right_name)
+                .with_ctx(|| format!("stack {right_name:?} not found in workspace"))?;
 
             let all_projects: std::collections::BTreeSet<&String> = left_stack
                 .projects
@@ -302,8 +301,7 @@ mod tests {
     fn pin_errors_on_unknown_project() {
         let mut ws = minimal_ws();
         let tmp = std::env::temp_dir();
-        let err = pin(&mut ws, &tmp, "s1", None, &["ghost".to_string()])
-            .unwrap_err();
+        let err = pin(&mut ws, &tmp, "s1", None, &["ghost".to_string()]).unwrap_err();
         assert!(err.to_string().contains("ghost"));
     }
 
@@ -321,19 +319,30 @@ mod tests {
             .unwrap();
         std::process::Command::new("git")
             .args([
-                "-C", &path.to_string_lossy(),
-                "-c", "user.email=t@t",
-                "-c", "user.name=t",
+                "-C",
+                &path.to_string_lossy(),
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
                 "commit",
                 "--allow-empty",
-                "-m", "x",
+                "-m",
+                "x",
             ])
             .status()
             .unwrap();
 
         let mut ws = ws_with_repo("myrepo", path.to_str().unwrap());
         // Use an absolute path as workspace_root so join works correctly.
-        pin(&mut ws, Path::new("/"), "snap", Some("desc"), &["myrepo".to_string()]).unwrap();
+        pin(
+            &mut ws,
+            Path::new("/"),
+            "snap",
+            Some("desc"),
+            &["myrepo".to_string()],
+        )
+        .unwrap();
 
         let stack = ws.stacks.get("snap").unwrap();
         assert_eq!(stack.description.as_deref(), Some("desc"));
@@ -356,12 +365,16 @@ mod tests {
             .unwrap();
         std::process::Command::new("git")
             .args([
-                "-C", &repo_dir.path().to_string_lossy(),
-                "-c", "user.email=t@t",
-                "-c", "user.name=t",
+                "-C",
+                &repo_dir.path().to_string_lossy(),
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
                 "commit",
                 "--allow-empty",
-                "-m", "init",
+                "-m",
+                "init",
             ])
             .status()
             .unwrap();
@@ -374,10 +387,7 @@ mod tests {
         let manifest = dir.path().join("sunbeam.workspace.yaml");
         let loaded = WorkspaceConfig::load(&manifest).unwrap();
 
-        assert_eq!(
-            ws.stacks["rc1"].projects,
-            loaded.stacks["rc1"].projects,
-        );
+        assert_eq!(ws.stacks["rc1"].projects, loaded.stacks["rc1"].projects,);
     }
 
     #[test]
@@ -385,11 +395,23 @@ mod tests {
         let mut ws = minimal_ws();
         ws.repos.owned.insert(
             "sol".to_string(),
-            Repo { path: "sol".into(), kind: None, upstream: None, tracking: None, extra: BTreeMap::new() },
+            Repo {
+                path: "sol".into(),
+                kind: None,
+                upstream: None,
+                tracking: None,
+                extra: BTreeMap::new(),
+            },
         );
         ws.repos.owned.insert(
             "wfe".to_string(),
-            Repo { path: "wfe".into(), kind: None, upstream: None, tracking: None, extra: BTreeMap::new() },
+            Repo {
+                path: "wfe".into(),
+                kind: None,
+                upstream: None,
+                tracking: None,
+                extra: BTreeMap::new(),
+            },
         );
 
         let mut left_projects = BTreeMap::new();
@@ -400,18 +422,24 @@ mod tests {
         right_projects.insert("sol".to_string(), "bbb".to_string());
         right_projects.insert("wfe".to_string(), "shared".to_string());
 
-        ws.stacks.insert("left".to_string(), Stack {
-            description: None,
-            projects: left_projects,
-            pinned_at: None,
-            extra: BTreeMap::new(),
-        });
-        ws.stacks.insert("right".to_string(), Stack {
-            description: None,
-            projects: right_projects,
-            pinned_at: None,
-            extra: BTreeMap::new(),
-        });
+        ws.stacks.insert(
+            "left".to_string(),
+            Stack {
+                description: None,
+                projects: left_projects,
+                pinned_at: None,
+                extra: BTreeMap::new(),
+            },
+        );
+        ws.stacks.insert(
+            "right".to_string(),
+            Stack {
+                description: None,
+                projects: right_projects,
+                pinned_at: None,
+                extra: BTreeMap::new(),
+            },
+        );
 
         let changes = diff(&ws, Path::new("/"), "left", Some("right")).unwrap();
 

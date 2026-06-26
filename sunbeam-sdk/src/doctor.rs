@@ -65,22 +65,26 @@ pub async fn cmd_doctor(logger: &crate::logger::Logger) -> Result<()> {
     // 5. Domain config
     let domain = crate::config::domain();
     if domain.is_empty() {
-        info!(logger, "domain: not configured -- run `sunbeam config set --domain <domain>`");
+        info!(
+            logger,
+            "domain: not configured -- run `sunbeam config set --domain <domain>`"
+        );
         failures += 1;
     } else {
         info!(logger, "domain: configured", domain = domain);
     }
 
     // 6. OpenBao
-    if let Some((pod, unlabeled)) =
-        crate::kube::find_pod_by_label_or_any(
-            "openbao",
-            "app.kubernetes.io/name=openbao,component=server",
-        )
-        .await
+    if let Some((pod, unlabeled)) = crate::kube::find_pod_by_label_or_any(
+        "openbao",
+        "app.kubernetes.io/name=openbao,component=server",
+    )
+    .await
     {
         let label_note = if unlabeled { " (unlabeled)" } else { "" };
-        match crate::kube::kube_exec("openbao", &pod, &["bao", "status", "-format=json"], None).await {
+        match crate::kube::kube_exec("openbao", &pod, &["bao", "status", "-format=json"], None)
+            .await
+        {
             Ok((0, out)) => {
                 let sealed = serde_json::from_str::<serde_json::Value>(&out)
                     .ok()
@@ -108,7 +112,11 @@ pub async fn cmd_doctor(logger: &crate::logger::Logger) -> Result<()> {
         match crate::registry::discover(logger, &client).await {
             Ok(reg) => {
                 let count = reg.all().len();
-                info!(logger, "service registry: services discovered", count = count);
+                info!(
+                    logger,
+                    "service registry: services discovered",
+                    count = count
+                );
             }
             Err(e) => {
                 info!(logger, "service registry: discovery failed", error = e);

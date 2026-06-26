@@ -185,10 +185,7 @@ impl StepBody for SeedKVPath {
         let is_dirty = dirty_paths.contains(service);
         let kv_json = serde_json::to_string(&result_map).map_err(|e| step_err(e.to_string()))?;
 
-        tracing::info!(
-            "KV seed: {service}{}",
-            if is_dirty { " (new)" } else { "" }
-        );
+        tracing::info!("KV seed: {service}{}", if is_dirty { " (new)" } else { "" });
 
         let mut output = serde_json::Map::new();
         output.insert(
