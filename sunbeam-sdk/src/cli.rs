@@ -44,187 +44,8 @@ pub struct Cli {
 /// Top-level CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Verb {
-    /// Full cluster bring-up.
-    #[command(long_about = r#"""Bring up the entire Sunbeam stack from zero.
-
-This is the primary command for provisioning a local or remote Kubernetes cluster
-with the complete Sunbeam platform. It runs a versioned WFE workflow (version 3)
-that orchestrates dozens of steps in dependency order:
-
-  1. Lima VM provisioning (when --use-lima or --profile lima)
-  2. Infrastructure: Cilium, cert-manager, Longhorn, CNPG, BuildKit
-  3. OpenBao initialization/unseal and KV seeding
-  4. PostgreSQL role/database creation and Vault database engine config
-  5. Namespace and secret creation
-  6. Platform manifests: ingress, identity (Ory), storage, registry, VPN
-  7. Application manifests: matrix, wfe, press
-  8. Service rollouts and observability
-  9. VPN key minting and URL printing
-
-Most steps are idempotent — running `sunbeam up` multiple times is safe and
-will only apply changes.
-
-EXAMPLES:
-  # Full bring-up on a Lima VM
-  sunbeam up --use-lima
-
-  # Re-run after editing manifests (only changes are applied)
-  sunbeam up
-
-  # Skip specific namespaces
-  sunbeam up --disable matrix --disable press
-
-  # Override a manifest field
-  sunbeam up --set deployment/ory/kratos/spec/replicas=3
-
-  # Visualize the workflow DAG as Graphviz DOT
-  sunbeam up --graph > up.dot && dot -Tpng up.dot -o up.png
-
-  # Use a profile defined in infra/profiles/<name>.yaml
-  sunbeam up --profile minimal
-""#)]
-    Up {
-        /// Override a manifest field (kind/namespace/name/field/path=value).
-        #[arg(long = "set")]
-        set: Vec<String>,
-        /// Disable a resource or pattern (kind/namespace/name or glob).
-        #[arg(long)]
-        disable: Vec<String>,
-        /// Re-enable a resource or pattern.
-        #[arg(long)]
-        enable: Vec<String>,
-        /// Skip the Cilium CNI check.
-        #[arg(long)]
-        skip_cilium: bool,
-        /// Output a Graphviz DOT graph of the workflow and exit.
-        #[arg(long)]
-        graph: bool,
-        /// Use Lima VM for local k3s (shorthand for --profile lima).
-        #[arg(long)]
-        use_lima: bool,
-        /// Profile to load (from infra/profiles/<name>.yaml).
-        #[arg(long)]
-        profile: Option<String>,
-        /// Run in serial mode: longer delays between namespace applies and
-        /// more conservative resource usage for tiny single-node clusters.
-        #[arg(long)]
-        serial: bool,
-    },
-
-    /// Full cluster tear-down.
-    #[command(long_about = r#"""Tear down the Sunbeam stack.
-
-Deletes Kubernetes namespaces in reverse dependency order. By default, only
-application and platform namespaces are removed. Infrastructure namespaces
-(cert-manager, longhorn-system) are preserved unless --infra is passed.
-
-The data namespace (Postgres, OpenBao, OpenSearch, Valkey) is deleted by default.
-Use --keep-data to preserve it across teardowns.
-
-A confirmation prompt is shown listing every namespace that will be deleted.
-Use --yes to skip the prompt for automation.
-
-EXAMPLES:
-  # Interactive tear-down (default namespaces only)
-  sunbeam down
-
-  # Non-interactive, include infra namespaces
-  sunbeam down --yes --infra
-
-  # Tear down but preserve databases and secrets
-  sunbeam down --yes --keep-data
-
-  # Tear down a Lima-based local stack
-  sunbeam down --yes --use-lima
-""#)]
-    Down {
-        /// Skip confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-        /// Also delete infrastructure namespaces (cert-manager, longhorn-system).
-        #[arg(long)]
-        infra: bool,
-        /// Preserve data namespace (postgres, opensearch).
-        #[arg(long)]
-        keep_data: bool,
-        /// Use Lima VM for local k3s (shorthand for --profile lima).
-        #[arg(long)]
-        use_lima: bool,
-        /// Profile to load (from infra/profiles/<name>.yaml).
-        #[arg(long)]
-        profile: Option<String>,
-    },
-
-    /// Manage sunbeam configuration.
-    #[command(long_about = r#"""Manage Sunbeam contexts and configuration.
-
-Sunbeam uses a context system similar to kubectl. Each context stores:
-  - domain         — domain suffix for manifest substitution (e.g. sunbeam.pt)
-  - infra-dir      — path to infrastructure manifests (kustomize bases)
-  - kube-context   — kubectl context name targeting the cluster
-  - acme-email     — Let's Encrypt / cert-manager contact email
-  - profile        — optional profile reference for workflow tuning
-  - vpn-*          — VPN connection settings
-
-Configuration is stored in ~/.sunbeam/config.json.
-
-Use `sunbeam config get` to inspect the active context and all contexts.
-Use `sunbeam config use-context <name>` to switch between clusters.
-
-EXAMPLES:
-  # Set the active context
-  sunbeam config set --domain sunbeam.pt --infra-dir ~/code/infra --kube-context lima-sunbeam
-
-  # Switch contexts
-  sunbeam config use-context production
-
-  # View all contexts
-  sunbeam config get
-""#)]
-    Config {
-        #[command(subcommand)]
-        action: Option<ConfigAction>,
-    },
-
-    /// User/identity management.
-    #[command(long_about = r#"""Manage identities via Kratos.
-
-Provides CRUD operations for users in the Ory Kratos identity system, plus
-onboarding and offboarding workflows.
-
-Onboarding creates an identity, sets a random password, and optionally sends
-a welcome email with login instructions. Offboarding disables the identity,
-revokes all sessions, and marks the user as terminated.
-
-Most commands accept either an email address or a Kratos identity UUID as
-the target argument.
-
-EXAMPLES:
-  # List all identities
-  sunbeam user list
-
-  # Search by email
-  sunbeam user list --search admin@sunbeam.pt
-
-  # Create a basic identity
-  sunbeam user create alice@sunbeam.pt --name "Alice Smith"
-
-  # Full onboarding with welcome email
-  sunbeam user onboard alice@sunbeam.pt --name "Alice Smith" --department Engineering
-
-  # Offboard (disable + revoke)
-  sunbeam user offboard alice@sunbeam.pt
-
-  # Set password interactively
-  sunbeam user set-password alice@sunbeam.pt
-""#)]
-    User {
-        #[command(subcommand)]
-        action: Option<UserAction>,
-    },
-
     /// Authenticate with Sunbeam (OAuth2 device login).
-    #[command(long_about = r#"""Authenticate with Sunbeam services.
+    #[command(long_about = r#"Authenticate with Sunbeam services.
 
 SSO (Hydra OIDC) is used by Planka, Kratos admin UI, Grafana, and other
 services behind the ingress. The CLI uses the OAuth2 Device Authorization
@@ -250,62 +71,130 @@ EXAMPLES:
 
   # Clear all cached tokens
   sunbeam auth logout
-""#)]
+"#)]
     Auth {
         #[command(subcommand)]
         action: Option<AuthAction>,
     },
 
-    /// Workflow management — local WFE host, remote wfe-server, and target management.
-    #[command(long_about = r#"""Manage WFE (Workflow Engine) instances.
+    /// Generate shell completions.
+    #[command(long_about = r#"Generate shell tab-completion scripts.
 
-WFE orchestrates complex multi-step operations like `sunbeam up` and
-`sunbeam down`. This command lets you inspect, retry, and cancel workflow
-instances, as well as manage remote WFE server targets.
+Outputs a completion script for the specified shell to stdout. Redirect to
+the appropriate file for your shell:
 
-Local target (default):
-  - Uses an embedded SQLite database at ~/.sunbeam/<context>/workflows.db
-  - Supports list, status, retry, cancel, and run
+  bash:  ~/.bash_completion.d/sunbeam
+  zsh:   ~/.zfunc/_sunbeam
+  fish:  ~/.config/fish/completions/sunbeam.fish
 
-Remote target (-t <name>):
-  - Connects to a wfe-server instance over HTTPS
-  - Supports server-side workflow registration, execution, log streaming,
-    and full-text log search
-  - Requires `sunbeam workflow login --name <name> --url <url>` first
+After installing, restart your shell or source the file.
+
+EXAMPLE:
+  sunbeam completions bash > ~/.bash_completion.d/sunbeam
+"#)]
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+
+    /// Manage sunbeam configuration.
+    #[command(long_about = r#"Manage Sunbeam contexts and configuration.
+
+Sunbeam uses a context system similar to kubectl. Each context stores:
+  - domain         — domain suffix for manifest substitution (e.g. sunbeam.pt)
+  - infra-dir      — path to infrastructure manifests (kustomize bases)
+  - kube-context   — kubectl context name targeting the cluster
+  - acme-email     — Let's Encrypt / cert-manager contact email
+  - profile        — optional profile reference for workflow tuning
+  - vpn-*          — VPN connection settings
+
+Configuration is stored in ~/.sunbeam/config.json.
+
+Use `sunbeam config get` to inspect the active context and all contexts.
+Use `sunbeam config use-context <name>` to switch between clusters.
 
 EXAMPLES:
-  # List local workflow instances
-  sunbeam workflow list
+  # Set the active context
+  sunbeam config set --domain sunbeam.pt --infra-dir ~/code/infra --kube-context lima-sunbeam
 
-  # Show step-by-step status of an instance
-  sunbeam workflow status <instance-id>
+  # Switch contexts
+  sunbeam config use-context production
 
-  # Retry a failed workflow from its last checkpoint
-  sunbeam workflow retry <instance-id>
-
-  # Cancel a running workflow
-  sunbeam workflow cancel <instance-id>
-
-  # Register a remote target
-  sunbeam workflow login --name builds --url https://builds.sunbeam.pt
-
-  # Use remote target for server-side operations
-  sunbeam workflow -t builds list
-  sunbeam workflow -t builds start --definition deploy --version 1
-""#)]
-    Workflow {
-        /// Workflow target (default: local).
-        #[arg(short, long, default_value = "local", global = true)]
-        target: String,
-        /// Output format.
-        #[arg(short, long, value_enum, default_value_t = crate::wfectl::output::OutputFormat::Table, global = true)]
-        output: crate::wfectl::output::OutputFormat,
+  # View all contexts
+  sunbeam config get
+"#)]
+    Config {
         #[command(subcommand)]
-        action: crate::workflows::cmd::WorkflowAction,
+        action: Option<ConfigAction>,
+    },
+
+    /// Connectivity diagnostics.
+    #[command(long_about = r#"Run connectivity and configuration diagnostics.
+
+Checks that the CLI can reach required services and that configuration is
+valid. Reports issues with actionable fixes.
+
+Checks include:
+  - Kubernetes API reachability
+  - OpenBao seal status and token validity
+  - VPN tunnel status (if configured)
+  - DNS resolution for the configured domain
+  - Infrastructure directory existence and structure
+
+Use this as the first troubleshooting step when something is not working.
+
+EXAMPLE:
+  sunbeam doctor
+"#)]
+    Doctor,
+
+    /// Full cluster tear-down.
+    #[command(long_about = r#"Tear down the Sunbeam stack.
+
+Deletes Kubernetes namespaces in reverse dependency order. By default, only
+application and platform namespaces are removed. Infrastructure namespaces
+(cert-manager, longhorn-system) are preserved unless --infra is passed.
+
+The data namespace (Postgres, OpenBao, OpenSearch, Valkey) is deleted by default.
+Use --keep-data to preserve it across teardowns.
+
+A confirmation prompt is shown listing every namespace that will be deleted.
+Use --yes to skip the prompt for automation.
+
+EXAMPLES:
+  # Interactive tear-down (default namespaces only)
+  sunbeam down
+
+  # Non-interactive, include infra namespaces
+  sunbeam down --yes --infra
+
+  # Tear down but preserve databases and secrets
+  sunbeam down --yes --keep-data
+
+  # Tear down a Lima-based local stack
+  sunbeam down --yes --use-lima
+"#)]
+    Down {
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Also delete infrastructure namespaces (cert-manager, longhorn-system).
+        #[arg(long)]
+        infra: bool,
+        /// Preserve data namespace (postgres, opensearch).
+        #[arg(long)]
+        keep_data: bool,
+        /// Use Lima VM for local k3s (shorthand for --profile lima).
+        #[arg(long)]
+        use_lima: bool,
+        /// Profile to load (from infra/profiles/<name>.yaml).
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Kanban board management.
-    #[command(long_about = r#"""Manage Kanban projects, boards, and cards.
+    #[command(long_about = r#"Manage Kanban projects, boards, and cards.
 
 Connects to the Sunbeam Kanban backend over gRPC. Most commands require an
 active SSO session (`sunbeam auth login`). Public board commands are
@@ -326,7 +215,7 @@ EXAMPLES:
 
   # Subscribe to realtime board events
   sunbeam kanban subscribe board board_xxx
-""#)]
+"#)]
     Kanban {
         /// Output format.
         #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
@@ -338,10 +227,160 @@ EXAMPLES:
         action: crate::kanban::KanbanCommand,
     },
 
+    /// Workspace-level operations (alias: ops).
+    #[command(
+        alias = "ops",
+        long_about = r#"Workspace-level orchestration commands.
+
+Operate across the entire workspace rather than a single project.
+
+Subcommands:
+  - compose  — Docker Compose operations for shared local dependencies
+               (render, up, down, ps, logs)
+  - info     — print resolved workspace configuration
+  - repos    — list all repositories in the workspace by bucket
+  - stack    — snapshot and restore repo SHAs across the workspace
+               (list, pin, apply, diff)
+
+The stack system is useful for pinning a known-good combination of project
+versions and later restoring it exactly.
+
+EXAMPLES:
+  # Bring up shared local services (Postgres, Redis, etc.)
+  sunbeam ops compose up
+
+  # Pin current HEADs as "release-2026-01"
+  sunbeam ops stack pin release-2026-01
+
+  # Restore a pinned stack
+  sunbeam ops stack apply release-2026-01
+
+  # Diff two stacks
+  sunbeam ops stack diff release-2026-01 release-2026-02
+
+  # List all repos
+  sunbeam ops repos
+""#
+    )]
+    Operations {
+        #[command(subcommand)]
+        action: OperationsAction,
+    },
+
+    /// Per-project build verbs (alias: proj).
+    #[command(
+        alias = "proj",
+        long_about = r#"Build, test, and package projects in the workspace.
+
+Sunbeam discovers projects from `sunbeam.workspace.yaml` and `sunbeam.yaml`
+files. Each project defines targets (build, test, lint, fmt, package, deploy,
+dev, clean, doc) and optional dependencies on other projects.
+
+Commands can run for:
+  - The current project only (default)
+  - All projects in the workspace (--all), topologically sorted
+  - Specific projects (--project foo), optionally including transitive deps
+    (--with-deps)
+
+The `package` target builds container images and pushes them to the registry
+at `oci.<domain>` or `src.<domain>`.
+
+The `preseed-image` subcommand is a special helper for breaking the Pingora
+image pull deadlock on fresh clusters. After `sunbeam project package -p proxy`,
+run `sunbeam project preseed-image <ref>` to pull the image on the cluster node,
+then `sunbeam service apply ingress` to roll it out.
+
+EXAMPLES:
+  # Build the current project
+  sunbeam project build
+
+  # Test all projects in dependency order
+  sunbeam project test --all
+
+  # Package a specific project
+  sunbeam project package -p proxy
+
+  # Run a custom target defined in sunbeam.yaml
+  sunbeam project run migrate
+
+  # Show the resolved config for the current project
+  sunbeam project info
+
+  # Validate all workspace configs
+  sunbeam project check --all
+""#
+    )]
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+
+    /// OpenBao secrets engine interaction (KV, transit, generic read/write).
+    #[command(long_about = r#"Interact with the OpenBao secrets engine.
+
+OpenBao is the HashiCorp Vault fork used by Sunbeam for secrets management.
+This command provides direct access to KV v2, transit, and generic endpoints.
+
+By default, the command auto-discovers the OpenBao pod in the `openbao` namespace,
+opens a port-forward, and reads the root token from the K8s secret
+`openbao/openbao-bootstrap-token`. You can override the address and token with --addr and
+--token for remote instances.
+
+Subcommands:
+  - delete                                — generic engine delete
+  - exec                                  — raw bao CLI passthrough inside the pod
+  - init                                  — initialize OpenBao
+  - kv get / put / patch / delete / list  — KV v2 operations
+  - list                                  — generic engine list
+  - read                                  — generic engine read
+  - status                                — seal and initialization status
+  - transit enable / create-key / read-key / list-keys / delete-key
+  - unseal                                — unseal OpenBao
+  - write                                 — generic engine write
+
+EXAMPLES:
+  # Read a KV secret
+  sunbeam secrets kv get hydra
+
+  # Write a KV secret
+  sunbeam secrets kv put myapp mount=secret foo=bar baz=qux
+
+  # Patch (merge) fields into an existing secret
+  sunbeam secrets kv patch myapp foo=new_value
+
+  # Enable transit engine
+  sunbeam secrets transit enable transit/sbbb
+
+  # Create an ed25519 transit key
+  sunbeam secrets transit create-key transit/sbbb my-key
+
+  # Check seal status
+  sunbeam secrets status
+
+  # Unseal with a key
+  sunbeam secrets unseal <unseal-key>
+
+  # Raw bao CLI inside the pod
+  sunbeam secrets exec policy list
+"#)]
+    Secrets {
+        /// OpenBao address override.
+        #[arg(short, long)]
+        addr: Option<String>,
+        /// Root token override.
+        #[arg(short, long)]
+        token: Option<String>,
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
+        output: crate::output::OutputFormat,
+        #[command(subcommand)]
+        action: crate::secrets_cli::SecretsAction,
+    },
+
     /// Service operations (deploy, logs, restart, exec, secrets, ...).
     #[command(
         alias = "svc",
-        long_about = r#"""Operate on individual services in the cluster.
+        long_about = r#"Operate on individual services in the cluster.
 
 Provides a curated set of kubectl-adjacent commands scoped to services
 (namespaces and deployments). Most commands accept a service name, namespace,
@@ -393,151 +432,75 @@ EXAMPLES:
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Full cluster bring-up.
+    #[command(long_about = r#"Bring up the entire Sunbeam stack from zero.
 
-    /// VPN management.
-    #[command(long_about = r#"""Manage the WireGuard VPN tunnel to the cluster.
+This is the primary command for provisioning a local or remote Kubernetes cluster
+with the complete Sunbeam platform. It runs a versioned WFE workflow (version 3)
+that orchestrates dozens of steps in dependency order:
 
-Sunbeam integrates Headscale (a self-hosted Tailscale control server) for
-VPN access. This provides secure connectivity to cluster services without
-exposing them publicly.
+  1. Lima VM provisioning (when --use-lima or --profile lima)
+  2. Infrastructure: Cilium, cert-manager, Longhorn, CNPG, BuildKit
+  3. OpenBao initialization/unseal and KV seeding
+  4. PostgreSQL role/database creation and Vault database engine config
+  5. Namespace and secret creation
+  6. Platform manifests: ingress, identity (Ory), storage, registry, VPN
+  7. Application manifests: matrix, wfe, press
+  8. Service rollouts and observability
+  9. VPN key minting and URL printing
 
-Subcommands:
-  - status      — show whether the tunnel is active
-  - connect     — start the VPN daemon (background by default, --foreground for CLI blocking)
-  - disconnect  — stop the tunnel
-  - create-key  — mint a new pre-auth key for onboarding another client
-
-When connected, `sunbeam service` and `sunbeam secrets` commands automatically
-route through the VPN tunnel. The kube client also rewrites the cluster URL
-to a loopback proxy inside the WireGuard trust boundary.
-
-VPN credentials are stored per-context in ~/.sunbeam/config.json.
-
-EXAMPLES:
-  # Connect in the background
-  sunbeam vpn connect
-
-  # Connect in foreground (useful for debugging)
-  sunbeam vpn connect --foreground
-
-  # Check tunnel status
-  sunbeam vpn status
-
-  # Disconnect
-  sunbeam vpn disconnect
-
-  # Create a reusable key for a new device
-  sunbeam vpn create-key --reusable --expiration 30d
-""#)]
-    Vpn {
-        #[command(subcommand)]
-        action: VpnAction,
-    },
-
-    /// OpenBao secrets engine interaction (KV, transit, generic read/write).
-    #[command(long_about = r#"""Interact with the OpenBao secrets engine.
-
-OpenBao is the HashiCorp Vault fork used by Sunbeam for secrets management.
-This command provides direct access to KV v2, transit, and generic endpoints.
-
-By default, the command auto-discovers the OpenBao pod in the `openbao` namespace,
-opens a port-forward, and reads the root token from the K8s secret
-`openbao/openbao-bootstrap-token`. You can override the address and token with --addr and
---token for remote instances.
-
-Subcommands:
-  - kv get / put / patch / delete / list  — KV v2 operations
-  - transit enable / create-key / read-key / list-keys / delete-key
-  - read / write / delete / list          — generic engine access
-  - status / init / unseal                — operational commands
-  - exec                                  — raw bao CLI passthrough inside the pod
+Most steps are idempotent — running `sunbeam up` multiple times is safe and
+will only apply changes.
 
 EXAMPLES:
-  # Read a KV secret
-  sunbeam secrets kv get hydra
+  # Full bring-up on a Lima VM
+  sunbeam up --use-lima
 
-  # Write a KV secret
-  sunbeam secrets kv put myapp mount=secret foo=bar baz=qux
+  # Re-run after editing manifests (only changes are applied)
+  sunbeam up
 
-  # Patch (merge) fields into an existing secret
-  sunbeam secrets kv patch myapp foo=new_value
+  # Skip specific namespaces
+  sunbeam up --disable matrix --disable press
 
-  # Enable transit engine
-  sunbeam secrets transit enable transit/sbbb
+  # Override a manifest field
+  sunbeam up --set deployment/ory/kratos/spec/replicas=3
 
-  # Create an ed25519 transit key
-  sunbeam secrets transit create-key transit/sbbb my-key
+  # Visualize the workflow DAG as Graphviz DOT
+  sunbeam up --graph > up.dot && dot -Tpng up.dot -o up.png
 
-  # Check seal status
-  sunbeam secrets status
-
-  # Unseal with a key
-  sunbeam secrets unseal <unseal-key>
-
-  # Raw bao CLI inside the pod
-  sunbeam secrets exec policy list
-""#)]
-    Secrets {
-        /// OpenBao address override.
-        #[arg(short, long)]
-        addr: Option<String>,
-        /// Root token override.
-        #[arg(short, long)]
-        token: Option<String>,
-        /// Output format.
-        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
-        output: crate::output::OutputFormat,
-        #[command(subcommand)]
-        action: crate::secrets_cli::SecretsAction,
+  # Use a profile defined in infra/profiles/<name>.yaml
+  sunbeam up --profile minimal
+"#)]
+    Up {
+        /// Override a manifest field (kind/namespace/name/field/path=value).
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// Disable a resource or pattern (kind/namespace/name or glob).
+        #[arg(long)]
+        disable: Vec<String>,
+        /// Re-enable a resource or pattern.
+        #[arg(long)]
+        enable: Vec<String>,
+        /// Skip the Cilium CNI check.
+        #[arg(long)]
+        skip_cilium: bool,
+        /// Output a Graphviz DOT graph of the workflow and exit.
+        #[arg(long)]
+        graph: bool,
+        /// Use Lima VM for local k3s (shorthand for --profile lima).
+        #[arg(long)]
+        use_lima: bool,
+        /// Profile to load (from infra/profiles/<name>.yaml).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Run in serial mode: longer delays between namespace applies and
+        /// more conservative resource usage for tiny single-node clusters.
+        #[arg(long)]
+        serial: bool,
     },
-
-    /// Generate shell completions.
-    #[command(long_about = r#"""Generate shell tab-completion scripts.
-
-Outputs a completion script for the specified shell to stdout. Redirect to
-the appropriate file for your shell:
-
-  bash:  ~/.bash_completion.d/sunbeam
-  zsh:   ~/.zfunc/_sunbeam
-  fish:  ~/.config/fish/completions/sunbeam.fish
-
-After installing, restart your shell or source the file.
-
-EXAMPLE:
-  sunbeam completions bash > ~/.bash_completion.d/sunbeam
-""#)]
-    Completions {
-        /// Shell to generate completions for.
-        #[arg(value_enum)]
-        shell: Shell,
-    },
-
-    /// Connectivity diagnostics.
-    #[command(long_about = r#"""Run connectivity and configuration diagnostics.
-
-Checks that the CLI can reach required services and that configuration is
-valid. Reports issues with actionable fixes.
-
-Checks include:
-  - Kubernetes API reachability
-  - OpenBao seal status and token validity
-  - VPN tunnel status (if configured)
-  - DNS resolution for the configured domain
-  - Infrastructure directory existence and structure
-
-Use this as the first troubleshooting step when something is not working.
-
-EXAMPLE:
-  sunbeam doctor
-""#)]
-    Doctor,
-
-    /// Internal: run the VPN daemon in the foreground.
-    #[command(name = "__vpn-daemon", hide = true)]
-    VpnDaemon,
 
     /// Self-update from latest mainline commit.
-    #[command(long_about = r#"""Update the Sunbeam CLI to the latest version.
+    #[command(long_about = r#"Update the Sunbeam CLI to the latest version.
 
 Downloads the latest release artifact from the internal Gitea CI and
 replaces the current binary. The update checks the current version against
@@ -549,110 +512,48 @@ use that instead.
 
 EXAMPLE:
   sunbeam update
-""#)]
+"#)]
     Update,
 
-    /// Print version info.
-    #[command(long_about = r#"""Print version and build information.
+    /// User/identity management.
+    #[command(long_about = r#"Manage identities via Kratos.
 
-Shows the CLI version, Git commit SHA, build date, and Rust compiler version.
-Useful for bug reports and verifying that you are running the expected binary.
+Provides CRUD operations for users in the Ory Kratos identity system, plus
+onboarding and offboarding workflows.
 
-EXAMPLE:
-  sunbeam version
-""#)]
-    Version,
+Onboarding creates an identity, sets a random password, and optionally sends
+a welcome email with login instructions. Offboarding disables the identity,
+revokes all sessions, and marks the user as terminated.
 
-    /// Per-project build verbs (alias: proj).
-    #[command(
-        alias = "proj",
-        long_about = r#"""Build, test, and package projects in the workspace.
-
-Sunbeam discovers projects from `sunbeam.workspace.yaml` and `sunbeam.yaml`
-files. Each project defines targets (build, test, lint, fmt, package, deploy,
-dev, clean, doc) and optional dependencies on other projects.
-
-Commands can run for:
-  - The current project only (default)
-  - All projects in the workspace (--all), topologically sorted
-  - Specific projects (--project foo), optionally including transitive deps
-    (--with-deps)
-
-The `package` target builds container images and pushes them to the registry
-at `oci.<domain>` or `src.<domain>`.
-
-The `preseed-image` subcommand is a special helper for breaking the Pingora
-image pull deadlock on fresh clusters. After `sunbeam project package -p proxy`,
-run `sunbeam project preseed-image <ref>` to pull the image on the cluster node,
-then `sunbeam service apply ingress` to roll it out.
+Most commands accept either an email address or a Kratos identity UUID as
+the target argument.
 
 EXAMPLES:
-  # Build the current project
-  sunbeam project build
+  # List all identities
+  sunbeam user list
 
-  # Test all projects in dependency order
-  sunbeam project test --all
+  # Search by email
+  sunbeam user list --search admin@sunbeam.pt
 
-  # Package a specific project
-  sunbeam project package -p proxy
+  # Create a basic identity
+  sunbeam user create alice@sunbeam.pt --name "Alice Smith"
 
-  # Run a custom target defined in sunbeam.yaml
-  sunbeam project run migrate
+  # Full onboarding with welcome email
+  sunbeam user onboard alice@sunbeam.pt --name "Alice Smith" --department Engineering
 
-  # Show the resolved config for the current project
-  sunbeam project info
+  # Offboard (disable + revoke)
+  sunbeam user offboard alice@sunbeam.pt
 
-  # Validate all workspace configs
-  sunbeam project check --all
-""#
-    )]
-    Project {
+  # Set password interactively
+  sunbeam user set-password alice@sunbeam.pt
+"#)]
+    User {
         #[command(subcommand)]
-        action: ProjectAction,
-    },
-
-    /// Workspace-level operations (alias: ops).
-    #[command(
-        alias = "ops",
-        long_about = r#"""Workspace-level orchestration commands.
-
-Operate across the entire workspace rather than a single project.
-
-Subcommands:
-  - compose  — Docker Compose operations for shared local dependencies
-               (render, up, down, ps, logs)
-  - stack    — snapshot and restore repo SHAs across the workspace
-               (list, pin, apply, diff)
-  - info     — print resolved workspace configuration
-  - repos    — list all repositories in the workspace by bucket
-
-The stack system is useful for pinning a known-good combination of project
-versions and later restoring it exactly.
-
-EXAMPLES:
-  # Bring up shared local services (Postgres, Redis, etc.)
-  sunbeam ops compose up
-
-  # Pin current HEADs as "release-2026-01"
-  sunbeam ops stack pin release-2026-01
-
-  # Restore a pinned stack
-  sunbeam ops stack apply release-2026-01
-
-  # Diff two stacks
-  sunbeam ops stack diff release-2026-01 release-2026-02
-
-  # List all repos
-  sunbeam ops repos
-""#
-    )]
-    Operations {
-        #[command(subcommand)]
-        action: OperationsAction,
+        action: Option<UserAction>,
     },
 
     /// Version control — repo tool operations.
-    #[command(long_about = r#"""Android repo-style multi-repository operations.
+    #[command(long_about = r#"Android repo-style multi-repository operations.
 
 Wraps the repo-rs engine for managing multiple Git repositories via a
 manifest. All standard repo subcommands are available:
@@ -675,10 +576,113 @@ EXAMPLES:
 
   # Upload for review
   sunbeam vcs upload
-"""#)]
+"#)]
     Vcs {
         #[command(subcommand)]
         action: VcsAction,
+    },
+
+    /// Print version info.
+    #[command(long_about = r#"Print version and build information.
+
+Shows the CLI version, Git commit SHA, build date, and Rust compiler version.
+Useful for bug reports and verifying that you are running the expected binary.
+
+EXAMPLE:
+  sunbeam version
+"#)]
+    Version,
+
+    /// VPN management.
+    #[command(long_about = r#"Manage the WireGuard VPN tunnel to the cluster.
+
+Sunbeam integrates Headscale (a self-hosted Tailscale control server) for
+VPN access. This provides secure connectivity to cluster services without
+exposing them publicly.
+
+Subcommands:
+  - connect     — start the VPN daemon (background by default, --foreground for CLI blocking)
+  - create-key  — mint a new pre-auth key for onboarding another client
+  - disconnect  — stop the tunnel
+  - status      — show whether the tunnel is active
+
+When connected, `sunbeam service` and `sunbeam secrets` commands automatically
+route through the VPN tunnel. The kube client also rewrites the cluster URL
+to a loopback proxy inside the WireGuard trust boundary.
+
+VPN credentials are stored per-context in ~/.sunbeam/config.json.
+
+EXAMPLES:
+  # Connect in the background
+  sunbeam vpn connect
+
+  # Connect in foreground (useful for debugging)
+  sunbeam vpn connect --foreground
+
+  # Check tunnel status
+  sunbeam vpn status
+
+  # Disconnect
+  sunbeam vpn disconnect
+
+  # Create a reusable key for a new device
+  sunbeam vpn create-key --reusable --expiration 30d
+"#)]
+    Vpn {
+        #[command(subcommand)]
+        action: VpnAction,
+    },
+
+    /// Internal: run the VPN daemon in the foreground.
+    #[command(name = "__vpn-daemon", hide = true)]
+    VpnDaemon,
+
+    /// Workflow management — local WFE host, remote wfe-server, and target management.
+    #[command(long_about = r#"Manage WFE (Workflow Engine) instances.
+
+WFE orchestrates complex multi-step operations like `sunbeam up` and
+`sunbeam down`. This command lets you inspect, retry, and cancel workflow
+instances, as well as manage remote WFE server targets.
+
+Local target (default):
+  - Uses an embedded SQLite database at ~/.sunbeam/<context>/workflows.db
+  - Supports list, status, retry, cancel, and run
+
+Remote target (-t <name>):
+  - Connects to a wfe-server instance over HTTPS
+  - Supports server-side workflow registration, execution, log streaming,
+    and full-text log search
+  - Requires `sunbeam workflow login --name <name> --url <url>` first
+
+EXAMPLES:
+  # List local workflow instances
+  sunbeam workflow list
+
+  # Show step-by-step status of an instance
+  sunbeam workflow status <instance-id>
+
+  # Retry a failed workflow from its last checkpoint
+  sunbeam workflow retry <instance-id>
+
+  # Cancel a running workflow
+  sunbeam workflow cancel <instance-id>
+
+  # Register a remote target
+  sunbeam workflow login --name builds --url https://builds.sunbeam.pt
+
+  # Use remote target for server-side operations
+  sunbeam workflow -t builds list
+  sunbeam workflow -t builds start --definition deploy --version 1
+"#)]
+    Workflow {
+        /// Workflow target (default: local).
+        #[arg(short, long, default_value = "local", global = true)]
+        target: String,
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::wfectl::output::OutputFormat::Table, global = true)]
+        output: crate::wfectl::output::OutputFormat,
+        #[command(subcommand)]
+        action: crate::workflows::cmd::WorkflowAction,
     },
 }
 
@@ -686,24 +690,24 @@ impl Verb {
     /// Return a short string identifier for the verb variant (e.g. "up", "version").
     pub fn as_ref_str(&self) -> &'static str {
         match self {
-            Verb::Up { .. } => "up",
-            Verb::Down { .. } => "down",
-            Verb::Config { .. } => "config",
-            Verb::User { .. } => "user",
             Verb::Auth { .. } => "auth",
-            Verb::Workflow { .. } => "workflow",
-            Verb::Kanban { .. } => "kanban",
-            Verb::Service { .. } => "service",
-            Verb::Vpn { .. } => "vpn",
-            Verb::Secrets { .. } => "secrets",
             Verb::Completions { .. } => "completions",
+            Verb::Config { .. } => "config",
             Verb::Doctor => "doctor",
-            Verb::VpnDaemon => "vpn-daemon",
-            Verb::Update => "update",
-            Verb::Version => "version",
-            Verb::Project { .. } => "project",
+            Verb::Down { .. } => "down",
+            Verb::Kanban { .. } => "kanban",
             Verb::Operations { .. } => "operations",
+            Verb::Project { .. } => "project",
+            Verb::Secrets { .. } => "secrets",
+            Verb::Service { .. } => "service",
+            Verb::Up { .. } => "up",
+            Verb::Update => "update",
+            Verb::User { .. } => "user",
             Verb::Vcs { .. } => "vcs",
+            Verb::Version => "version",
+            Verb::Vpn { .. } => "vpn",
+            Verb::VpnDaemon => "vpn-daemon",
+            Verb::Workflow { .. } => "workflow",
         }
     }
 }
@@ -711,18 +715,8 @@ impl Verb {
 /// VPN management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum VpnAction {
-    /// Show VPN tunnel status.
-    #[command(long_about = r#"""Show whether the WireGuard VPN tunnel is active.
-
-Reports the local tunnel interface, assigned IP, and last handshake time.
-Also shows the Headscale control server reachability.
-
-EXAMPLE:
-  sunbeam vpn status
-""#)]
-    Status,
     /// Connect to the cluster VPN.
-    #[command(long_about = r#"""Establish the WireGuard VPN tunnel.
+    #[command(long_about = r#"Establish the WireGuard VPN tunnel.
 
 By default, starts the VPN daemon in the background and returns immediately.
 Use --foreground to block the CLI and see daemon logs directly.
@@ -733,23 +727,14 @@ and the kube client routes through the tunnel.
 EXAMPLES:
   sunbeam vpn connect
   sunbeam vpn connect --foreground
-""#)]
+"#)]
     Connect {
         /// Run the daemon in the foreground instead of detaching.
         #[arg(long)]
         foreground: bool,
     },
-    /// Disconnect from the cluster VPN.
-    #[command(long_about = r#"""Teardown the WireGuard VPN tunnel.
-
-Stops the background VPN daemon and removes the tunnel interface.
-
-EXAMPLE:
-  sunbeam vpn disconnect
-""#)]
-    Disconnect,
     /// Create a new pre-auth key for onboarding a new client.
-    #[command(long_about = r#"""Mint a new Headscale pre-authentication key.
+    #[command(long_about = r#"Mint a new Headscale pre-authentication key.
 
 Pre-auth keys allow devices to join the VPN without interactive login.
 The key is bound to a Headscale user and can optionally be reusable or
@@ -767,7 +752,7 @@ EXAMPLES:
 
   # Ephemeral key for CI runners
   sunbeam vpn create-key --ephemeral --expiration 1h
-""#)]
+"#)]
     CreateKey {
         /// Headscale user name the key belongs to (looked up to obtain a numeric ID).
         #[arg(long, default_value = "sunbeam")]
@@ -785,142 +770,32 @@ EXAMPLES:
         #[arg(long, default_value = "30d")]
         expiration: String,
     },
+    /// Disconnect from the cluster VPN.
+    #[command(long_about = r#"Teardown the WireGuard VPN tunnel.
+
+Stops the background VPN daemon and removes the tunnel interface.
+
+EXAMPLE:
+  sunbeam vpn disconnect
+"#)]
+    Disconnect,
+    /// Show VPN tunnel status.
+    #[command(long_about = r#"Show whether the WireGuard VPN tunnel is active.
+
+Reports the local tunnel interface, assigned IP, and last handshake time.
+Also shows the Headscale control server reachability.
+
+EXAMPLE:
+  sunbeam vpn status
+"#)]
+    Status,
 }
 
 /// Service operations subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ServiceAction {
-    /// Pod health (optionally scoped).
-    #[command(long_about = r#"""Show pod health for a service or namespace.
-
-Without a target, shows all pods across all namespaces. With a target,
-scopes to the given namespace or specific pod.
-
-EXAMPLES:
-  sunbeam service status
-  sunbeam service status ory
-  sunbeam service status ory/kratos-7d9f4b8c5-x2v1m
-""#)]
-    Status {
-        /// Service, namespace, or namespace/name.
-        target: Option<String>,
-    },
-
-    /// kubectl logs for a service.
-    #[command(long_about = r#"""Stream or fetch logs for a service.
-
-Follow mode (-f) streams new log lines in real time. Without -f, prints
-the current log buffer and exits.
-
-EXAMPLES:
-  sunbeam service logs ory/kratos
-  sunbeam service logs ory/kratos -f
-""#)]
-    Logs {
-        /// Service or namespace/name.
-        target: String,
-        /// Stream logs.
-        #[arg(short, long)]
-        follow: bool,
-    },
-
-    /// Raw kubectl get for a pod (ns/name).
-    #[command(long_about = r#"""Raw kubectl get output for a pod.
-
-Useful when you need the full pod spec, status, or metadata in YAML, JSON,
-or wide table format.
-
-EXAMPLES:
-  sunbeam service get ory/kratos-7d9f4b8c5-x2v1m
-  sunbeam service get ory/kratos-7d9f4b8c5-x2v1m -o json
-""#)]
-    Get {
-        /// Service or namespace/name.
-        target: String,
-        /// Output format.
-        #[arg(short, long, default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
-        output: String,
-    },
-
-    /// Rolling restart of services.
-    #[command(long_about = r#"""Perform a rolling restart of a deployment.
-
-Triggers a rolling update by patching the deployment's pod template with a
-restart annotation. Does not change the container image.
-
-Without a target, restarts all services. With a target, scopes to the given
-namespace or specific deployment.
-
-EXAMPLES:
-  sunbeam service restart ory/kratos
-  sunbeam service restart ory
-""#)]
-    Restart {
-        /// Service, namespace, or namespace/name.
-        target: Option<String>,
-    },
-
-    /// Functional service health checks.
-    #[command(long_about = r#"""Run functional health checks against services.
-
-Performs application-level checks (HTTP endpoints, database connectivity,
-etc.) rather than just pod status. Reports detailed failure reasons.
-
-EXAMPLES:
-  sunbeam service check
-  sunbeam service check ory
-""#)]
-    Check {
-        /// Service, namespace, or namespace/name.
-        target: Option<String>,
-    },
-
-    /// Deploy service(s) — apply manifests + rollout restart.
-    #[command(long_about = r#"""Deploy one or more services.
-
-Applies manifests via kustomize build + kubectl apply, then triggers a
-rolling restart. This is a convenience wrapper around `apply` + `restart`.
-
-Use --all to deploy every namespace. Use --profile to apply a preset
-configuration of skips and overrides.
-
-EXAMPLES:
-  sunbeam service deploy ory
-  sunbeam service deploy --all
-  sunbeam service deploy hydra --profile minimal
-""#)]
-    Deploy {
-        /// Service name, category, or namespace (e.g. "hydra", "auth", "ory").
-        /// Use --all for everything.
-        target: Option<String>,
-        /// Deploy all services.
-        #[arg(long)]
-        all: bool,
-        /// Apply a named profile (shortcuts, skips, overrides).
-        #[arg(long)]
-        profile: Option<String>,
-    },
-
-    /// List all available services that can be applied.
-    #[command(
-        long_about = r#"""List services discovered in the infrastructure directory.
-
-Shows namespace, service name, kind, and whether the resource is currently
-enabled or disabled by profile rules.
-
-EXAMPLE:
-  sunbeam service list
-  sunbeam service list -o json
-""#
-    )]
-    List {
-        /// Output format.
-        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table)]
-        format: crate::output::OutputFormat,
-    },
-
     /// kustomize build + domain subst + kubectl apply.
-    #[command(long_about = r#"""Apply Kubernetes manifests for a namespace.
+    #[command(long_about = r#"Apply Kubernetes manifests for a namespace.
 
 Runs kustomize build against the infrastructure directory configured in the
 active context, substitutes the domain suffix, applies manifest overrides
@@ -939,7 +814,7 @@ EXAMPLES:
   sunbeam service apply ory --dry-run
   sunbeam service apply --all
   sunbeam service apply ory --set deployment/ory/kratos/spec/replicas=3
-""#)]
+"#)]
     Apply {
         /// Limit apply to one namespace.
         namespace: Option<String>,
@@ -971,78 +846,91 @@ EXAMPLES:
         profile: Option<String>,
     },
 
-    /// Generate/store all credentials in OpenBao.
-    #[command(long_about = r#"""Seed OpenBao with credentials for all services.
+    /// Functional service health checks.
+    #[command(long_about = r#"Run functional health checks against services.
 
-Generates random secrets (passwords, salts, tokens) for every service in the
-stack and writes them to OpenBao KV paths. This is normally done automatically
-by `sunbeam up`, but can be run standalone after a cluster reset or when
-adding new services.
-
-EXAMPLE:
-  sunbeam service seed
-""#)]
-    Seed,
-
-    /// E2E VSO + OpenBao integration test.
-    #[command(long_about = r#"""Verify Vault Secrets Operator integration.
-
-Creates a test VaultStaticSecret and VaultAuth resource, waits for VSO to
-sync the secret into a Kubernetes Secret, and validates the value. This
-confirms that the OpenBao → VSO → K8s secret pipeline is working end-to-end.
-
-EXAMPLE:
-  sunbeam service verify
-""#)]
-    Verify,
-
-    /// View or get secrets for a service from OpenBao.
-    #[command(long_about = r#"""View secrets stored in OpenBao for a service.
-
-Without a subcommand, lists all keys in the service's KV path.
-With `get <key>`, prints the specific field value.
+Performs application-level checks (HTTP endpoints, database connectivity,
+etc.) rather than just pod status. Reports detailed failure reasons.
 
 EXAMPLES:
-  sunbeam service secrets hydra
-  sunbeam service secrets hydra get secretsSystem
-""#)]
-    Secrets {
-        /// Service name (e.g. "hydra").
-        service: String,
-        #[command(subcommand)]
-        action: Option<SecretsAction>,
+  sunbeam service check
+  sunbeam service check ory
+"#)]
+    Check {
+        /// Service, namespace, or namespace/name.
+        target: Option<String>,
     },
 
-    /// Interactive shell into a service pod.
-    #[command(long_about = r#"""Open an interactive shell in a service pod.
+    /// Delete a Job by namespace/name (workaround for k8s Job immutability).
+    #[command(long_about = r#"Delete a Kubernetes Job.
 
-Uses kubectl exec with /bin/sh. The service name is resolved to a running
-pod automatically.
+Kubernetes Jobs are immutable — you cannot update their spec. When a Job's
+container spec changes, you must delete and recreate it. This command is a
+convenience wrapper for that operation.
 
 EXAMPLE:
-  sunbeam service shell postgres
-  sunbeam service shell gitea
-""#)]
-    Shell {
-        /// Service name (e.g. "postgres", "gitea").
-        service: String,
+  sunbeam service delete-job build/migrate-2026-01-15
+"#)]
+    DeleteJob {
+        /// Job reference in the form <namespace>/<name>.
+        target: String,
+    },
+
+    /// Deploy service(s) — apply manifests + rollout restart.
+    #[command(long_about = r#"Deploy one or more services.
+
+Applies manifests via kustomize build + kubectl apply, then triggers a
+rolling restart. This is a convenience wrapper around `apply` + `restart`.
+
+Use --all to deploy every namespace. Use --profile to apply a preset
+configuration of skips and overrides.
+
+EXAMPLES:
+  sunbeam service deploy ory
+  sunbeam service deploy --all
+  sunbeam service deploy hydra --profile minimal
+"#)]
+    Deploy {
+        /// Service name, category, or namespace (e.g. "hydra", "auth", "ory").
+        /// Use --all for everything.
+        target: Option<String>,
+        /// Deploy all services.
+        #[arg(long)]
+        all: bool,
+        /// Apply a named profile (shortcuts, skips, overrides).
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Describe a service (kubectl describe on its deployment).
-    #[command(long_about = r#"""kubectl describe for a service deployment.
+    #[command(long_about = r#"kubectl describe for a service deployment.
 
 Shows events, conditions, replica status, and resource usage.
 
 EXAMPLE:
   sunbeam service describe hydra
-""#)]
+"#)]
     Describe {
         /// Service name.
         service: String,
     },
 
+    /// Edit a service's deployment manifest in-cluster.
+    #[command(long_about = r#"Edit a deployment in-cluster with $EDITOR.
+
+Opens the live deployment manifest in your default editor. Changes are
+applied immediately. This is a kubectl edit wrapper.
+
+EXAMPLE:
+  sunbeam service edit hydra
+"#)]
+    Edit {
+        /// Service name.
+        service: String,
+    },
+
     /// Exec into a service pod.
-    #[command(long_about = r#"""Execute a command in a service pod.
+    #[command(long_about = r#"Execute a command in a service pod.
 
 The command and arguments are passed directly to kubectl exec. Use --container
 to target a specific container in multi-container pods.
@@ -1050,7 +938,7 @@ to target a specific container in multi-container pods.
 EXAMPLES:
   sunbeam service exec postgres -- psql -U kratos
   sunbeam service exec hydra --container sidecar -- ls /var/log
-""#)]
+"#)]
     Exec {
         /// Service name.
         service: String,
@@ -1062,8 +950,62 @@ EXAMPLES:
         command: Vec<String>,
     },
 
+    /// Raw kubectl get for a pod (ns/name).
+    #[command(long_about = r#"Raw kubectl get output for a pod.
+
+Useful when you need the full pod spec, status, or metadata in YAML, JSON,
+or wide table format.
+
+EXAMPLES:
+  sunbeam service get ory/kratos-7d9f4b8c5-x2v1m
+  sunbeam service get ory/kratos-7d9f4b8c5-x2v1m -o json
+"#)]
+    Get {
+        /// Service or namespace/name.
+        target: String,
+        /// Output format.
+        #[arg(short, long, default_value = "yaml", value_parser = ["yaml", "json", "wide"])]
+        output: String,
+    },
+
+    /// List all available services that can be applied.
+    #[command(
+        long_about = r#"List services discovered in the infrastructure directory.
+
+Shows namespace, service name, kind, and whether the resource is currently
+enabled or disabled by profile rules.
+
+EXAMPLE:
+  sunbeam service list
+  sunbeam service list -o json
+""#
+    )]
+    List {
+        /// Output format.
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table)]
+        format: crate::output::OutputFormat,
+    },
+
+    /// kubectl logs for a service.
+    #[command(long_about = r#"Stream or fetch logs for a service.
+
+Follow mode (-f) streams new log lines in real time. Without -f, prints
+the current log buffer and exits.
+
+EXAMPLES:
+  sunbeam service logs ory/kratos
+  sunbeam service logs ory/kratos -f
+"#)]
+    Logs {
+        /// Service or namespace/name.
+        target: String,
+        /// Stream logs.
+        #[arg(short, long)]
+        follow: bool,
+    },
+
     /// Port-forward to a service pod.
-    #[command(long_about = r#"""Forward local ports to a service pod.
+    #[command(long_about = r#"Forward local ports to a service pod.
 
 Accepts standard kubectl port-forward syntax: "local:remote" or just "port"
 for symmetric mapping. Blocks until interrupted (Ctrl-C).
@@ -1071,7 +1013,7 @@ for symmetric mapping. Blocks until interrupted (Ctrl-C).
 EXAMPLES:
   sunbeam service port-forward grafana 3000
   sunbeam service port-forward hydra 4445:4445
-""#)]
+"#)]
     PortForward {
         /// Service name.
         service: String,
@@ -1079,9 +1021,27 @@ EXAMPLES:
         ports: Vec<String>,
     },
 
+    /// Rolling restart of services.
+    #[command(long_about = r#"Perform a rolling restart of a deployment.
+
+Triggers a rolling update by patching the deployment's pod template with a
+restart annotation. Does not change the container image.
+
+Without a target, restarts all services. With a target, scopes to the given
+namespace or specific deployment.
+
+EXAMPLES:
+  sunbeam service restart ory/kratos
+  sunbeam service restart ory
+"#)]
+    Restart {
+        /// Service, namespace, or namespace/name.
+        target: Option<String>,
+    },
+
     /// Scale a service deployment.
     #[command(
-        long_about = r#"""Scale a deployment to the specified number of replicas.
+        long_about = r#"Scale a deployment to the specified number of replicas.
 
 EXAMPLE:
   sunbeam service scale hydra 3
@@ -1094,47 +1054,90 @@ EXAMPLE:
         replicas: u32,
     },
 
+    /// View or get secrets for a service from OpenBao.
+    #[command(long_about = r#"View secrets stored in OpenBao for a service.
+
+Without a subcommand, lists all keys in the service's KV path.
+With `get <key>`, prints the specific field value.
+
+EXAMPLES:
+  sunbeam service secrets hydra
+  sunbeam service secrets hydra get secretsSystem
+"#)]
+    Secrets {
+        /// Service name (e.g. "hydra").
+        service: String,
+        #[command(subcommand)]
+        action: Option<SecretsAction>,
+    },
+
+    /// Generate/store all credentials in OpenBao.
+    #[command(long_about = r#"Seed OpenBao with credentials for all services.
+
+Generates random secrets (passwords, salts, tokens) for every service in the
+stack and writes them to OpenBao KV paths. This is normally done automatically
+by `sunbeam up`, but can be run standalone after a cluster reset or when
+adding new services.
+
+EXAMPLE:
+  sunbeam service seed
+"#)]
+    Seed,
+
+    /// Interactive shell into a service pod.
+    #[command(long_about = r#"Open an interactive shell in a service pod.
+
+Uses kubectl exec with /bin/sh. The service name is resolved to a running
+pod automatically.
+
+EXAMPLE:
+  sunbeam service shell postgres
+  sunbeam service shell gitea
+"#)]
+    Shell {
+        /// Service name (e.g. "postgres", "gitea").
+        service: String,
+    },
+    /// Pod health (optionally scoped).
+    #[command(long_about = r#"Show pod health for a service or namespace.
+
+Without a target, shows all pods across all namespaces. With a target,
+scopes to the given namespace or specific pod.
+
+EXAMPLES:
+  sunbeam service status
+  sunbeam service status ory
+  sunbeam service status ory/kratos-7d9f4b8c5-x2v1m
+"#)]
+    Status {
+        /// Service, namespace, or namespace/name.
+        target: Option<String>,
+    },
+
     /// Show resource usage (CPU/memory) for a service's pods.
-    #[command(long_about = r#"""Show CPU and memory usage for a service's pods.
+    #[command(long_about = r#"Show CPU and memory usage for a service's pods.
 
 Uses kubectl top. Requires the metrics-server to be running in the cluster.
 
 EXAMPLE:
   sunbeam service top hydra
-""#)]
+"#)]
     Top {
         /// Service name.
         service: String,
     },
 
-    /// Edit a service's deployment manifest in-cluster.
-    #[command(long_about = r#"""Edit a deployment in-cluster with $EDITOR.
+    /// E2E VSO + OpenBao integration test.
+    #[command(long_about = r#"Verify Vault Secrets Operator integration.
 
-Opens the live deployment manifest in your default editor. Changes are
-applied immediately. This is a kubectl edit wrapper.
-
-EXAMPLE:
-  sunbeam service edit hydra
-""#)]
-    Edit {
-        /// Service name.
-        service: String,
-    },
-
-    /// Delete a Job by namespace/name (workaround for k8s Job immutability).
-    #[command(long_about = r#"""Delete a Kubernetes Job.
-
-Kubernetes Jobs are immutable — you cannot update their spec. When a Job's
-container spec changes, you must delete and recreate it. This command is a
-convenience wrapper for that operation.
+Creates a test VaultStaticSecret and VaultAuth resource, waits for VSO to
+sync the secret into a Kubernetes Secret, and validates the value. This
+confirms that the OpenBao → VSO → K8s secret pipeline is working end-to-end.
 
 EXAMPLE:
-  sunbeam service delete-job build/migrate-2026-01-15
-""#)]
-    DeleteJob {
-        /// Job reference in the form <namespace>/<name>.
-        target: String,
-    },
+  sunbeam service verify
+"#)]
+    Verify,
 }
 
 /// Secret field retrieval subcommands.
@@ -1142,7 +1145,7 @@ EXAMPLE:
 pub enum SecretsAction {
     /// Get a specific secret field value.
     #[command(
-        long_about = r#"""Get a specific field from a service's OpenBao KV secret.
+        long_about = r#"Get a specific field from a service's OpenBao KV secret.
 
 EXAMPLE:
   sunbeam service secrets hydra get secretsSystem
@@ -1158,7 +1161,7 @@ EXAMPLE:
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via OAuth2 Device Authorization Grant.
-    #[command(long_about = r#"""Log in to Sunbeam via Hydra OIDC.
+    #[command(long_about = r#"Log in to Sunbeam via Hydra OIDC.
 
 Prints a user code and URL, opens a browser to the verification URL, and polls
 for tokens once authorized. Tokens are cached in ~/.sunbeam/auth/{domain}.json
@@ -1170,14 +1173,14 @@ context's domain is used.
 EXAMPLE:
   sunbeam auth login
   sunbeam auth login --domain staging.sunbeam.pt
-""#)]
+"#)]
     Login {
         /// Domain to authenticate against (e.g. sunbeam.pt).
         #[arg(long)]
         domain: Option<String>,
     },
     /// Log out (remove cached tokens).
-    #[command(long_about = r#"""Clear all cached authentication tokens.
+    #[command(long_about = r#"Clear all cached authentication tokens.
 
 Removes the SSO access token, refresh token, and id token from
 ~/.sunbeam/auth/{domain}.json. Does not delete identities or server-side
@@ -1185,35 +1188,53 @@ sessions.
 
 EXAMPLE:
   sunbeam auth logout
-""#)]
+"#)]
     Logout,
     /// Show current authentication status.
-    #[command(long_about = r#"""Show current authentication status.
+    #[command(long_about = r#"Show current authentication status.
 
 Reports whether a valid SSO token is present, when it expires, and which
 domain it belongs to.
 
 EXAMPLE:
   sunbeam auth status
-""#)]
+"#)]
     Status,
     /// Print the current access token (for use in scripts and MCP headers).
-    #[command(long_about = r#"""Print the current SSO access token to stdout.
+    #[command(long_about = r#"Print the current SSO access token to stdout.
 
 Useful for scripting and API clients that need a Bearer token. The token is
 printed with no additional formatting — pipe or copy as needed.
 
 EXAMPLE:
   curl -H "Authorization: Bearer $(sunbeam auth token)" https://api.sunbeam.pt/...
-""#)]
+"#)]
     Token,
 }
 
 /// Configuration management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
+    /// Clear configuration.
+    #[command(long_about = r#"Delete the entire ~/.sunbeam/config.json file.
+
+Use with caution. This removes all contexts, profiles, and cached tokens.
+
+EXAMPLE:
+  sunbeam config clear
+"#)]
+    Clear,
+    /// Get current configuration.
+    #[command(long_about = r#"Print all contexts and highlight the active one.
+
+Shows domain, kube-context, infra-dir, and acme-email for each context.
+
+EXAMPLE:
+  sunbeam config get
+"#)]
+    Get,
     /// Set configuration values for the current context.
-    #[command(long_about = r#"""Set fields on a Sunbeam context.
+    #[command(long_about = r#"Set fields on a Sunbeam context.
 
 All fields are optional — omitting a field leaves it unchanged. Empty string
 is treated as "don't change" (not as an actual empty value).
@@ -1227,7 +1248,7 @@ EXAMPLES:
 
   # Set kube-context on a specific context
   sunbeam config set --context-name staging --kube-context k3s-staging
-""#)]
+"#)]
     Set {
         /// Domain suffix (e.g. sunbeam.pt).
         #[arg(long, default_value = "")]
@@ -1246,33 +1267,15 @@ EXAMPLES:
         #[arg(long, default_value = "")]
         context_name: String,
     },
-    /// Get current configuration.
-    #[command(long_about = r#"""Print all contexts and highlight the active one.
-
-Shows domain, kube-context, infra-dir, and acme-email for each context.
-
-EXAMPLE:
-  sunbeam config get
-""#)]
-    Get,
-    /// Clear configuration.
-    #[command(long_about = r#"""Delete the entire ~/.sunbeam/config.json file.
-
-Use with caution. This removes all contexts, profiles, and cached tokens.
-
-EXAMPLE:
-  sunbeam config clear
-""#)]
-    Clear,
     /// Switch the active context.
-    #[command(long_about = r#"""Switch the active context.
+    #[command(long_about = r#"Switch the active context.
 
 If the context does not exist, it is created with default values. Subsequent
 commands will use this context's domain, kube-context, and infra-dir.
 
 EXAMPLE:
   sunbeam config use-context production
-""#)]
+"#)]
     UseContext {
         /// Context name to switch to.
         name: String,
@@ -1282,44 +1285,15 @@ EXAMPLE:
 /// User/identity management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum UserAction {
-    /// List identities.
-    #[command(long_about = r#"""List all Kratos identities.
-
-Output is paginated by the Kratos admin API. Use --search to filter by email
-substring.
-
-EXAMPLES:
-  sunbeam user list
-  sunbeam user list --search admin
-""#)]
-    List {
-        /// Filter by email.
-        #[arg(long, default_value = "")]
-        search: String,
-    },
-    /// Get identity by email or ID.
-    #[command(long_about = r#"""Show full identity details.
-
-Accepts either an email address or a Kratos identity UUID. Resolves email to
-ID internally when needed.
-
-EXAMPLE:
-  sunbeam user get admin@sunbeam.pt
-  sunbeam user get 7c8f3e2a-...
-""#)]
-    Get {
-        /// Email or identity ID.
-        target: String,
-    },
     /// Create identity.
-    #[command(long_about = r#"""Create a bare identity.
+    #[command(long_about = r#"Create a bare identity.
 
 For a full onboarding workflow (welcome email, password generation), use
 `onboard` instead.
 
 EXAMPLE:
   sunbeam user create alice@sunbeam.pt --name "Alice" --schema default
-""#)]
+"#)]
     Create {
         /// Email address.
         email: String,
@@ -1331,72 +1305,85 @@ EXAMPLE:
         schema: String,
     },
     /// Delete identity.
-    #[command(long_about = r#"""Permanently delete an identity.
+    #[command(long_about = r#"Permanently delete an identity.
 
 This is irreversible. Consider `offboard` for a reversible lockout.
 
 EXAMPLE:
   sunbeam user delete alice@sunbeam.pt
-""#)]
+"#)]
     Delete {
         /// Email or identity ID.
         target: String,
     },
-    /// Generate recovery link.
-    #[command(long_about = r#"""Generate a recovery link for an identity.
-
-The link can be sent to the user to regain account access.
-
-EXAMPLE:
-  sunbeam user recover alice@sunbeam.pt
-""#)]
-    Recover {
-        /// Email or identity ID.
-        target: String,
-    },
     /// Disable identity + revoke sessions (lockout).
-    #[command(long_about = r#"""Disable an identity and revoke all active sessions.
+    #[command(long_about = r#"Disable an identity and revoke all active sessions.
 
 The identity data is preserved. Use `enable` to reactivate.
 
 EXAMPLE:
   sunbeam user disable alice@sunbeam.pt
-""#)]
+"#)]
     Disable {
         /// Email or identity ID.
         target: String,
     },
     /// Re-enable a disabled identity.
-    #[command(long_about = r#"""Re-enable a previously disabled identity.
+    #[command(long_about = r#"Re-enable a previously disabled identity.
 
 Does not reset the password or send any notification.
 
 EXAMPLE:
   sunbeam user enable alice@sunbeam.pt
-""#)]
+"#)]
     Enable {
         /// Email or identity ID.
         target: String,
     },
-    /// Set password for an identity.
-    #[command(long_about = r#"""Set or reset a user's password.
+    /// Get identity by email or ID.
+    #[command(long_about = r#"Show full identity details.
 
-If the password argument is omitted, it is read interactively from stdin
-(without echo). Useful for automation when piped:
-
-  echo 'newpass' | sunbeam user set-password alice@sunbeam.pt
+Accepts either an email address or a Kratos identity UUID. Resolves email to
+ID internally when needed.
 
 EXAMPLE:
-  sunbeam user set-password alice@sunbeam.pt hunter2
-""#)]
-    SetPassword {
+  sunbeam user get admin@sunbeam.pt
+  sunbeam user get 7c8f3e2a-...
+"#)]
+    Get {
         /// Email or identity ID.
         target: String,
-        /// New password. If omitted, reads from stdin.
-        password: Option<String>,
+    },
+    /// List identities.
+    #[command(long_about = r#"List all Kratos identities.
+
+Output is paginated by the Kratos admin API. Use --search to filter by email
+substring.
+
+EXAMPLES:
+  sunbeam user list
+  sunbeam user list --search admin
+"#)]
+    List {
+        /// Filter by email.
+        #[arg(long, default_value = "")]
+        search: String,
+    },
+    /// Offboard user (disable + revoke all).
+    #[command(long_about = r#"Offboard a user immediately.
+
+Disables the identity, revokes all sessions, and marks the user as terminated.
+This is the recommended offboarding command. It is reversible with `enable`.
+
+EXAMPLE:
+  sunbeam user offboard alice@sunbeam.pt
+"#)]
+    Offboard {
+        /// Email or identity ID.
+        target: String,
     },
     /// Onboard new user (create + welcome email).
-    #[command(long_about = r#"""Complete onboarding workflow for a new team member.
+    #[command(long_about = r#"Complete onboarding workflow for a new team member.
 
 Creates the identity, generates a random password, and sends a welcome email
 with login instructions. Supports rich metadata like department, manager, and
@@ -1417,7 +1404,7 @@ EXAMPLES:
     --job-title "Senior Developer" \
     --hire-date 2026-01-15 \
     --manager bob@sunbeam.pt
-""#)]
+"#)]
     Onboard {
         /// Email address.
         email: String,
@@ -1449,18 +1436,34 @@ EXAMPLES:
         #[arg(long, default_value = "")]
         manager: String,
     },
-    /// Offboard user (disable + revoke all).
-    #[command(long_about = r#"""Offboard a user immediately.
+    /// Generate recovery link.
+    #[command(long_about = r#"Generate a recovery link for an identity.
 
-Disables the identity, revokes all sessions, and marks the user as terminated.
-This is the recommended offboarding command. It is reversible with `enable`.
+The link can be sent to the user to regain account access.
 
 EXAMPLE:
-  sunbeam user offboard alice@sunbeam.pt
-""#)]
-    Offboard {
+  sunbeam user recover alice@sunbeam.pt
+"#)]
+    Recover {
         /// Email or identity ID.
         target: String,
+    },
+    /// Set password for an identity.
+    #[command(long_about = r#"Set or reset a user's password.
+
+If the password argument is omitted, it is read interactively from stdin
+(without echo). Useful for automation when piped:
+
+  echo 'newpass' | sunbeam user set-password alice@sunbeam.pt
+
+EXAMPLE:
+  sunbeam user set-password alice@sunbeam.pt hunter2
+"#)]
+    SetPassword {
+        /// Email or identity ID.
+        target: String,
+        /// New password. If omitted, reads from stdin.
+        password: Option<String>,
     },
 }
 
@@ -1468,7 +1471,7 @@ EXAMPLE:
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {
     /// Build the project.
-    #[command(long_about = r#"""Build the current project or selected projects.
+    #[command(long_about = r#"Build the current project or selected projects.
 
 Runs the `build` target defined in `sunbeam.yaml`. Respects the dependency
 graph — if --with-deps is used, dependencies are built first.
@@ -1477,158 +1480,10 @@ EXAMPLES:
   sunbeam project build
   sunbeam project build --all
   sunbeam project build -p proxy --with-deps
-""#)]
+"#)]
     Build(ProjectRunArgs),
-    /// Run tests.
-    #[command(
-        long_about = r#"""Run tests for the current project or selected projects.
-
-Runs the `test` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project test
-  sunbeam project test --all
-""#
-    )]
-    Test(ProjectRunArgs),
-    /// Lint.
-    #[command(
-        long_about = r#"""Run the linter for the current project or selected projects.
-
-Runs the `lint` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project lint
-  sunbeam project lint --all
-""#
-    )]
-    Lint(ProjectRunArgs),
-    /// Format.
-    #[command(
-        long_about = r#"""Format source code for the current project or selected projects.
-
-Runs the `fmt` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project fmt
-  sunbeam project fmt --all
-""#
-    )]
-    Fmt(ProjectRunArgs),
-    /// Package (container image, tarball, etc.).
-    #[command(long_about = r#"""Package the project into a distributable artifact.
-
-For most services this builds a container image and pushes it to the registry
-at `oci.<domain>` or `src.<domain>`. The image tag is derived from the Git
-commit SHA.
-
-EXAMPLES:
-  sunbeam project package
-  sunbeam project package -p proxy
-  sunbeam project package --all
-""#)]
-    Package(ProjectRunArgs),
-    /// Deploy.
-    #[command(long_about = r#"""Deploy the current project.
-
-Runs the `deploy` target defined in `sunbeam.yaml`. This usually applies
-manifests and triggers a rolling restart.
-
-EXAMPLES:
-  sunbeam project deploy
-  sunbeam project deploy -p proxy
-""#)]
-    Deploy(ProjectRunArgs),
-    /// Run dev server.
-    #[command(long_about = r#"""Run the development server for the current project.
-
-Runs the `dev` target defined in `sunbeam.yaml`. This typically starts a
-hot-reload server with local dependencies.
-
-EXAMPLE:
-  sunbeam project dev
-""#)]
-    Dev(ProjectRunArgs),
-    /// Clean build artifacts.
-    #[command(long_about = r#"""Remove build artifacts for the current project.
-
-Runs the `clean` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project clean
-  sunbeam project clean --all
-""#)]
-    Clean(ProjectRunArgs),
-    /// Generate docs.
-    #[command(long_about = r#"""Generate documentation for the current project.
-
-Runs the `doc` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project doc
-  sunbeam project doc --all
-""#)]
-    Doc(ProjectRunArgs),
-    /// Print resolved project config.
-    #[command(long_about = r#"""Print the resolved sunbeam.yaml configuration.
-
-Shows merged config, inherited workspace values, computed fields, and the
-final target definitions for the current project.
-
-EXAMPLE:
-  sunbeam project info
-""#)]
-    Info,
-    /// Print topologically-sorted build order for a verb.
-    #[command(
-        long_about = r#"""Show the build order for a verb across the workspace.
-
-Respects project dependencies (`deps.projects` in sunbeam.yaml) and prints
-the topological groups. Useful for understanding parallelism limits.
-
-EXAMPLE:
-  sunbeam project order build
-  sunbeam project order package
-""#
-    )]
-    Order {
-        #[arg(default_value = "build")]
-        verb: String,
-    },
-    /// Run a custom verb defined in this project's `targets`.
-    #[command(long_about = r#"""Run a custom target defined in sunbeam.yaml.
-
-The verb must exist in the `targets:` section of the project's config.
-Custom targets are useful for project-specific operations like database
-migrations, code generation, or integration tests.
-
-EXAMPLE:
-  sunbeam project run migrate
-  sunbeam project run integration-tests
-""#)]
-    Run {
-        /// Verb name (must exist in `targets:` of the autodiscovered sunbeam.yaml).
-        verb: String,
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Print the dependency DAG as a tree.
-    #[command(long_about = r#"""Render the project dependency graph.
-
-Prints a tree showing which projects depend on which. With --all, renders
-the tree for every owned project in the workspace.
-
-EXAMPLES:
-  sunbeam project graph
-  sunbeam project graph --all
-""#)]
-    Graph {
-        /// Render every owned project's tree (otherwise just the current project).
-        #[arg(long)]
-        all: bool,
-    },
     /// Validate sunbeam.yaml — checks workspace refs, dep cycles, and reports issues.
-    #[command(long_about = r#"""Validate sunbeam.yaml files.
+    #[command(long_about = r#"Validate sunbeam.yaml files.
 
 Checks for:
   - Missing workspace references
@@ -1642,16 +1497,133 @@ current project.
 EXAMPLES:
   sunbeam project check
   sunbeam project check --all
-""#)]
+"#)]
     Check {
         /// Validate every owned project (otherwise just the current project).
         #[arg(long)]
         all: bool,
     },
+    /// Clean build artifacts.
+    #[command(long_about = r#"Remove build artifacts for the current project.
+
+Runs the `clean` target defined in `sunbeam.yaml`.
+
+EXAMPLES:
+  sunbeam project clean
+  sunbeam project clean --all
+"#)]
+    Clean(ProjectRunArgs),
+    /// Deploy.
+    #[command(long_about = r#"Deploy the current project.
+
+Runs the `deploy` target defined in `sunbeam.yaml`. This usually applies
+manifests and triggers a rolling restart.
+
+EXAMPLES:
+  sunbeam project deploy
+  sunbeam project deploy -p proxy
+"#)]
+    Deploy(ProjectRunArgs),
+    /// Run dev server.
+    #[command(long_about = r#"Run the development server for the current project.
+
+Runs the `dev` target defined in `sunbeam.yaml`. This typically starts a
+hot-reload server with local dependencies.
+
+EXAMPLE:
+  sunbeam project dev
+"#)]
+    Dev(ProjectRunArgs),
+    /// Generate docs.
+    #[command(long_about = r#"Generate documentation for the current project.
+
+Runs the `doc` target defined in `sunbeam.yaml`.
+
+EXAMPLES:
+  sunbeam project doc
+  sunbeam project doc --all
+"#)]
+    Doc(ProjectRunArgs),
+    /// Format.
+    #[command(
+        long_about = r#"Format source code for the current project or selected projects.
+
+Runs the `fmt` target defined in `sunbeam.yaml`.
+
+EXAMPLES:
+  sunbeam project fmt
+  sunbeam project fmt --all
+""#
+    )]
+    Fmt(ProjectRunArgs),
+    /// Print the dependency DAG as a tree.
+    #[command(long_about = r#"Render the project dependency graph.
+
+Prints a tree showing which projects depend on which. With --all, renders
+the tree for every owned project in the workspace.
+
+EXAMPLES:
+  sunbeam project graph
+  sunbeam project graph --all
+"#)]
+    Graph {
+        /// Render every owned project's tree (otherwise just the current project).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Print resolved project config.
+    #[command(long_about = r#"Print the resolved sunbeam.yaml configuration.
+
+Shows merged config, inherited workspace values, computed fields, and the
+final target definitions for the current project.
+
+EXAMPLE:
+  sunbeam project info
+"#)]
+    Info,
+    /// Lint.
+    #[command(
+        long_about = r#"Run the linter for the current project or selected projects.
+
+Runs the `lint` target defined in `sunbeam.yaml`.
+
+EXAMPLES:
+  sunbeam project lint
+  sunbeam project lint --all
+""#
+    )]
+    Lint(ProjectRunArgs),
+    /// Print topologically-sorted build order for a verb.
+    #[command(long_about = r#"Show the build order for a verb across the workspace.
+
+Respects project dependencies (`deps.projects` in sunbeam.yaml) and prints
+the topological groups. Useful for understanding parallelism limits.
+
+EXAMPLE:
+  sunbeam project order build
+  sunbeam project order package
+""#)]
+    Order {
+        #[arg(default_value = "build")]
+        verb: String,
+    },
+    /// Package (container image, tarball, etc.).
+    #[command(long_about = r#"Package the project into a distributable artifact.
+
+For most services this builds a container image and pushes it to the registry
+at `oci.<domain>` or `src.<domain>`. The image tag is derived from the Git
+commit SHA.
+
+EXAMPLES:
+  sunbeam project package
+  sunbeam project package -p proxy
+  sunbeam project package --all
+"#)]
+    Package(ProjectRunArgs),
     /// Pre-pull the proxy image on the cluster node to break the
     /// Pingora IfNotPresent + Recreate deadlock, then bump the
     /// kustomization newTag.
-    #[command(long_about = r#"""Pre-pull a container image on the cluster node.
+    #[command(long_about = r#"Pre-pull a container image on the cluster node.
 
 On fresh clusters, the Pingora ingress controller can deadlock because its
 image pull policy is IfNotPresent and the registry is behind the ingress
@@ -1665,7 +1637,7 @@ Workflow:
 
 EXAMPLE:
   sunbeam project preseed-image src.sunbeam.pt/studio/proxy:abc1234
-""#)]
+"#)]
     PreseedImage {
         /// Full image reference to pull (e.g. src.sunbeam.pt/studio/proxy:abc1234).
         image_ref: String,
@@ -1673,6 +1645,35 @@ EXAMPLE:
         #[arg(long, default_value_t = 300)]
         timeout: u64,
     },
+    /// Run a custom verb defined in this project's `targets`.
+    #[command(long_about = r#"Run a custom target defined in sunbeam.yaml.
+
+The verb must exist in the `targets:` section of the project's config.
+Custom targets are useful for project-specific operations like database
+migrations, code generation, or integration tests.
+
+EXAMPLE:
+  sunbeam project run migrate
+  sunbeam project run integration-tests
+"#)]
+    Run {
+        /// Verb name (must exist in `targets:` of the autodiscovered sunbeam.yaml).
+        verb: String,
+        #[command(flatten)]
+        args: ProjectRunArgs,
+    },
+    /// Run tests.
+    #[command(
+        long_about = r#"Run tests for the current project or selected projects.
+
+Runs the `test` target defined in `sunbeam.yaml`.
+
+EXAMPLES:
+  sunbeam project test
+  sunbeam project test --all
+""#
+    )]
+    Test(ProjectRunArgs),
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -1707,107 +1708,143 @@ pub enum OperationsAction {
         #[command(subcommand)]
         action: ComposeAction,
     },
-    /// Stack snapshot operations.
-    Stack {
-        #[command(subcommand)]
-        action: StackAction,
-    },
     /// Print resolved workspace config.
-    #[command(long_about = r#"""Print the resolved workspace configuration.
+    #[command(long_about = r#"Print the resolved workspace configuration.
 
 Shows the merged sunbeam.workspace.yaml with all inherited values,
 project discovery results, and bucket assignments.
 
 EXAMPLE:
   sunbeam ops info
-""#)]
+"#)]
     Info,
     /// List all repos in the workspace (by bucket).
-    #[command(long_about = r#"""List all repositories in the workspace.
+    #[command(long_about = r#"List all repositories in the workspace.
 
 Shows each repo's URL, local path, bucket (owned / fork / upstream), and
 current branch.
 
 EXAMPLE:
   sunbeam ops repos
-""#)]
+"#)]
     Repos,
+    /// Stack snapshot operations.
+    Stack {
+        #[command(subcommand)]
+        action: StackAction,
+    },
 }
 
 /// Repo tool subcommands.
 #[derive(Subcommand, Debug)]
 #[command(disable_help_subcommand = true)]
 pub enum VcsAction {
-    /// Initialize a repo client checkout.
-    Init(repo_rs_cmd::init::InitArgs),
-    /// Update working tree to the latest revision.
-    Sync(repo_rs_cmd::sync::SyncArgs),
-    /// Upload changes for code review.
-    Upload(repo_rs_cmd::upload::UploadArgs),
-    /// Download changes from the server.
-    Download(repo_rs_cmd::download::DownloadArgs),
-    /// Start a new branch for development.
-    Start(repo_rs_cmd::start::StartArgs),
-    /// Show the working tree status.
-    Status(repo_rs_cmd::status::StatusArgs),
-    /// Show changes between commits, commit and working tree, etc.
-    Diff(repo_rs_cmd::diff::DiffArgs),
-    /// Stage files for upload.
-    Stage(repo_rs_cmd::stage::StageArgs),
-    /// Rebase local branches.
-    Rebase(repo_rs_cmd::rebase::RebaseArgs),
-    /// Cherry-pick a change.
-    CherryPick(repo_rs_cmd::cherry_pick::CherryPickArgs),
     /// Abandon a topic branch.
     Abandon(repo_rs_cmd::abandon::AbandonArgs),
-    /// Checkout a branch.
-    Checkout(repo_rs_cmd::checkout::CheckoutArgs),
     /// List, create, or delete branches.
     Branches(repo_rs_cmd::branches::BranchesArgs),
-    /// Run a shell command in each project.
-    Forall(repo_rs_cmd::forall::ForallArgs),
-    /// Search across projects.
-    Grep(repo_rs_cmd::grep::GrepArgs),
-    /// Manifest inspection and comparison.
-    Manifest(repo_rs_cmd::manifest::ManifestArgs),
-    /// Display info about a project.
-    Info(repo_rs_cmd::info::InfoArgs),
-    /// List projects.
-    List(repo_rs_cmd::list::ListArgs),
-    /// Prune branches.
-    Prune(repo_rs_cmd::prune::PruneArgs),
-    /// Garbage collection.
-    Gc(repo_rs_cmd::gc::GcArgs),
+    /// Checkout a branch.
+    Checkout(repo_rs_cmd::checkout::CheckoutArgs),
+    /// Cherry-pick a change.
+    CherryPick(repo_rs_cmd::cherry_pick::CherryPickArgs),
+    /// Show changes between commits, commit and working tree, etc.
+    Diff(repo_rs_cmd::diff::DiffArgs),
     /// Diff manifests.
     Diffmanifests(repo_rs_cmd::diffmanifests::DiffManifestsArgs),
-    /// Wipe a project.
-    Wipe(repo_rs_cmd::wipe::WipeArgs),
+    /// Download changes from the server.
+    Download(repo_rs_cmd::download::DownloadArgs),
+    /// Run a shell command in each project.
+    Forall(repo_rs_cmd::forall::ForallArgs),
+    /// Garbage collection.
+    Gc(repo_rs_cmd::gc::GcArgs),
+    /// Search across projects.
+    Grep(repo_rs_cmd::grep::GrepArgs),
+    /// Display detailed help.
+    Help(repo_rs_cmd::help::HelpArgs),
+    /// Display info about a project.
+    Info(repo_rs_cmd::info::InfoArgs),
+    /// Initialize a repo client checkout.
+    Init(repo_rs_cmd::init::InitArgs),
+    /// List projects.
+    List(repo_rs_cmd::list::ListArgs),
+    /// Manifest inspection and comparison.
+    Manifest(repo_rs_cmd::manifest::ManifestArgs),
+    /// Show project overview.
+    Overview(repo_rs_cmd::overview::OverviewArgs),
+    /// Prune branches.
+    Prune(repo_rs_cmd::prune::PruneArgs),
+    /// Rebase local branches.
+    Rebase(repo_rs_cmd::rebase::RebaseArgs),
     /// Update the repo tool itself.
     Selfupdate(repo_rs_cmd::selfupdate::SelfUpdateArgs),
     /// Smart sync.
     Smartsync(repo_rs_cmd::smartsync::SmartsyncArgs),
+    /// Stage files for upload.
+    Stage(repo_rs_cmd::stage::StageArgs),
+    /// Start a new branch for development.
+    Start(repo_rs_cmd::start::StartArgs),
+    /// Show the working tree status.
+    Status(repo_rs_cmd::status::StatusArgs),
+    /// Update working tree to the latest revision.
+    Sync(repo_rs_cmd::sync::SyncArgs),
+    /// Upload changes for code review.
+    Upload(repo_rs_cmd::upload::UploadArgs),
     /// Display the version of repo.
     Version(repo_rs_cmd::version::VersionArgs),
-    /// Display detailed help.
-    Help(repo_rs_cmd::help::HelpArgs),
-    /// Show project overview.
-    Overview(repo_rs_cmd::overview::OverviewArgs),
+    /// Wipe a project.
+    Wipe(repo_rs_cmd::wipe::WipeArgs),
 }
 /// Docker Compose subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ComposeAction {
+    /// Tear down shared services.
+    #[command(long_about = r#"Stop shared local services.
+
+Stops and removes containers created by `sunbeam ops compose up`.
+Use --volumes to also remove named volumes (destructive).
+
+EXAMPLES:
+  sunbeam ops compose down
+  sunbeam ops compose down --volumes
+"#)]
+    Down {
+        /// Also remove volumes.
+        #[arg(long)]
+        volumes: bool,
+    },
+    /// Tail logs for a service.
+    #[command(long_about = r#"Stream or fetch logs for a compose service.
+
+EXAMPLES:
+  sunbeam ops compose logs postgres
+  sunbeam ops compose logs postgres -f
+"#)]
+    Logs {
+        service: String,
+        #[arg(short, long)]
+        follow: bool,
+    },
+    /// List running services.
+    #[command(long_about = r#"List running compose services.
+
+Shows container names, ports, and health status.
+
+EXAMPLE:
+  sunbeam ops compose ps
+"#)]
+    Ps,
     /// Generate and materialize docker-compose.yaml under .sunbeam/compose/.
-    #[command(long_about = r#"""Render docker-compose.yaml from templates.
+    #[command(long_about = r#"Render docker-compose.yaml from templates.
 
 Generates a docker-compose file under .sunbeam/compose/ based on the
 workspace configuration. Does not start any containers.
 
 EXAMPLE:
   sunbeam ops compose render
-""#)]
+"#)]
     Render,
     /// Bring up shared services.
-    #[command(long_about = r#"""Start shared local services with Docker Compose.
+    #[command(long_about = r#"Start shared local services with Docker Compose.
 
 Brings up Postgres, Redis, and any other shared dependencies defined in the
 workspace compose configuration. These are used for local development when
@@ -1817,7 +1854,7 @@ EXAMPLES:
   sunbeam ops compose up
   sunbeam ops compose up postgres redis
   sunbeam ops compose up --no-wait
-""#)]
+"#)]
     Up {
         /// Only bring up the named services (default: all).
         services: Vec<String>,
@@ -1825,58 +1862,43 @@ EXAMPLES:
         #[arg(long, default_value_t = true)]
         wait: bool,
     },
-    /// Tear down shared services.
-    #[command(long_about = r#"""Stop shared local services.
-
-Stops and removes containers created by `sunbeam ops compose up`.
-Use --volumes to also remove named volumes (destructive).
-
-EXAMPLES:
-  sunbeam ops compose down
-  sunbeam ops compose down --volumes
-""#)]
-    Down {
-        /// Also remove volumes.
-        #[arg(long)]
-        volumes: bool,
-    },
-    /// List running services.
-    #[command(long_about = r#"""List running compose services.
-
-Shows container names, ports, and health status.
-
-EXAMPLE:
-  sunbeam ops compose ps
-""#)]
-    Ps,
-    /// Tail logs for a service.
-    #[command(long_about = r#"""Stream or fetch logs for a compose service.
-
-EXAMPLES:
-  sunbeam ops compose logs postgres
-  sunbeam ops compose logs postgres -f
-""#)]
-    Logs {
-        service: String,
-        #[arg(short, long)]
-        follow: bool,
-    },
 }
 
 /// Stack snapshot subcommands.
 #[derive(Subcommand, Debug)]
 pub enum StackAction {
+    /// Checkout the SHAs recorded in a stack.
+    #[command(long_about = r#"Restore a pinned stack.
+
+Checks out the recorded SHAs in every project. Fails if a repo has uncommitted
+changes that would be overwritten.
+
+EXAMPLE:
+  sunbeam ops stack apply release-2026-01
+"#)]
+    Apply { name: String },
+    /// Diff two stacks (or a stack vs current HEAD).
+    #[command(long_about = r#"Compare two stack snapshots.
+
+Shows which projects differ between the two stacks. If right is omitted,
+compares the left stack against the current HEAD.
+
+EXAMPLES:
+  sunbeam ops stack diff release-2026-01 release-2026-02
+  sunbeam ops stack diff release-2026-01
+"#)]
+    Diff { left: String, right: Option<String> },
     /// List pinned stacks.
-    #[command(long_about = r#"""List all pinned stack snapshots.
+    #[command(long_about = r#"List all pinned stack snapshots.
 
 Shows name, creation date, description, and number of projects.
 
 EXAMPLE:
   sunbeam ops stack list
-""#)]
+"#)]
     List,
     /// Pin current HEAD SHAs into a named stack.
-    #[command(long_about = r#"""Save the current workspace state as a named stack.
+    #[command(long_about = r#"Save the current workspace state as a named stack.
 
 Records the current Git HEAD SHA for every owned project. Later, you can
 restore exactly this combination with `apply`.
@@ -1888,7 +1910,7 @@ EXAMPLES:
   sunbeam ops stack pin release-2026-01
   sunbeam ops stack pin hotfix --description "Emergency security patches"
   sunbeam ops stack pin partial proxy api
-""#)]
+"#)]
     Pin {
         name: String,
         /// Only pin the named projects (default: all owned).
@@ -1896,27 +1918,6 @@ EXAMPLES:
         #[arg(long)]
         description: Option<String>,
     },
-    /// Checkout the SHAs recorded in a stack.
-    #[command(long_about = r#"""Restore a pinned stack.
-
-Checks out the recorded SHAs in every project. Fails if a repo has uncommitted
-changes that would be overwritten.
-
-EXAMPLE:
-  sunbeam ops stack apply release-2026-01
-""#)]
-    Apply { name: String },
-    /// Diff two stacks (or a stack vs current HEAD).
-    #[command(long_about = r#"""Compare two stack snapshots.
-
-Shows which projects differ between the two stacks. If right is omitted,
-compares the left stack against the current HEAD.
-
-EXAMPLES:
-  sunbeam ops stack diff release-2026-01 release-2026-02
-  sunbeam ops stack diff release-2026-01
-""#)]
-    Diff { left: String, right: Option<String> },
 }
 
 fn validate_date(s: &str) -> std::result::Result<String, String> {
@@ -1983,6 +1984,126 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             println!();
             Ok(())
         }
+
+        Some(Verb::Auth { action }) => match action {
+            None => crate::auth::cmd_auth_status().await,
+            Some(AuthAction::Login { domain }) => {
+                crate::auth::cmd_auth_login(domain.as_deref()).await
+            }
+            Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
+            Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
+            Some(AuthAction::Token) => crate::auth::cmd_auth_token().await,
+        },
+
+        Some(Verb::Completions { shell }) => {
+            use clap::CommandFactory;
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "sunbeam",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
+
+        Some(Verb::Config { action }) => match action {
+            None => {
+                use clap::CommandFactory;
+                // Print config subcommand help
+                let mut cmd = Cli::command();
+                let sub = cmd
+                    .find_subcommand_mut("config")
+                    .expect("config subcommand");
+                sub.print_help()?;
+                println!();
+                Ok(())
+            }
+            Some(ConfigAction::Clear) => crate::config::clear_config(),
+            Some(ConfigAction::Get) => {
+                let config = crate::config::load_config();
+                let current = if config.current_context.is_empty() {
+                    "(none)"
+                } else {
+                    &config.current_context
+                };
+                info!(logger, "Current context", context = current);
+                println!();
+                for (name, ctx) in &config.contexts {
+                    let marker = if name == current { " *" } else { "" };
+                    info!(logger, "Context", name = name, marker = marker);
+                    if !ctx.domain.is_empty() {
+                        info!(logger, "domain", domain = ctx.domain);
+                    }
+                    if !ctx.kube_context.is_empty() {
+                        info!(logger, "kube-context", kube_context = ctx.kube_context);
+                    }
+                    if !ctx.infra_dir.is_empty() {
+                        info!(logger, "infra-dir", infra_dir = ctx.infra_dir);
+                    }
+                    if !ctx.acme_email.is_empty() {
+                        info!(logger, "acme-email", acme_email = ctx.acme_email);
+                    }
+                    println!();
+                }
+                Ok(())
+            }
+            Some(ConfigAction::Set {
+                domain: set_domain,
+                infra_dir,
+                acme_email,
+                kube_context,
+                context_name,
+            }) => {
+                let mut config = crate::config::load_config();
+                // Determine which context to modify
+                let ctx_name = if context_name.is_empty() {
+                    if !config.current_context.is_empty() {
+                        config.current_context.clone()
+                    } else {
+                        "production".to_string()
+                    }
+                } else {
+                    context_name
+                };
+
+                let ctx = config.contexts.entry(ctx_name.clone()).or_default();
+                if !set_domain.is_empty() {
+                    ctx.domain = set_domain;
+                }
+                if !infra_dir.is_empty() {
+                    ctx.infra_dir = infra_dir;
+                }
+                if !acme_email.is_empty() {
+                    ctx.acme_email = acme_email;
+                }
+                if !kube_context.is_empty() {
+                    ctx.kube_context = kube_context;
+                }
+                if config.current_context.is_empty() {
+                    config.current_context = ctx_name;
+                }
+                crate::config::save_config(&config)
+            }
+            Some(ConfigAction::UseContext { name }) => {
+                let mut config = crate::config::load_config();
+                if !config.contexts.contains_key(&name) {
+                    info!(
+                        logger,
+                        "Context does not exist, creating empty context",
+                        name = name
+                    );
+                    config
+                        .contexts
+                        .insert(name.clone(), crate::config::Context::default());
+                }
+                config.current_context = name.clone();
+                crate::config::save_config(&config)?;
+                info!(logger, "Switched to context", name = name);
+                Ok(())
+            }
+        },
+
+        Some(Verb::Doctor) => crate::doctor::cmd_doctor(&logger).await,
 
         Some(Verb::Down {
             yes,
@@ -2068,6 +2189,25 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
 
             Ok(())
         }
+
+        Some(Verb::Kanban {
+            output,
+            url,
+            action,
+        }) => crate::kanban::dispatch(logger, action, output, url.as_deref()).await,
+
+        Some(Verb::Operations { action }) => crate::operations::cli::dispatch(logger, action).await,
+
+        Some(Verb::Project { action }) => crate::project::cli::dispatch(logger, action).await,
+
+        Some(Verb::Secrets {
+            addr,
+            token,
+            output,
+            action,
+        }) => crate::secrets_cli::dispatch(addr.as_deref(), token.as_deref(), output, action).await,
+
+        Some(Verb::Service { action }) => crate::service_cmds::dispatch(logger, action).await,
 
         Some(Verb::Up {
             set,
@@ -2217,111 +2357,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Service { action }) => crate::service_cmds::dispatch(logger, action).await,
-
-        Some(Verb::Config { action }) => match action {
-            None => {
-                use clap::CommandFactory;
-                // Print config subcommand help
-                let mut cmd = Cli::command();
-                let sub = cmd
-                    .find_subcommand_mut("config")
-                    .expect("config subcommand");
-                sub.print_help()?;
-                println!();
-                Ok(())
-            }
-            Some(ConfigAction::Set {
-                domain: set_domain,
-                infra_dir,
-                acme_email,
-                kube_context,
-                context_name,
-            }) => {
-                let mut config = crate::config::load_config();
-                // Determine which context to modify
-                let ctx_name = if context_name.is_empty() {
-                    if !config.current_context.is_empty() {
-                        config.current_context.clone()
-                    } else {
-                        "production".to_string()
-                    }
-                } else {
-                    context_name
-                };
-
-                let ctx = config.contexts.entry(ctx_name.clone()).or_default();
-                if !set_domain.is_empty() {
-                    ctx.domain = set_domain;
-                }
-                if !infra_dir.is_empty() {
-                    ctx.infra_dir = infra_dir;
-                }
-                if !acme_email.is_empty() {
-                    ctx.acme_email = acme_email;
-                }
-                if !kube_context.is_empty() {
-                    ctx.kube_context = kube_context;
-                }
-                if config.current_context.is_empty() {
-                    config.current_context = ctx_name;
-                }
-                crate::config::save_config(&config)
-            }
-            Some(ConfigAction::UseContext { name }) => {
-                let mut config = crate::config::load_config();
-                if !config.contexts.contains_key(&name) {
-                    info!(
-                        logger,
-                        "Context does not exist, creating empty context",
-                        name = name
-                    );
-                    config
-                        .contexts
-                        .insert(name.clone(), crate::config::Context::default());
-                }
-                config.current_context = name.clone();
-                crate::config::save_config(&config)?;
-                info!(logger, "Switched to context", name = name);
-                Ok(())
-            }
-            Some(ConfigAction::Get) => {
-                let config = crate::config::load_config();
-                let current = if config.current_context.is_empty() {
-                    "(none)"
-                } else {
-                    &config.current_context
-                };
-                info!(logger, "Current context", context = current);
-                println!();
-                for (name, ctx) in &config.contexts {
-                    let marker = if name == current { " *" } else { "" };
-                    info!(logger, "Context", name = name, marker = marker);
-                    if !ctx.domain.is_empty() {
-                        info!(logger, "domain", domain = ctx.domain);
-                    }
-                    if !ctx.kube_context.is_empty() {
-                        info!(logger, "kube-context", kube_context = ctx.kube_context);
-                    }
-                    if !ctx.infra_dir.is_empty() {
-                        info!(logger, "infra-dir", infra_dir = ctx.infra_dir);
-                    }
-                    if !ctx.acme_email.is_empty() {
-                        info!(logger, "acme-email", acme_email = ctx.acme_email);
-                    }
-                    println!();
-                }
-                Ok(())
-            }
-            Some(ConfigAction::Clear) => crate::config::clear_config(),
-        },
-
-        Some(Verb::Secrets {
-            addr,
-            token,
-            output,
-            action,
-        }) => crate::secrets_cli::dispatch(addr.as_deref(), token.as_deref(), output, action).await,
+        Some(Verb::Update) => crate::update::cmd_update(&logger).await,
 
         Some(Verb::User { action }) => match action {
             None => {
@@ -2332,29 +2368,17 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 println!();
                 Ok(())
             }
-            Some(UserAction::List { search }) => crate::users::cmd_user_list(&search).await,
-            Some(UserAction::Get { target }) => crate::users::cmd_user_get(&target).await,
             Some(UserAction::Create {
                 email,
                 name,
                 schema,
             }) => crate::users::cmd_user_create(&email, &name, &schema).await,
             Some(UserAction::Delete { target }) => crate::users::cmd_user_delete(&target).await,
-            Some(UserAction::Recover { target }) => crate::users::cmd_user_recover(&target).await,
             Some(UserAction::Disable { target }) => crate::users::cmd_user_disable(&target).await,
             Some(UserAction::Enable { target }) => crate::users::cmd_user_enable(&target).await,
-            Some(UserAction::SetPassword { target, password }) => {
-                let pw = match password {
-                    Some(p) => p,
-                    None => {
-                        eprint!("Password: ");
-                        let mut pw = String::new();
-                        std::io::stdin().read_line(&mut pw)?;
-                        pw.trim().to_string()
-                    }
-                };
-                crate::users::cmd_user_set_password(&target, &pw).await
-            }
+            Some(UserAction::Get { target }) => crate::users::cmd_user_get(&target).await,
+            Some(UserAction::List { search }) => crate::users::cmd_user_list(&search).await,
+            Some(UserAction::Offboard { target }) => crate::users::cmd_user_offboard(&target).await,
             Some(UserAction::Onboard {
                 email,
                 name,
@@ -2381,35 +2405,33 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            Some(UserAction::Offboard { target }) => crate::users::cmd_user_offboard(&target).await,
-        },
-
-        Some(Verb::Auth { action }) => match action {
-            None => crate::auth::cmd_auth_status().await,
-            Some(AuthAction::Login { domain }) => {
-                crate::auth::cmd_auth_login(domain.as_deref()).await
+            Some(UserAction::Recover { target }) => crate::users::cmd_user_recover(&target).await,
+            Some(UserAction::SetPassword { target, password }) => {
+                let pw = match password {
+                    Some(p) => p,
+                    None => {
+                        eprint!("Password: ");
+                        let mut pw = String::new();
+                        std::io::stdin().read_line(&mut pw)?;
+                        pw.trim().to_string()
+                    }
+                };
+                crate::users::cmd_user_set_password(&target, &pw).await
             }
-            Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
-            Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
-            Some(AuthAction::Token) => crate::auth::cmd_auth_token().await,
         },
 
-        Some(Verb::Workflow {
-            target,
-            output,
-            action,
-        }) => crate::workflows::cmd::dispatch(Some(&target), action, output).await,
+        Some(Verb::Vcs { action }) => {
+            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
+            crate::vcs::dispatch(&logger, action).await
+        }
 
-        Some(Verb::Kanban {
-            output,
-            url,
-            action,
-        }) => crate::kanban::dispatch(logger, action, output, url.as_deref()).await,
+        Some(Verb::Version) => {
+            crate::update::cmd_version();
+            Ok(())
+        }
 
         Some(Verb::Vpn { action }) => match action {
-            VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
             VpnAction::Connect { foreground } => crate::vpn_cmds::cmd_connect(foreground).await,
-            VpnAction::Disconnect => crate::vpn_cmds::cmd_disconnect().await,
             VpnAction::CreateKey {
                 user,
                 user_id,
@@ -2426,38 +2448,17 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            VpnAction::Disconnect => crate::vpn_cmds::cmd_disconnect().await,
+            VpnAction::Status => crate::vpn_cmds::cmd_vpn_status().await,
         },
-
-        Some(Verb::Completions { shell }) => {
-            use clap::CommandFactory;
-            clap_complete::generate(
-                shell,
-                &mut Cli::command(),
-                "sunbeam",
-                &mut std::io::stdout(),
-            );
-            Ok(())
-        }
-
-        Some(Verb::Doctor) => crate::doctor::cmd_doctor(&logger).await,
 
         Some(Verb::VpnDaemon) => crate::vpn_cmds::cmd_vpn_daemon().await,
 
-        Some(Verb::Update) => crate::update::cmd_update(&logger).await,
-
-        Some(Verb::Version) => {
-            crate::update::cmd_version();
-            Ok(())
-        }
-
-        Some(Verb::Project { action }) => crate::project::cli::dispatch(logger, action).await,
-
-        Some(Verb::Operations { action }) => crate::operations::cli::dispatch(logger, action).await,
-
-        Some(Verb::Vcs { action }) => {
-            let logger = crate::logger::Logger::new(crate::logger::TracingSink);
-            crate::vcs::dispatch(&logger, action).await
-        }
+        Some(Verb::Workflow {
+            target,
+            output,
+            action,
+        }) => crate::workflows::cmd::dispatch(Some(&target), action, output).await,
     }
 }
 

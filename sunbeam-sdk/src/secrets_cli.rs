@@ -16,101 +16,21 @@ use crate::openbao::BaoClient;
 #[derive(Subcommand, Debug)]
 /// Secrets action.
 pub enum SecretsAction {
-    /// KV v2 operations.
-    #[command(subcommand)]
-    Kv(KvAction),
-    /// Transit secrets engine operations.
-    #[command(subcommand)]
-    Transit(TransitAction),
-    /// Generic read from any engine/path.
-    #[command(long_about = r#"""Read data from any OpenBao path.
-
-Uses the generic read API. Returns JSON with `data` and `metadata` fields.
-
-EXAMPLES:
-  sunbeam secrets read sys/mounts
-  sunbeam secrets read database/config/postgres
-""#)]
-    Read {
-        /// Path to read (e.g. `sys/mounts`, `transit/sbbb/keys/my-key`).
-        path: String,
-    },
-    /// Generic write to any engine/path.
-    #[command(long_about = r#"""Write data to any OpenBao path.
-
-Uses the generic write API. Key=value pairs are converted to a JSON object.
-
-EXAMPLE:
-  sunbeam secrets write database/config/postgres plugin_name=postgresql connection_url=postgres://...
-""#)]
-    Write {
-        /// Path to write (e.g. `database/config/postgres`).
-        path: String,
-        /// Key=value pairs to write. Repeatable.
-        #[arg(required = true)]
-        pairs: Vec<String>,
-    },
     /// Generic delete.
-    #[command(long_about = r#"""Delete data at a path.
+    #[command(long_about = r#"Delete data at a path.
 
 Uses the generic delete API. Be careful — this may be irreversible depending
 on the secrets engine.
 
 EXAMPLE:
   sunbeam secrets delete secret/data/old-service
-""#)]
+"#)]
     Delete {
         /// Path to delete.
         path: String,
     },
-    /// Generic list.
-    #[command(long_about = r#"""List keys under a path.
-
-Uses the LIST HTTP method. Most useful for enumerating mounts, policies,
-or KV paths.
-
-EXAMPLE:
-  sunbeam secrets list secret/metadata
-""#)]
-    List {
-        /// Path to list.
-        path: String,
-    },
-    /// Show seal and initialization status.
-    #[command(long_about = r#"""Show OpenBao seal and initialization status.
-
-Reports whether OpenBao is initialized and whether it is currently sealed.
-If sealed, it must be unsealed before any secrets can be read or written.
-
-EXAMPLE:
-  sunbeam secrets status
-""#)]
-    Status,
-    /// Initialize OpenBao.
-    #[command(long_about = r#"""Initialize OpenBao.
-
-Runs `bao init` with 1 key share and 1 threshold. The unseal key and root
-token are returned. In production, use Shamir sharing with multiple keys.
-
-EXAMPLE:
-  sunbeam secrets init
-""#)]
-    Init,
-    /// Unseal with an unseal key.
-    #[command(long_about = r#"""Unseal OpenBao.
-
-Submits an unseal key. If the threshold is 1, this unseals immediately.
-Otherwise, multiple keys from different operators may be required.
-
-EXAMPLE:
-  sunbeam secrets unseal <unseal-key>
-""#)]
-    Unseal {
-        /// Unseal key.
-        key: String,
-    },
     /// Raw bao CLI passthrough inside the OpenBao pod.
-    #[command(long_about = r#"""Execute raw bao CLI commands inside the OpenBao pod.
+    #[command(long_about = r#"Execute raw bao CLI commands inside the OpenBao pod.
 
 Useful for operations not covered by the native subcommands. All arguments
 are passed directly to the bao binary inside the pod.
@@ -119,19 +39,115 @@ EXAMPLES:
   sunbeam secrets exec policy list
   sunbeam secrets exec auth list
   sunbeam secrets exec secrets list
-""#)]
+"#)]
     Exec {
         /// Arguments to pass to the bao CLI.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// Initialize OpenBao.
+    #[command(long_about = r#"Initialize OpenBao.
+
+Runs `bao init` with 1 key share and 1 threshold. The unseal key and root
+token are returned. In production, use Shamir sharing with multiple keys.
+
+EXAMPLE:
+  sunbeam secrets init
+"#)]
+    Init,
+    /// KV v2 operations.
+    #[command(subcommand)]
+    Kv(KvAction),
+    /// Generic list.
+    #[command(long_about = r#"List keys under a path.
+
+Uses the LIST HTTP method. Most useful for enumerating mounts, policies,
+or KV paths.
+
+EXAMPLE:
+  sunbeam secrets list secret/metadata
+"#)]
+    List {
+        /// Path to list.
+        path: String,
+    },
+    /// Generic read from any engine/path.
+    #[command(long_about = r#"Read data from any OpenBao path.
+
+Uses the generic read API. Returns JSON with `data` and `metadata` fields.
+
+EXAMPLES:
+  sunbeam secrets read sys/mounts
+  sunbeam secrets read database/config/postgres
+"#)]
+    Read {
+        /// Path to read (e.g. `sys/mounts`, `transit/sbbb/keys/my-key`).
+        path: String,
+    },
+    /// Show seal and initialization status.
+    #[command(long_about = r#"Show OpenBao seal and initialization status.
+
+Reports whether OpenBao is initialized and whether it is currently sealed.
+If sealed, it must be unsealed before any secrets can be read or written.
+
+EXAMPLE:
+  sunbeam secrets status
+"#)]
+    Status,
+    /// Transit secrets engine operations.
+    #[command(subcommand)]
+    Transit(TransitAction),
+    /// Unseal with an unseal key.
+    #[command(long_about = r#"Unseal OpenBao.
+
+Submits an unseal key. If the threshold is 1, this unseals immediately.
+Otherwise, multiple keys from different operators may be required.
+
+EXAMPLE:
+  sunbeam secrets unseal <unseal-key>
+"#)]
+    Unseal {
+        /// Unseal key.
+        key: String,
+    },
+    /// Generic write to any engine/path.
+    #[command(long_about = r#"Write data to any OpenBao path.
+
+Uses the generic write API. Key=value pairs are converted to a JSON object.
+
+EXAMPLE:
+  sunbeam secrets write database/config/postgres plugin_name=postgresql connection_url=postgres://...
+"#)]
+    Write {
+        /// Path to write (e.g. `database/config/postgres`).
+        path: String,
+        /// Key=value pairs to write. Repeatable.
+        #[arg(required = true)]
+        pairs: Vec<String>,
     },
 }
 
 #[derive(Subcommand, Debug)]
 /// KV action.
 pub enum KvAction {
+    /// Delete the latest version of a KV secret.
+    #[command(long_about = r#"Delete the latest version of a KV v2 secret.
+
+Marks the latest version as deleted. Older versions may still be recoverable
+depending on the mount's delete-version-after setting.
+
+EXAMPLE:
+  sunbeam secrets kv delete myapp
+"#)]
+    Delete {
+        /// Secret path.
+        path: String,
+        /// KV mount path.
+        #[arg(long, default_value = "secret")]
+        mount: String,
+    },
     /// Read a KV secret.
-    #[command(long_about = r#"""Read a KV v2 secret.
+    #[command(long_about = r#"Read a KV v2 secret.
 
 Reads from `secret/data/<path>` by default. Use --mount to target a
 different KV mount.
@@ -139,7 +155,7 @@ different KV mount.
 EXAMPLES:
   sunbeam secrets kv get hydra
   sunbeam secrets kv get myapp --mount secrets
-""#)]
+"#)]
     Get {
         /// Secret path (e.g. `hydra` reads from `secret/data/hydra`).
         path: String,
@@ -147,35 +163,30 @@ EXAMPLES:
         #[arg(long, default_value = "secret")]
         mount: String,
     },
-    /// Write or replace a KV secret.
-    #[command(long_about = r#"""Write or replace a KV v2 secret.
+    /// List keys under a KV path.
+    #[command(long_about = r#"List keys under a KV v2 path.
 
-Overwrites the entire secret at the path. Use `patch` to merge fields
-instead.
+Lists immediate children under `secret/metadata/<path>`.
 
-EXAMPLES:
-  sunbeam secrets kv put myapp foo=bar baz=qux
-  sunbeam secrets kv put myapp mount=secrets a=1 b=2
-""#)]
-    Put {
+EXAMPLE:
+  sunbeam secrets kv list myapp
+"#)]
+    List {
         /// Secret path.
         path: String,
         /// KV mount path.
         #[arg(long, default_value = "secret")]
         mount: String,
-        /// Key=value pairs. Repeatable.
-        #[arg(required = true)]
-        pairs: Vec<String>,
     },
     /// Merge fields into an existing KV secret.
-    #[command(long_about = r#"""Patch (merge) fields into a KV v2 secret.
+    #[command(long_about = r#"Patch (merge) fields into a KV v2 secret.
 
 Updates existing fields and adds new ones without removing untouched fields.
 Uses the KV v2 merge-patch API.
 
 EXAMPLE:
   sunbeam secrets kv patch myapp foo=new_value
-""#)]
+"#)]
     Patch {
         /// Secret path.
         path: String,
@@ -186,63 +197,40 @@ EXAMPLE:
         #[arg(required = true)]
         pairs: Vec<String>,
     },
-    /// Delete the latest version of a KV secret.
-    #[command(long_about = r#"""Delete the latest version of a KV v2 secret.
+    /// Write or replace a KV secret.
+    #[command(long_about = r#"Write or replace a KV v2 secret.
 
-Marks the latest version as deleted. Older versions may still be recoverable
-depending on the mount's delete-version-after setting.
+Overwrites the entire secret at the path. Use `patch` to merge fields
+instead.
 
-EXAMPLE:
-  sunbeam secrets kv delete myapp
-""#)]
-    Delete {
+EXAMPLES:
+  sunbeam secrets kv put myapp foo=bar baz=qux
+  sunbeam secrets kv put myapp mount=secrets a=1 b=2
+"#)]
+    Put {
         /// Secret path.
         path: String,
         /// KV mount path.
         #[arg(long, default_value = "secret")]
         mount: String,
-    },
-    /// List keys under a KV path.
-    #[command(long_about = r#"""List keys under a KV v2 path.
-
-Lists immediate children under `secret/metadata/<path>`.
-
-EXAMPLE:
-  sunbeam secrets kv list myapp
-""#)]
-    List {
-        /// Secret path.
-        path: String,
-        /// KV mount path.
-        #[arg(long, default_value = "secret")]
-        mount: String,
+        /// Key=value pairs. Repeatable.
+        #[arg(required = true)]
+        pairs: Vec<String>,
     },
 }
 
 #[derive(Subcommand, Debug)]
 /// Transit action.
 pub enum TransitAction {
-    /// Enable a transit secrets engine at a mount path.
-    #[command(long_about = r#"""Enable a transit secrets engine.
-
-Creates a new transit mount at the specified path if it does not exist.
-
-EXAMPLE:
-  sunbeam secrets transit enable transit/sbbb
-""#)]
-    Enable {
-        /// Mount path (e.g. `transit/sbbb`).
-        mount: String,
-    },
     /// Create a key under a transit mount.
-    #[command(long_about = r#"""Create a transit encryption key.
+    #[command(long_about = r#"Create a transit encryption key.
 
 Creates a new key with the specified type (default: ed25519). If the key
 already exists, it is left unchanged unless the type differs.
 
 EXAMPLE:
   sunbeam secrets transit create-key transit/sbbb my-key --key-type ed25519
-""#)]
+"#)]
     CreateKey {
         /// Mount path (e.g. `transit/sbbb`).
         mount: String,
@@ -252,41 +240,53 @@ EXAMPLE:
         #[arg(long, default_value = "ed25519")]
         key_type: String,
     },
-    /// Read public metadata of a transit key.
-    #[command(long_about = r#"""Read transit key metadata.
-
-Shows key type, creation time, supported operations, and public key
-(if asymmetric).
-
-EXAMPLE:
-  sunbeam secrets transit read-key transit/sbbb my-key
-""#)]
-    ReadKey {
-        /// Mount path.
-        mount: String,
-        /// Key name.
-        name: String,
-    },
-    /// List keys under a transit mount.
-    #[command(long_about = r#"""List all keys under a transit mount.
-
-EXAMPLE:
-  sunbeam secrets transit list-keys transit/sbbb
-""#)]
-    ListKeys {
-        /// Mount path.
-        mount: String,
-    },
     /// Delete a transit key.
-    #[command(long_about = r#"""Delete a transit key.
+    #[command(long_about = r#"Delete a transit key.
 
 Schedules the key for deletion. Depending on configuration, this may
 require additional steps to fully purge.
 
 EXAMPLE:
   sunbeam secrets transit delete-key transit/sbbb my-key
-""#)]
+"#)]
     DeleteKey {
+        /// Mount path.
+        mount: String,
+        /// Key name.
+        name: String,
+    },
+    /// Enable a transit secrets engine at a mount path.
+    #[command(long_about = r#"Enable a transit secrets engine.
+
+Creates a new transit mount at the specified path if it does not exist.
+
+EXAMPLE:
+  sunbeam secrets transit enable transit/sbbb
+"#)]
+    Enable {
+        /// Mount path (e.g. `transit/sbbb`).
+        mount: String,
+    },
+    /// List keys under a transit mount.
+    #[command(long_about = r#"List all keys under a transit mount.
+
+EXAMPLE:
+  sunbeam secrets transit list-keys transit/sbbb
+"#)]
+    ListKeys {
+        /// Mount path.
+        mount: String,
+    },
+    /// Read public metadata of a transit key.
+    #[command(long_about = r#"Read transit key metadata.
+
+Shows key type, creation time, supported operations, and public key
+(if asymmetric).
+
+EXAMPLE:
+  sunbeam secrets transit read-key transit/sbbb my-key
+"#)]
+    ReadKey {
         /// Mount path.
         mount: String,
         /// Key name.
@@ -336,16 +336,16 @@ pub async fn dispatch_with_client(
     action: SecretsAction,
 ) -> Result<()> {
     match action {
-        SecretsAction::Kv(action) => dispatch_kv(client, output, action).await,
-        SecretsAction::Transit(action) => dispatch_transit(client, action).await,
-        SecretsAction::Read { path } => cmd_read(client, output, &path).await,
-        SecretsAction::Write { path, pairs } => cmd_write(client, &path, &pairs).await,
         SecretsAction::Delete { path } => cmd_delete(client, &path).await,
-        SecretsAction::List { path } => cmd_list(client, output, &path).await,
-        SecretsAction::Status => cmd_status(client).await,
-        SecretsAction::Init => cmd_init(client).await,
-        SecretsAction::Unseal { key } => cmd_unseal(client, &key).await,
         SecretsAction::Exec { args } => crate::kube::cmd_bao(&args).await,
+        SecretsAction::Init => cmd_init(client).await,
+        SecretsAction::Kv(action) => dispatch_kv(client, output, action).await,
+        SecretsAction::List { path } => cmd_list(client, output, &path).await,
+        SecretsAction::Read { path } => cmd_read(client, output, &path).await,
+        SecretsAction::Status => cmd_status(client).await,
+        SecretsAction::Transit(action) => dispatch_transit(client, action).await,
+        SecretsAction::Unseal { key } => cmd_unseal(client, &key).await,
+        SecretsAction::Write { path, pairs } => cmd_write(client, &path, &pairs).await,
     }
 }
 
@@ -359,6 +359,11 @@ async fn dispatch_kv(
     action: KvAction,
 ) -> Result<()> {
     match action {
+        KvAction::Delete { path, mount } => {
+            client.kv_delete(&mount, &path).await?;
+            tracing::info!("Deleted secret at {mount}/{path}");
+            Ok(())
+        }
         KvAction::Get { path, mount } => {
             let data = client.kv_get(&mount, &path).await?;
             match data {
@@ -386,23 +391,6 @@ async fn dispatch_kv(
             }
             Ok(())
         }
-        KvAction::Put { path, mount, pairs } => {
-            let data = parse_kv_pairs(&pairs)?;
-            client.kv_put(&mount, &path, &data).await?;
-            tracing::info!("Wrote secret to {mount}/{path}");
-            Ok(())
-        }
-        KvAction::Patch { path, mount, pairs } => {
-            let data = parse_kv_pairs(&pairs)?;
-            client.kv_patch(&mount, &path, &data).await?;
-            tracing::info!("Patched secret at {mount}/{path}");
-            Ok(())
-        }
-        KvAction::Delete { path, mount } => {
-            client.kv_delete(&mount, &path).await?;
-            tracing::info!("Deleted secret at {mount}/{path}");
-            Ok(())
-        }
         KvAction::List { path, mount } => {
             // TODO: implement kv_list in BaoClient or use generic list
             let list_path = format!("{mount}/metadata/{path}");
@@ -416,6 +404,18 @@ async fn dispatch_kv(
             }
             Ok(())
         }
+        KvAction::Patch { path, mount, pairs } => {
+            let data = parse_kv_pairs(&pairs)?;
+            client.kv_patch(&mount, &path, &data).await?;
+            tracing::info!("Patched secret at {mount}/{path}");
+            Ok(())
+        }
+        KvAction::Put { path, mount, pairs } => {
+            let data = parse_kv_pairs(&pairs)?;
+            client.kv_put(&mount, &path, &data).await?;
+            tracing::info!("Wrote secret to {mount}/{path}");
+            Ok(())
+        }
     }
 }
 
@@ -425,12 +425,6 @@ async fn dispatch_kv(
 
 async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<()> {
     match action {
-        TransitAction::Enable { mount } => {
-            let path = mount.trim_matches('/');
-            client.enable_secrets_engine(path, "transit").await?;
-            tracing::info!("Transit engine ready at {path}/");
-            Ok(())
-        }
         TransitAction::CreateKey {
             mount,
             name,
@@ -458,17 +452,17 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
             tracing::info!("Key {key_path} created.");
             Ok(())
         }
-        TransitAction::ReadKey { mount, name } => {
+        TransitAction::DeleteKey { mount, name } => {
             let mount = mount.trim_matches('/');
             let key_path = format!("{mount}/keys/{name}");
-            match client.read(&key_path).await? {
-                Some(value) => {
-                    crate::output::render(&value, crate::output::OutputFormat::Json)?;
-                }
-                None => {
-                    tracing::info!("Key {key_path} not found.");
-                }
-            }
+            client.write(&key_path, &serde_json::json!({})).await?;
+            tracing::info!("Key {key_path} deleted.");
+            Ok(())
+        }
+        TransitAction::Enable { mount } => {
+            let path = mount.trim_matches('/');
+            client.enable_secrets_engine(path, "transit").await?;
+            tracing::info!("Transit engine ready at {path}/");
             Ok(())
         }
         TransitAction::ListKeys { mount } => {
@@ -484,11 +478,17 @@ async fn dispatch_transit(client: &BaoClient, action: TransitAction) -> Result<(
             }
             Ok(())
         }
-        TransitAction::DeleteKey { mount, name } => {
+        TransitAction::ReadKey { mount, name } => {
             let mount = mount.trim_matches('/');
             let key_path = format!("{mount}/keys/{name}");
-            client.write(&key_path, &serde_json::json!({})).await?;
-            tracing::info!("Key {key_path} deleted.");
+            match client.read(&key_path).await? {
+                Some(value) => {
+                    crate::output::render(&value, crate::output::OutputFormat::Json)?;
+                }
+                None => {
+                    tracing::info!("Key {key_path} not found.");
+                }
+            }
             Ok(())
         }
     }

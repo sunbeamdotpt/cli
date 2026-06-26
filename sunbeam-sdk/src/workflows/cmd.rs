@@ -11,11 +11,40 @@ use super::host;
 #[derive(Subcommand, Debug)]
 /// Workflow action.
 pub enum WorkflowAction {
-    // ------------------------------------------------------------------
-    // Commands that work on both local and remote targets
-    // ------------------------------------------------------------------
+    /// Cancel a running workflow.
+    #[command(long_about = r#"Cancel a running or suspended workflow instance.
+
+Sends a termination signal. The workflow stops at its next checkpoint.
+Already-completed steps are not rolled back.
+
+EXAMPLE:
+  sunbeam workflow cancel <instance-id>
+"#)]
+    Cancel {
+        /// Workflow instance ID.
+        id: String,
+    },
+    /// Manage registered workflow definitions.
+    #[command(long_about = r#"List or manage registered workflow definitions.
+
+Shows all definitions available on the remote server with their versions
+and step counts.
+
+EXAMPLE:
+  sunbeam workflow -t builds definitions list
+"#)]
+    Definitions(crate::wfectl::definitions::DefinitionsArgs),
+    /// Get a workflow instance by ID or name.
+    #[command(long_about = r#"Get workflow instance details from the remote server.
+
+Similar to `status` but queries the server-side state rather than local SQLite.
+
+EXAMPLE:
+  sunbeam workflow -t builds get <instance-id>
+"#)]
+    Get(crate::wfectl::get::GetArgs),
     /// List workflow instances.
-    #[command(long_about = r#"""List workflow instances.
+    #[command(long_about = r#"List workflow instances.
 
 Local target: queries the SQLite database for runnable instances.
 Remote target: queries the wfe-server with optional status filter, pagination,
@@ -25,7 +54,7 @@ EXAMPLES:
   sunbeam workflow list
   sunbeam workflow list --status complete
   sunbeam workflow -t builds list --limit 100
-""#)]
+"#)]
     List {
         /// Filter by status (runnable, complete, terminated, suspended).
         #[arg(long, default_value = "")]
@@ -40,192 +69,15 @@ EXAMPLES:
         #[arg(long, default_value_t = 0)]
         skip: u64,
     },
-    /// Cancel a running workflow.
-    #[command(long_about = r#"""Cancel a running or suspended workflow instance.
-
-Sends a termination signal. The workflow stops at its next checkpoint.
-Already-completed steps are not rolled back.
-
-EXAMPLE:
-  sunbeam workflow cancel <instance-id>
-""#)]
-    Cancel {
-        /// Workflow instance ID.
-        id: String,
-    },
-
-    // ------------------------------------------------------------------
-    // Local-only commands
-    // ------------------------------------------------------------------
-    /// Show status of a workflow instance.
-    #[command(long_about = r#"""Show detailed status of a workflow instance.
-
-Prints the workflow definition, overall status, creation/completion times,
-and a table of every step with its status, start/end times, and retry count.
-
-EXAMPLE:
-  sunbeam workflow status <instance-id>
-""#)]
-    Status {
-        /// Workflow instance ID.
-        id: String,
-    },
-    /// Retry a failed workflow from its last checkpoint.
-    #[command(long_about = r#"""Resume a failed or suspended workflow.
-
-Retries from the last successful checkpoint. Steps that already completed
-are skipped. Useful after fixing an underlying issue (e.g. a pod that was
-stuck in Pending).
-
-EXAMPLE:
-  sunbeam workflow retry <instance-id>
-""#)]
-    Retry {
-        /// Workflow instance ID.
-        id: String,
-    },
-    /// Run a YAML-defined workflow locally.
-    #[command(long_about = r#"""Run a workflow from a YAML file.
-
-Not yet implemented for local target. Use remote target (-t) with the
-`start` command instead.
-
-EXAMPLE:
-  sunbeam workflow run ./deploy.yaml
-""#)]
-    Run {
-        /// Path to workflow YAML file (default: ./workflows.yaml).
-        #[arg(default_value = "")]
-        file: String,
-    },
-
-    // ------------------------------------------------------------------
-    // Remote-only commands (wfe-server)
-    // ------------------------------------------------------------------
-    /// Register a workflow definition from a YAML file.
-    #[command(long_about = r#"""Register a workflow definition on a remote server.
-
-Uploads a YAML workflow definition to the wfe-server so it can be started
-by name and version later.
-
-EXAMPLE:
-  sunbeam workflow -t builds register ./deploy.yaml
-""#)]
-    Register(crate::wfectl::register::RegisterArgs),
-    /// Locally validate a workflow YAML file (no server round-trip).
-    #[command(long_about = r#"""Validate a workflow YAML file locally.
-
-Checks syntax, step references, and wiring without connecting to a server.
-Useful in CI before registering.
-
-EXAMPLE:
-  sunbeam workflow validate ./deploy.yaml
-""#)]
-    Validate(crate::wfectl::validate::ValidateArgs),
-    /// Manage registered workflow definitions.
-    #[command(long_about = r#"""List or manage registered workflow definitions.
-
-Shows all definitions available on the remote server with their versions
-and step counts.
-
-EXAMPLE:
-  sunbeam workflow -t builds definitions list
-""#)]
-    Definitions(crate::wfectl::definitions::DefinitionsArgs),
-    /// Start a registered workflow instance on the server.
-    #[command(
-        name = "start",
-        long_about = r#"""Start a registered workflow on the remote server.
-
-Creates a new workflow instance from a previously registered definition.
-Returns the instance ID for tracking.
-
-EXAMPLE:
-  sunbeam workflow -t builds start --definition deploy --version 1
-""#
-    )]
-    Start(crate::wfectl::run::RunArgs),
-    /// Get a workflow instance by ID or name.
-    #[command(
-        long_about = r#"""Get workflow instance details from the remote server.
-
-Similar to `status` but queries the server-side state rather than local SQLite.
-
-EXAMPLE:
-  sunbeam workflow -t builds get <instance-id>
-""#
-    )]
-    Get(crate::wfectl::get::GetArgs),
-    /// Suspend a running workflow.
-    #[command(long_about = r#"""Suspend a running workflow instance.
-
-Pauses execution at the next checkpoint. Can be resumed with `resume`.
-
-EXAMPLE:
-  sunbeam workflow -t builds suspend <instance-id>
-""#)]
-    Suspend(crate::wfectl::suspend::SuspendArgs),
-    /// Resume a suspended workflow.
-    #[command(long_about = r#"""Resume a suspended workflow instance.
-
-Continues execution from the last checkpoint.
-
-EXAMPLE:
-  sunbeam workflow -t builds resume <instance-id>
-""#)]
-    Resume(crate::wfectl::resume::ResumeArgs),
-    /// Publish an event to waiting workflows.
-    #[command(long_about = r#"""Publish an event to waiting workflows.
-
-Workflows that are blocked on `wait_for_event` will consume this event
-and continue.
-
-EXAMPLE:
-  sunbeam workflow -t builds publish --event deploy-complete --key prod
-""#)]
-    Publish(crate::wfectl::publish::PublishArgs),
-    /// Stream lifecycle events.
-    #[command(long_about = r#"""Stream workflow lifecycle events.
-
-Connects to the server's SSE endpoint and prints workflow start, complete,
-step transition, and failure events in real time.
-
-EXAMPLE:
-  sunbeam workflow -t builds watch
-""#)]
-    Watch(crate::wfectl::watch::WatchArgs),
-    /// Stream step logs.
-    #[command(long_about = r#"""Stream step execution logs.
-
-Tails the structured logs emitted by a specific workflow instance's steps.
-Useful for debugging long-running workflows.
-
-EXAMPLE:
-  sunbeam workflow -t builds logs <instance-id>
-""#)]
-    Logs(crate::wfectl::logs::LogsArgs),
-    /// Full-text search log lines.
-    #[command(long_about = r#"""Search workflow logs.
-
-Performs full-text search across stored step logs on the remote server.
-
-EXAMPLE:
-  sunbeam workflow -t builds search-logs <instance-id> --query "error"
-""#)]
-    SearchLogs(crate::wfectl::search_logs::SearchLogsArgs),
-
-    // ------------------------------------------------------------------
-    // Target management
-    // ------------------------------------------------------------------
     /// Authenticate with and save a remote workflow server target.
-    #[command(long_about = r#"""Register a remote workflow server target.
+    #[command(long_about = r#"Register a remote workflow server target.
 
 Saves the server URL in ~/.sunbeam/config.json. Authentication tokens are
 resolved via `sunbeam auth token` using the domain derived from the URL.
 
 EXAMPLE:
   sunbeam workflow login --name builds --url https://builds.sunbeam.pt
-""#)]
+"#)]
     Login {
         /// Target name.
         #[arg(short, long)]
@@ -235,28 +87,159 @@ EXAMPLE:
         url: String,
     },
     /// Remove a saved target.
-    #[command(long_about = r#"""Remove a saved remote target.
+    #[command(long_about = r#"Remove a saved remote target.
 
 Deletes the target from ~/.sunbeam/config.json. Does not revoke tokens.
 
 EXAMPLE:
   sunbeam workflow logout --name builds
-""#)]
+"#)]
     Logout {
         /// Target name.
         #[arg(short, long)]
         name: String,
     },
+    /// Stream step logs.
+    #[command(long_about = r#"Stream step execution logs.
+
+Tails the structured logs emitted by a specific workflow instance's steps.
+Useful for debugging long-running workflows.
+
+EXAMPLE:
+  sunbeam workflow -t builds logs <instance-id>
+"#)]
+    Logs(crate::wfectl::logs::LogsArgs),
+    /// Publish an event to waiting workflows.
+    #[command(long_about = r#"Publish an event to waiting workflows.
+
+Workflows that are blocked on `wait_for_event` will consume this event
+and continue.
+
+EXAMPLE:
+  sunbeam workflow -t builds publish --event deploy-complete --key prod
+"#)]
+    Publish(crate::wfectl::publish::PublishArgs),
+    /// Register a workflow definition from a YAML file.
+    #[command(long_about = r#"Register a workflow definition on a remote server.
+
+Uploads a YAML workflow definition to the wfe-server so it can be started
+by name and version later.
+
+EXAMPLE:
+  sunbeam workflow -t builds register ./deploy.yaml
+"#)]
+    Register(crate::wfectl::register::RegisterArgs),
+    /// Resume a suspended workflow.
+    #[command(long_about = r#"Resume a suspended workflow instance.
+
+Continues execution from the last checkpoint.
+
+EXAMPLE:
+  sunbeam workflow -t builds resume <instance-id>
+"#)]
+    Resume(crate::wfectl::resume::ResumeArgs),
+    /// Retry a failed workflow from its last checkpoint.
+    #[command(long_about = r#"Resume a failed or suspended workflow.
+
+Retries from the last successful checkpoint. Steps that already completed
+are skipped. Useful after fixing an underlying issue (e.g. a pod that was
+stuck in Pending).
+
+EXAMPLE:
+  sunbeam workflow retry <instance-id>
+"#)]
+    Retry {
+        /// Workflow instance ID.
+        id: String,
+    },
+    /// Run a YAML-defined workflow locally.
+    #[command(long_about = r#"Run a workflow from a YAML file.
+
+Not yet implemented for local target. Use remote target (-t) with the
+`start` command instead.
+
+EXAMPLE:
+  sunbeam workflow run ./deploy.yaml
+"#)]
+    Run {
+        /// Path to workflow YAML file (default: ./workflows.yaml).
+        #[arg(default_value = "")]
+        file: String,
+    },
+    /// Full-text search log lines.
+    #[command(long_about = r#"Search workflow logs.
+
+Performs full-text search across stored step logs on the remote server.
+
+EXAMPLE:
+  sunbeam workflow -t builds search-logs <instance-id> --query "error"
+"#)]
+    SearchLogs(crate::wfectl::search_logs::SearchLogsArgs),
+    /// Start a registered workflow instance on the server.
+    #[command(
+        name = "start",
+        long_about = r#"Start a registered workflow on the remote server.
+
+Creates a new workflow instance from a previously registered definition.
+Returns the instance ID for tracking.
+
+EXAMPLE:
+  sunbeam workflow -t builds start --definition deploy --version 1
+"#
+    )]
+    Start(crate::wfectl::run::RunArgs),
+    /// Show status of a workflow instance.
+    #[command(long_about = r#"Show detailed status of a workflow instance.
+
+Prints the workflow definition, overall status, creation/completion times,
+and a table of every step with its status, start/end times, and retry count.
+
+EXAMPLE:
+  sunbeam workflow status <instance-id>
+"#)]
+    Status {
+        /// Workflow instance ID.
+        id: String,
+    },
+    /// Suspend a running workflow.
+    #[command(long_about = r#"Suspend a running workflow instance.
+
+Pauses execution at the next checkpoint. Can be resumed with `resume`.
+
+EXAMPLE:
+  sunbeam workflow -t builds suspend <instance-id>
+"#)]
+    Suspend(crate::wfectl::suspend::SuspendArgs),
     /// List saved workflow targets.
-    #[command(long_about = r#"""List all saved workflow targets.
+    #[command(long_about = r#"List all saved workflow targets.
 
 Shows name and URL for each registered remote target. The implicit `local`
 target is always listed.
 
 EXAMPLE:
   sunbeam workflow targets
-""#)]
+"#)]
     Targets,
+    /// Locally validate a workflow YAML file (no server round-trip).
+    #[command(long_about = r#"Validate a workflow YAML file locally.
+
+Checks syntax, step references, and wiring without connecting to a server.
+Useful in CI before registering.
+
+EXAMPLE:
+  sunbeam workflow validate ./deploy.yaml
+"#)]
+    Validate(crate::wfectl::validate::ValidateArgs),
+    /// Stream lifecycle events.
+    #[command(long_about = r#"Stream workflow lifecycle events.
+
+Connects to the server's SSE endpoint and prints workflow start, complete,
+step transition, and failure events in real time.
+
+EXAMPLE:
+  sunbeam workflow -t builds watch
+"#)]
+    Watch(crate::wfectl::watch::WatchArgs),
 }
 
 /// Resolve the effective target name and optional config.
@@ -326,6 +309,20 @@ pub async fn dispatch(
 
 async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) -> Result<()> {
     match action {
+        WorkflowAction::Cancel { id } => {
+            let ctx_name = {
+                let cfg = crate::config::load_config();
+                if cfg.current_context.is_empty() {
+                    "default".to_string()
+                } else {
+                    cfg.current_context.clone()
+                }
+            };
+            let h = host::create_host(&ctx_name).await?;
+            let result = cancel_workflow(logger, &h, &id).await;
+            host::shutdown_host(h).await;
+            result
+        }
         WorkflowAction::List { status, .. } => {
             let ctx_name = {
                 let cfg = crate::config::load_config();
@@ -337,20 +334,6 @@ async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) 
             };
             let h = host::create_host(&ctx_name).await?;
             let result = list_workflows(logger, &h, &status).await;
-            host::shutdown_host(h).await;
-            result
-        }
-        WorkflowAction::Status { id } => {
-            let ctx_name = {
-                let cfg = crate::config::load_config();
-                if cfg.current_context.is_empty() {
-                    "default".to_string()
-                } else {
-                    cfg.current_context.clone()
-                }
-            };
-            let h = host::create_host(&ctx_name).await?;
-            let result = show_workflow_status(logger, &h, &id).await;
             host::shutdown_host(h).await;
             result
         }
@@ -368,7 +351,8 @@ async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) 
             host::shutdown_host(h).await;
             result
         }
-        WorkflowAction::Cancel { id } => {
+        WorkflowAction::Run { file } => run_workflow(&file).await,
+        WorkflowAction::Status { id } => {
             let ctx_name = {
                 let cfg = crate::config::load_config();
                 if cfg.current_context.is_empty() {
@@ -378,11 +362,10 @@ async fn dispatch_local(logger: &crate::logger::Logger, action: WorkflowAction) 
                 }
             };
             let h = host::create_host(&ctx_name).await?;
-            let result = cancel_workflow(logger, &h, &id).await;
+            let result = show_workflow_status(logger, &h, &id).await;
             host::shutdown_host(h).await;
             result
         }
-        WorkflowAction::Run { file } => run_workflow(&file).await,
         _ => Err(SunbeamError::Other(format!(
             "command '{action:?}' is not supported for local target — use a remote target with `-t <name>`"
         ))),
@@ -397,11 +380,11 @@ pub async fn dispatch_with_host(
     action: WorkflowAction,
 ) -> Result<()> {
     match action {
-        WorkflowAction::List { status, .. } => list_workflows(logger, h, &status).await,
-        WorkflowAction::Status { id } => show_workflow_status(logger, h, &id).await,
-        WorkflowAction::Retry { id } => retry_workflow(logger, h, &id).await,
         WorkflowAction::Cancel { id } => cancel_workflow(logger, h, &id).await,
+        WorkflowAction::List { status, .. } => list_workflows(logger, h, &status).await,
+        WorkflowAction::Retry { id } => retry_workflow(logger, h, &id).await,
         WorkflowAction::Run { .. } => unreachable!("handled above"),
+        WorkflowAction::Status { id } => show_workflow_status(logger, h, &id).await,
         _ => Err(SunbeamError::Other(format!(
             "command '{action:?}' is not supported for local target"
         ))),
@@ -437,6 +420,14 @@ async fn dispatch_remote(
         .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
 
     let result = match action {
+        WorkflowAction::Cancel { id } => {
+            let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
+            crate::wfectl::cancel::run(logger, args, client).await
+        }
+        WorkflowAction::Definitions(args) => {
+            crate::wfectl::definitions::run(args, client, output).await
+        }
+        WorkflowAction::Get(args) => crate::wfectl::get::run(logger, args, client, output).await,
         WorkflowAction::List {
             query,
             status,
@@ -451,25 +442,17 @@ async fn dispatch_remote(
             };
             crate::wfectl::list::run(logger, args, client, output).await
         }
-        WorkflowAction::Cancel { id } => {
-            let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
-            crate::wfectl::cancel::run(logger, args, client).await
-        }
-        WorkflowAction::Register(args) => crate::wfectl::register::run(args, client, output).await,
-        WorkflowAction::Definitions(args) => {
-            crate::wfectl::definitions::run(args, client, output).await
-        }
-        WorkflowAction::Start(args) => crate::wfectl::run::run(logger, args, client, output).await,
-        WorkflowAction::Get(args) => crate::wfectl::get::run(logger, args, client, output).await,
-        WorkflowAction::Suspend(args) => crate::wfectl::suspend::run(logger, args, client).await,
-        WorkflowAction::Resume(args) => crate::wfectl::resume::run(logger, args, client).await,
-        WorkflowAction::Publish(args) => crate::wfectl::publish::run(args, client, output).await,
-        WorkflowAction::Watch(args) => crate::wfectl::watch::run(args, client).await,
         WorkflowAction::Logs(args) => crate::wfectl::logs::run(logger, args, client).await,
+        WorkflowAction::Publish(args) => crate::wfectl::publish::run(args, client, output).await,
+        WorkflowAction::Register(args) => crate::wfectl::register::run(args, client, output).await,
+        WorkflowAction::Resume(args) => crate::wfectl::resume::run(logger, args, client).await,
         WorkflowAction::SearchLogs(args) => {
             crate::wfectl::search_logs::run(args, client, output).await
         }
+        WorkflowAction::Start(args) => crate::wfectl::run::run(logger, args, client, output).await,
+        WorkflowAction::Suspend(args) => crate::wfectl::suspend::run(logger, args, client).await,
         WorkflowAction::Validate(_) => unreachable!(),
+        WorkflowAction::Watch(args) => crate::wfectl::watch::run(args, client).await,
         _ => {
             return Err(SunbeamError::Other(format!(
                 "command '{action:?}' is not supported for remote target — use `-t local`"
