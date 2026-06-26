@@ -1,10 +1,10 @@
-//! OAuth2 Authorization Code flow with PKCE for CLI authentication against Hydra.
+//! OAuth2 Device Authorization Grant for CLI authentication against Hydra.
 
 use crate::error::{Result, ResultExt, SunbeamError};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
@@ -25,9 +25,6 @@ pub struct AuthTokens {
     pub id_token: Option<String>,
     /// Domain.
     pub domain: String,
-    /// Gitea personal access token (created during auth login).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gitea_token: Option<String>,
 }
 
 /// Default client ID when the K8s secret is unavailable.
@@ -114,33 +111,11 @@ fn write_cache(tokens: &AuthTokens) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// PKCE
-// ---------------------------------------------------------------------------
-
-/// Generate a PKCE code_verifier and code_challenge (S256).
-fn generate_pkce() -> (String, String) {
-    let verifier_bytes: [u8; 32] = rand::random();
-    let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(verifier_bytes);
-    let challenge = {
-        let hash = Sha256::digest(verifier.as_bytes());
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
-    };
-    (verifier, challenge)
-}
-
-/// Generate a random state parameter for OAuth2.
-fn generate_state() -> String {
-    let bytes: [u8; 16] = rand::random();
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-// ---------------------------------------------------------------------------
 // OIDC discovery
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct OidcDiscovery {
-    authorization_endpoint: String,
     token_endpoint: String,
     #[serde(default)]
     device_authorization_endpoint: Option<String>,
@@ -219,39 +194,6 @@ struct TokenResponse {
     id_token: Option<String>,
 }
 
-async fn exchange_code(
-    token_endpoint: &str,
-    code: &str,
-    redirect_uri: &str,
-    client_id: &str,
-    code_verifier: &str,
-) -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(token_endpoint)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", redirect_uri),
-            ("client_id", client_id),
-            ("code_verifier", code_verifier),
-        ])
-        .send()
-        .await
-        .ctx("Failed to exchange authorization code")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(SunbeamError::identity(format!(
-            "Token exchange failed (HTTP {status}): {body}"
-        )));
-    }
-
-    let token_resp: TokenResponse = resp.json().await.ctx("Failed to parse token response")?;
-    Ok(token_resp)
-}
-
 /// Refresh an access token using a refresh token.
 async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
     let discovery = discover_oidc(&cached.domain).await?;
@@ -294,7 +236,6 @@ async fn refresh_token(cached: &AuthTokens) -> Result<AuthTokens> {
         expires_at,
         id_token: token_resp.id_token.or_else(|| cached.id_token.clone()),
         domain: cached.domain.clone(),
-        gitea_token: cached.gitea_token.clone(),
     };
 
     write_cache(&new_tokens)?;
@@ -422,7 +363,7 @@ async fn poll_device_token(
 
         if start.elapsed() >= expires {
             return Err(SunbeamError::identity(
-                "Device login timed out. Run `sunbeam auth device` to try again.",
+                "Device login timed out. Run `sunbeam auth login` to try again.",
             ));
         }
     }
@@ -431,11 +372,10 @@ async fn poll_device_token(
 /// Device login — OAuth2 Device Authorization Grant.
 ///
 /// Prints a user code and verification URL, then polls the token endpoint until
-/// the user authorizes the device. Tokens are cached the same way as browser
-/// SSO login, so `sunbeam auth token` and `crate::auth::get_token()` work
-/// identically for upstream API calls.
+/// the user authorizes the device. Tokens are cached so `sunbeam auth token`
+/// and `crate::auth::get_token()` work identically for upstream API calls.
 #[tracing::instrument(skip(domain_override))]
-pub async fn cmd_auth_device_login(domain_override: Option<&str>) -> Result<()> {
+pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
     tracing::info!("Authenticating with Hydra via device code");
 
     let domain = resolve_domain(domain_override).await?;
@@ -477,7 +417,6 @@ pub async fn cmd_auth_device_login(domain_override: Option<&str>) -> Result<()> 
         expires_at,
         id_token: token_resp.id_token.clone(),
         domain: domain.clone(),
-        gitea_token: None,
     };
 
     let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
@@ -533,135 +472,6 @@ fn extract_email(id_token: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP callback server
-// ---------------------------------------------------------------------------
-
-/// Parsed callback parameters from the OAuth2 redirect.
-struct CallbackParams {
-    code: String,
-    #[allow(dead_code)]
-    state: String,
-}
-
-/// Bind a TCP listener for the OAuth2 callback, preferring ports 9876-9880.
-async fn bind_callback_listener() -> Result<(tokio::net::TcpListener, u16)> {
-    for port in 9876..=9880 {
-        if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            return Ok((listener, port));
-        }
-    }
-    // Fall back to ephemeral port
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .ctx("Failed to bind callback listener")?;
-    let port = listener.local_addr().ctx("No local address")?.port();
-    Ok((listener, port))
-}
-
-/// Wait for a single HTTP callback request, extract code and state, send HTML response.
-async fn wait_for_callback(
-    listener: tokio::net::TcpListener,
-    expected_state: &str,
-    redirect_url: Option<&str>,
-) -> Result<CallbackParams> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // Wait up to 5 minutes for the callback, or until Ctrl+C
-    let accept_result =
-        tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
-            .await
-            .map_err(|_| {
-                SunbeamError::identity(
-                    "Login timed out (5 min). Try again with `sunbeam auth login`.",
-                )
-            })?;
-
-    let (mut stream, _) = accept_result.ctx("Failed to accept callback connection")?;
-
-    let mut buf = vec![0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .await
-        .ctx("Failed to read callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
-
-    // Parse the GET request line: "GET /callback?code=...&state=... HTTP/1.1"
-    let request_line = request.lines().next().ctx("Empty callback request")?;
-
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .ctx("No path in callback request")?;
-
-    // Parse query params
-    let query = path.split('?').nth(1).ctx("No query params in callback")?;
-
-    let mut code = None;
-    let mut state = None;
-
-    for param in query.split('&') {
-        let mut kv = param.splitn(2, '=');
-        match (kv.next(), kv.next()) {
-            (Some("code"), Some(v)) => code = Some(v.to_string()),
-            (Some("state"), Some(v)) => state = Some(v.to_string()),
-            _ => {}
-        }
-    }
-
-    let code = code.ok_or_else(|| SunbeamError::identity("No 'code' in callback"))?;
-    let state = state.ok_or_else(|| SunbeamError::identity("No 'state' in callback"))?;
-
-    if state != expected_state {
-        return Err(SunbeamError::identity(
-            "OAuth2 state mismatch -- possible CSRF attack",
-        ));
-    }
-
-    // Send success response — redirect to next step if provided, otherwise show done page
-    let response = if let Some(next_url) = redirect_url {
-        let html = format!(
-            "<!DOCTYPE html><html><head>\
-             <meta http-equiv='refresh' content='1;url={next_url}'>\
-             <style>\
-             body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;\
-             align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}}\
-             .card{{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}}\
-             h2{{margin:0 0 1rem}}p{{color:#9ca3af}}a{{color:#d97706}}\
-             </style></head><body><div class='card'>\
-             <h2>SSO login successful</h2>\
-             <p>Redirecting to Gitea token setup...</p>\
-             <p><a href='{next_url}'>Click here if not redirected</a></p>\
-             </div></body></html>"
-        );
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            html.len(),
-            html
-        )
-    } else {
-        let html = "\
-             <!DOCTYPE html><html><head><style>\
-             body{font-family:system-ui,sans-serif;display:flex;justify-content:center;\
-             align-items:center;min-height:100vh;margin:0;background:#1a1f2e;color:#e8e6e3}\
-             .card{text-align:center;padding:3rem;border:1px solid #334;border-radius:1rem}\
-             h2{margin:0 0 1rem}p{color:#9ca3af}\
-             </style></head><body><div class='card'>\
-             <h2>Authentication successful</h2>\
-             <p>You can close this tab and return to the terminal.</p>\
-             </div></body></html>";
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            html.len(),
-            html
-        )
-    };
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.shutdown().await;
-
-    Ok(CallbackParams { code, state })
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -710,187 +520,6 @@ pub async fn cmd_auth_token() -> Result<()> {
     let token = get_token().await?;
     println!("{{\"Authorization\": \"Bearer {token}\"}}");
     Ok(())
-}
-
-/// Interactive browser-based OAuth2 login.
-/// SSO login — Hydra OIDC authorization code flow with PKCE.
-/// `gitea_redirect`: if Some, the browser callback page auto-redirects to Gitea token page.
-#[tracing::instrument(skip(domain_override, gitea_redirect))]
-pub async fn cmd_auth_sso_login_with_redirect(
-    domain_override: Option<&str>,
-    gitea_redirect: Option<&str>,
-) -> Result<()> {
-    tracing::info!("Authenticating with Hydra");
-
-    // Resolve domain: explicit flag > cached token domain > config > cluster discovery
-    let domain = resolve_domain(domain_override).await?;
-
-    tracing::info!("Domain: {domain}");
-
-    // OIDC discovery
-    let discovery = discover_oidc(&domain).await?;
-
-    // Resolve client_id
-    let client_id = resolve_client_id().await;
-
-    // Generate PKCE
-    let (code_verifier, code_challenge) = generate_pkce();
-
-    // Generate state
-    let state = generate_state();
-
-    // Bind callback listener
-    let (listener, port) = bind_callback_listener().await?;
-    let redirect_uri = format!("http://localhost:{port}/callback");
-
-    // Build authorization URL
-    let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-        discovery.authorization_endpoint,
-        urlencoding(&client_id),
-        urlencoding(&redirect_uri),
-        "openid%20email%20profile%20offline_access",
-        code_challenge,
-        state,
-    );
-
-    tracing::info!("Opening browser for login...");
-    println!("\n    {auth_url}\n");
-
-    // Try to open the browser
-    let _open_result = open_browser(&auth_url);
-
-    // Wait for callback
-    tracing::info!("Waiting for authentication callback...");
-    let callback = wait_for_callback(listener, &state, gitea_redirect).await?;
-
-    // Exchange code for tokens
-    tracing::info!("Exchanging authorization code for tokens...");
-    let token_resp = exchange_code(
-        &discovery.token_endpoint,
-        &callback.code,
-        &redirect_uri,
-        &client_id,
-        &code_verifier,
-    )
-    .await?;
-
-    let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
-
-    let tokens = AuthTokens {
-        access_token: token_resp.access_token,
-        refresh_token: token_resp.refresh_token.unwrap_or_default(),
-        expires_at,
-        id_token: token_resp.id_token.clone(),
-        domain: domain.clone(),
-        gitea_token: None,
-    };
-
-    // Print success with email if available
-    let email = tokens.id_token.as_ref().and_then(|t| extract_email(t));
-    if let Some(ref email) = email {
-        tracing::info!("Logged in as {email}");
-    } else {
-        tracing::info!("Logged in successfully");
-    }
-
-    write_cache(&tokens)?;
-    Ok(())
-}
-
-/// SSO login — standalone (no redirect after callback).
-#[tracing::instrument(skip(domain_override))]
-pub async fn cmd_auth_sso_login(domain_override: Option<&str>) -> Result<()> {
-    cmd_auth_sso_login_with_redirect(domain_override, None).await
-}
-
-/// Gitea token login — opens the PAT creation page and prompts for the token.
-#[tracing::instrument(skip(domain_override))]
-pub async fn cmd_auth_git_login(domain_override: Option<&str>) -> Result<()> {
-    tracing::info!("Setting up Gitea API access");
-
-    let domain = resolve_domain(domain_override).await?;
-    let url = format!("https://src.{domain}/user/settings/applications");
-
-    tracing::info!("Opening Gitea token page in your browser...");
-    tracing::info!("Create a token with all scopes selected, then paste it below.");
-    println!("\n    {url}\n");
-
-    let _ = open_browser(&url);
-
-    // Prompt for the token
-    eprint!("    Gitea token: ");
-    let mut token = String::new();
-    std::io::stdin()
-        .read_line(&mut token)
-        .ctx("Failed to read token from stdin")?;
-    let token = token.trim().to_string();
-
-    if token.is_empty() {
-        return Err(SunbeamError::identity("No token provided."));
-    }
-
-    // Verify the token works
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("https://src.{domain}/api/v1/user"))
-        .header("Authorization", format!("token {token}"))
-        .send()
-        .await
-        .ctx("Failed to verify Gitea token")?;
-
-    if !resp.status().is_success() {
-        return Err(SunbeamError::identity(format!(
-            "Gitea token is invalid (HTTP {}). Check the token and try again.",
-            resp.status()
-        )));
-    }
-
-    let user: serde_json::Value = resp.json().await?;
-    let login = user
-        .get("login")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    // Save to cache
-    let mut tokens = read_cache().unwrap_or_else(|_| AuthTokens {
-        access_token: String::new(),
-        refresh_token: String::new(),
-        expires_at: Utc::now(),
-        id_token: None,
-        domain: domain.clone(),
-        gitea_token: None,
-    });
-    tokens.gitea_token = Some(token);
-    if tokens.domain.is_empty() {
-        tokens.domain = domain;
-    }
-    write_cache(&tokens)?;
-
-    tracing::info!("Gitea authenticated as {login}");
-    Ok(())
-}
-
-/// Combined login — SSO first, then Gitea.
-#[tracing::instrument(skip(domain_override))]
-pub async fn cmd_auth_login_all(domain_override: Option<&str>) -> Result<()> {
-    // Resolve domain early so we can build the Gitea redirect URL
-    let domain = resolve_domain(domain_override).await?;
-    let gitea_url = format!("https://src.{domain}/user/settings/applications");
-    cmd_auth_sso_login_with_redirect(Some(&domain), Some(&gitea_url)).await?;
-    cmd_auth_git_login(Some(&domain)).await?;
-    Ok(())
-}
-
-/// Get the Gitea API token (for use by pm.rs).
-pub fn get_gitea_token() -> Result<String> {
-    let tokens = read_cache()
-        .map_err(|_| SunbeamError::identity("Not logged in. Run `sunbeam auth login` first."))?;
-    tokens.gitea_token.ok_or_else(|| {
-        SunbeamError::identity(
-            "No Gitea token. Run `sunbeam auth login` or `sunbeam auth set-gitea-token <token>`.",
-        )
-    })
 }
 
 /// Remove cached auth tokens.
@@ -948,22 +577,6 @@ pub async fn cmd_auth_status() -> Result<()> {
 // Utility helpers
 // ---------------------------------------------------------------------------
 
-/// Minimal percent-encoding for URL query parameters.
-fn urlencoding(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
-            }
-        }
-    }
-    out
-}
-
 /// Try to open a URL in the default browser.
 fn open_browser(url: &str) -> std::result::Result<(), std::io::Error> {
     #[cfg(target_os = "macos")]
@@ -992,28 +605,6 @@ mod tests {
     use chrono::Duration;
 
     #[test]
-    fn test_pkce_generation() {
-        let (verifier, challenge) = generate_pkce();
-
-        // Verifier should be base64url-encoded 32 bytes -> 43 chars
-        assert_eq!(verifier.len(), 43);
-
-        // Challenge should be base64url-encoded SHA256 -> 43 chars
-        assert_eq!(challenge.len(), 43);
-
-        // Verify the challenge matches the verifier
-        let expected_hash = Sha256::digest(verifier.as_bytes());
-        let expected_challenge =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(expected_hash);
-        assert_eq!(challenge, expected_challenge);
-
-        // Two calls should produce different values
-        let (v2, c2) = generate_pkce();
-        assert_ne!(verifier, v2);
-        assert_ne!(challenge, c2);
-    }
-
-    #[test]
     fn test_token_cache_roundtrip() {
         let tokens = AuthTokens {
             access_token: "access_abc".to_string(),
@@ -1023,7 +614,6 @@ mod tests {
                 "eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ.sig".to_string(),
             ),
             domain: "sunbeam.pt".to_string(),
-            gitea_token: None,
         };
 
         let json = serde_json::to_string_pretty(&tokens).unwrap();
@@ -1049,7 +639,6 @@ mod tests {
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
-            gitea_token: None,
         };
 
         let json = serde_json::to_string(&tokens).unwrap();
@@ -1068,7 +657,6 @@ mod tests {
             expires_at: Utc::now() + Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
-            gitea_token: None,
         };
 
         let now = Utc::now();
@@ -1084,7 +672,6 @@ mod tests {
             expires_at: Utc::now() - Duration::hours(1),
             id_token: None,
             domain: "example.com".to_string(),
-            gitea_token: None,
         };
 
         let now = Utc::now();
@@ -1100,7 +687,6 @@ mod tests {
             expires_at: Utc::now() + Duration::seconds(30),
             id_token: None,
             domain: "example.com".to_string(),
-            gitea_token: None,
         };
 
         let now = Utc::now();
@@ -1142,25 +728,6 @@ mod tests {
         let fake_jwt = format!("eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig");
 
         assert_eq!(extract_email(&fake_jwt), None);
-    }
-
-    #[test]
-    fn test_urlencoding() {
-        assert_eq!(urlencoding("hello"), "hello");
-        assert_eq!(urlencoding("hello world"), "hello%20world");
-        assert_eq!(
-            urlencoding("http://localhost:9876/callback"),
-            "http%3A%2F%2Flocalhost%3A9876%2Fcallback"
-        );
-    }
-
-    #[test]
-    fn test_generate_state() {
-        let s1 = generate_state();
-        let s2 = generate_state();
-        assert_ne!(s1, s2);
-        // 16 bytes base64url -> 22 chars
-        assert_eq!(s1.len(), 22);
     }
 
     #[test]
