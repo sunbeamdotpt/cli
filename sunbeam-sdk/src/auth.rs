@@ -27,8 +27,17 @@ pub struct AuthTokens {
     pub domain: String,
 }
 
-/// Default client ID when the K8s secret is unavailable.
-const DEFAULT_CLIENT_ID: &str = "sunbeam-cli";
+/// Hydra OAuth2 client ID for the Sunbeam CLI public client.
+///
+/// Client registration:
+///   client_name: "Sunbeam CLI"
+///   token_endpoint_auth_method: "none" (public client, no secret)
+///   grant_types: authorization_code, refresh_token, urn:ietf:params:oauth:grant-type:device_code
+///   response_types: ["code"]
+///   scope: "openid email profile offline_access"
+///   redirect_uris: http://localhost:9876-9880/callback, http://127.0.0.1:9876-9880/callback
+///   post_logout_redirect_uris: http://localhost:9876/callback, http://127.0.0.1:9876/callback
+const DEFAULT_CLIENT_ID: &str = "62c878f8-4229-4bf9-a73c-1e3aae0ae425";
 
 // ---------------------------------------------------------------------------
 // Cache file helpers
@@ -436,12 +445,11 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
 // Client ID resolution
 // ---------------------------------------------------------------------------
 
-/// Try to read the client_id from K8s secret `oidc-sunbeam-cli` in `ory` namespace.
-/// Falls back to the default client ID.
+/// Resolve the OAuth2 client ID for device login.
+///
+/// The CLI is a public Hydra client (no secret). The client_id is hardcoded
+/// to match the pre-registered Sunbeam CLI client.
 async fn resolve_client_id() -> String {
-    // The OAuth2Client is pre-created with a known client_id matching
-    // DEFAULT_CLIENT_ID ("sunbeam-cli") via a pre-seeded K8s secret.
-    // No cluster access needed.
     DEFAULT_CLIENT_ID.to_string()
 }
 
