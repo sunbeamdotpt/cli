@@ -2011,9 +2011,14 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                 use clap::CommandFactory;
                 // Print config subcommand help
                 let mut cmd = Cli::command();
-                let sub = cmd
-                    .find_subcommand_mut("config")
-                    .expect("config subcommand");
+                let sub = match cmd.find_subcommand_mut("config") {
+                    Some(sub) => sub,
+                    None => {
+                        return Err(SunbeamError::Other(
+                            "config subcommand missing from CLI".into(),
+                        ))
+                    }
+                };
                 sub.print_help()?;
                 println!();
                 Ok(())
@@ -2363,7 +2368,14 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             None => {
                 use clap::CommandFactory;
                 let mut cmd = Cli::command();
-                let sub = cmd.find_subcommand_mut("user").expect("user subcommand");
+                let sub = match cmd.find_subcommand_mut("user") {
+                    Some(sub) => sub,
+                    None => {
+                        return Err(SunbeamError::Other(
+                            "user subcommand missing from CLI".into(),
+                        ))
+                    }
+                };
                 sub.print_help()?;
                 println!();
                 Ok(())

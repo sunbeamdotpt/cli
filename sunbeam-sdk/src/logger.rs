@@ -203,9 +203,17 @@ pub struct RecordedEvent {
 }
 
 impl TestSink {
+    fn lock_events(&self) -> std::sync::MutexGuard<'_, Vec<RecordedEvent>> {
+        match self.events.lock() {
+            Ok(guard) => guard,
+            // The tests never poison this mutex.
+            Err(_) => unreachable!(),
+        }
+    }
+
     /// Drain all captured events.
     pub fn take(&self) -> Vec<RecordedEvent> {
-        std::mem::take(&mut *self.events.lock().unwrap())
+        std::mem::take(&mut *self.lock_events())
     }
 }
 
@@ -215,7 +223,7 @@ impl Sink for TestSink {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        self.events.lock().unwrap().push(RecordedEvent {
+        self.lock_events().push(RecordedEvent {
             level,
             msg: msg.to_string(),
             fields: kvs,
@@ -383,14 +391,25 @@ impl Default for ThreadedSink {
 }
 
 impl ThreadedSink {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, ThreadedState> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            // Nothing in this module poisons the state mutex.
+            Err(_) => unreachable!(),
+        }
+    }
+
     /// Enter a named group. The returned guard finishes the progress bar on drop.
     pub fn enter_group(&self, name: impl Into<String>) -> ThreadedGroupGuard {
         let name = name.into();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
-        let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
-            .unwrap()
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+        let style = match indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}") {
+            Ok(style) => style,
+            // The template string is a compile-time constant valid for indicatif.
+            Err(_) => unreachable!(),
+        }
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
         pb.set_style(style);
         pb.set_message(format!("{name} ..."));
         state.groups.insert(name.clone(), pb);
@@ -409,10 +428,18 @@ pub struct ThreadedGroupGuard {
 
 impl Drop for ThreadedGroupGuard {
     fn drop(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = match self.state.lock() {
+            Ok(guard) => guard,
+            // Nothing in this module poisons the state mutex.
+            Err(_) => unreachable!(),
+        };
         if let Some(pb) = state.groups.remove(&self.name) {
-            let style =
-                indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}").unwrap();
+            let style = match indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}")
+            {
+                Ok(style) => style,
+                // The template string is a compile-time constant valid for indicatif.
+                Err(_) => unreachable!(),
+            };
             pb.set_style(style);
             pb.set_prefix("✓");
             let elapsed = pb.elapsed();
@@ -447,20 +474,24 @@ impl Sink for ThreadedSink {
             .map(|(_, v)| v.to_string());
 
         if let Some(name) = group {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             if let Some(pb) = state.groups.get_mut(&name) {
                 pb.set_message(format!("{name}  {line}"));
             } else {
                 let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
-                let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                    .unwrap()
-                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+                let style = match indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                {
+                    Ok(style) => style,
+                    // The template string is a compile-time constant valid for indicatif.
+                    Err(_) => unreachable!(),
+                }
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
                 pb.set_style(style);
                 pb.set_message(format!("{name}  {line}"));
                 state.groups.insert(name, pb);
             }
         } else {
-            let state = self.state.lock().unwrap();
+            let state = self.lock_state();
             let _ = state.mp.println(line);
         }
     }

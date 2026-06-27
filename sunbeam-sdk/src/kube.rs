@@ -159,10 +159,11 @@ fn job_spec_hash(doc_json: &serde_json::Value) -> String {
 pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Result<()> {
     // Throttle concurrent manifest applications to protect single-node
     // k3s from being overwhelmed (especially SQLite-backed control planes).
-    let _permit = apply_semaphore()
-        .acquire()
-        .await
-        .expect("apply semaphore never closed");
+    let _permit = match apply_semaphore().acquire().await {
+        Ok(permit) => permit,
+        // The static apply semaphore is never closed, so acquisition cannot fail.
+        Err(_) => unreachable!(),
+    };
 
     let client = get_client().await?;
     let ssapply = PatchParams::apply("sunbeam").force();
@@ -214,10 +215,11 @@ pub async fn kube_apply(logger: &crate::logger::Logger, manifest: &str) -> Resul
     let mut disc = match disc {
         Some(d) => d,
         None => {
-            return Err(SunbeamError::kube(format!(
-                "API discovery failed after 20 attempts: {}",
-                last_err.unwrap()
-            )));
+            let msg = match last_err {
+                Some(err) => format!("API discovery failed after 20 attempts: {err}"),
+                None => "API discovery failed after 20 attempts".to_string(),
+            };
+            return Err(SunbeamError::kube(msg));
         }
     };
 

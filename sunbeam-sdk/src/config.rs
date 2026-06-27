@@ -298,12 +298,11 @@ pub fn set_active_context(ctx: Context) {
     let _ = ACTIVE_CONTEXT.set(ctx);
 }
 
-/// Get the active context. Panics if not initialized (should never happen
-/// after dispatch starts).
+/// Get the active context. If one has not been initialized yet, a default
+/// context is installed; in normal CLI flow dispatch always initializes this
+/// before any command runs.
 pub fn active_context() -> &'static Context {
-    ACTIVE_CONTEXT
-        .get()
-        .expect("active context not initialized")
+    ACTIVE_CONTEXT.get_or_init(Context::default)
 }
 
 /// Get the domain from the active context. Returns empty string if not set.

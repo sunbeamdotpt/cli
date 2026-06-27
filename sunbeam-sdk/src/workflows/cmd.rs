@@ -298,7 +298,11 @@ pub async fn dispatch(
     if target_name == "local" {
         dispatch_local(&logger, action).await
     } else {
-        let t = target_cfg.expect("remote target resolved");
+        let t = match target_cfg {
+            Some(t) => t,
+            // resolve_target returns Some for any non-local target that exists.
+            None => unreachable!(),
+        };
         dispatch_remote(&logger, action, output, &t).await
     }
 }

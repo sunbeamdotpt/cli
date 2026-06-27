@@ -88,7 +88,11 @@ pub fn sort(graph: &Graph) -> Result<SortedGroups, CycleError> {
             remaining -= 1;
             if let Some(children) = reverse.get(node) {
                 for child in children {
-                    let entry = indegree.get_mut(child).expect("child tracked");
+                    let entry = match indegree.get_mut(child) {
+                        Some(entry) => entry,
+                        // Every child was seeded into the indegree map during setup.
+                        None => unreachable!(),
+                    };
                     *entry -= 1;
                     if *entry == 0 {
                         next.push(child.clone());
@@ -110,11 +114,15 @@ pub fn sort(graph: &Graph) -> Result<SortedGroups, CycleError> {
 
 /// Walk the residual (non-zero indegree) graph to surface one concrete cycle.
 fn extract_cycle(graph: &Graph, indegree: &BTreeMap<String, usize>) -> CycleError {
-    let start = indegree
+    let start = match indegree
         .iter()
         .find(|&(_, &d)| d > 0)
         .map(|(n, _)| n.clone())
-        .expect("cycle requires at least one unresolved node");
+    {
+        Some(start) => start,
+        // A positive remaining count guarantees at least one unresolved node.
+        None => unreachable!(),
+    };
 
     let mut stack: Vec<String> = Vec::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
@@ -123,7 +131,11 @@ fn extract_cycle(graph: &Graph, indegree: &BTreeMap<String, usize>) -> CycleErro
 
     while let Some(node) = queue.pop_front() {
         if stack.contains(&node) {
-            let cycle_start = stack.iter().position(|n| n == &node).unwrap();
+            let cycle_start = match stack.iter().position(|n| n == &node) {
+                Some(idx) => idx,
+                // We just verified the node is in the stack, so it must be found.
+                None => unreachable!(),
+            };
             let mut path: Vec<String> = stack[cycle_start..].to_vec();
             path.push(node);
             return CycleError { path };

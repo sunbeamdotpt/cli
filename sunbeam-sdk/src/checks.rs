@@ -338,7 +338,11 @@ fn s3_auth_headers_at(
         format!("AWS4-HMAC-SHA256\n{amzdate}\n{credential_scope}\n{canonical_hash}");
 
     fn hmac_sign(key: &[u8], msg: &[u8]) -> Vec<u8> {
-        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+        let mut mac = match HmacSha256::new_from_slice(key) {
+            Ok(mac) => mac,
+            // HMAC-SHA256 accepts any key length, so this arm is unreachable.
+            Err(_) => unreachable!(),
+        };
         mac.update(msg);
         mac.finalize().into_bytes().to_vec()
     }
@@ -349,7 +353,11 @@ fn s3_auth_headers_at(
     let k = hmac_sign(&k, b"aws4_request");
 
     let sig = {
-        let mut mac = HmacSha256::new_from_slice(&k).expect("HMAC accepts any key length");
+        let mut mac = match HmacSha256::new_from_slice(&k) {
+            Ok(mac) => mac,
+            // HMAC-SHA256 accepts any key length, so this arm is unreachable.
+            Err(_) => unreachable!(),
+        };
         mac.update(string_to_sign.as_bytes());
         hex_encode(mac.finalize().into_bytes())
     };

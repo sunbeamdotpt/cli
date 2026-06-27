@@ -176,7 +176,11 @@ async fn run_daemon_foreground() -> Result<()> {
         // Bind the local k8s proxy on 16579 — far enough away from common
         // conflicts (6443 = kube API) that we shouldn't collide on dev
         // machines. TODO: make this configurable.
-        proxy_bind: crate::vpn_env::VPN_K8S_PROXY.parse().expect("static addr"),
+        proxy_bind: match crate::vpn_env::VPN_K8S_PROXY.parse() {
+            Ok(addr) => addr,
+            // VPN_K8S_PROXY is a compile-time static socket address string.
+            Err(_) => unreachable!(),
+        },
         // The daemon auto-picks the first non-self peer when this is
         // None, which is correct for single-cluster deployments. Set an
         // explicit fallback here only if you have multiple peers and

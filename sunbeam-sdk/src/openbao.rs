@@ -37,12 +37,21 @@ impl BaoClient {
     /// Create a new client pointing at `base_url` (e.g. `http://localhost:8200`).
     pub fn new(base_url: &str) -> Self {
         let url = base_url.trim_end_matches('/');
-        let settings = VaultClientSettingsBuilder::default()
+        let settings = match VaultClientSettingsBuilder::default()
             .address(url)
             .build()
-            .expect("valid vault client settings");
+        {
+            Ok(settings) => settings,
+            // A well-formed HTTP URL always produces valid Vault settings.
+            Err(_) => unreachable!(),
+        };
+        let inner = match VaultClient::new(settings) {
+            Ok(client) => client,
+            // Valid settings always produce a usable Vault client.
+            Err(_) => unreachable!(),
+        };
         Self {
-            inner: VaultClient::new(settings).expect("valid vault client"),
+            inner,
             base_url: url.to_string(),
         }
     }
@@ -50,13 +59,22 @@ impl BaoClient {
     /// Create a client with an authentication token.
     pub fn with_token(base_url: &str, token: &str) -> Self {
         let url = base_url.trim_end_matches('/');
-        let settings = VaultClientSettingsBuilder::default()
+        let settings = match VaultClientSettingsBuilder::default()
             .address(url)
             .token(token.to_string())
             .build()
-            .expect("valid vault client settings");
+        {
+            Ok(settings) => settings,
+            // A well-formed HTTP URL and non-empty token produce valid settings.
+            Err(_) => unreachable!(),
+        };
+        let inner = match VaultClient::new(settings) {
+            Ok(client) => client,
+            // Valid settings always produce a usable Vault client.
+            Err(_) => unreachable!(),
+        };
         Self {
-            inner: VaultClient::new(settings).expect("valid vault client"),
+            inner,
             base_url: url.to_string(),
         }
     }

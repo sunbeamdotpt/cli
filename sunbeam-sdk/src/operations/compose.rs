@@ -114,7 +114,14 @@ pub fn render(ws: &WorkspaceConfig) -> Result<String> {
 /// Creates the directory tree if it does not exist. Returns the path written.
 pub fn materialize(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<PathBuf> {
     let path = compose_file_path(workspace_root);
-    let parent = path.parent().expect("path always has a parent");
+    let parent = match path.parent() {
+        Some(parent) => parent,
+        None => {
+            return Err(SunbeamError::Other(
+                "compose file path has no parent directory".into(),
+            ))
+        }
+    };
     std::fs::create_dir_all(parent)
         .with_ctx(|| format!("creating compose directory {}", parent.display()))?;
     let content = render(ws)?;

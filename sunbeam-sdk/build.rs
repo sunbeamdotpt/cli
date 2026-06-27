@@ -4,11 +4,16 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(
+        env::var("OUT_DIR").unwrap_or_else(|e| panic!("OUT_DIR not set: {e}")),
+    );
     let target = env::var("TARGET").unwrap_or_default();
 
     // Embed lima-sunbeam.yaml for VM provisioning
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir = PathBuf::from(
+        env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|e| panic!("CARGO_MANIFEST_DIR not set: {e}")),
+    );
     let lima_yaml_src = manifest_dir.join("../lima-sunbeam.yaml");
     let lima_yaml_dst = out_dir.join("lima-sunbeam.yaml");
     fs::copy(&lima_yaml_src, &lima_yaml_dst)
