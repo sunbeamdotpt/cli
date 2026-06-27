@@ -10,18 +10,23 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 // Bring the generated Tonic/Prost client stubs into this module.
-include!(concat!(env!("OUT_DIR"), "/sunbeam.kanban.v1.rs"));
+// The generated module suppresses style lints for machine-produced code.
+mod generated;
 
 /// Re-export the generated clients so subcommand modules can use them directly.
-pub use aggregated_board_service_client::AggregatedBoardServiceClient;
-pub use attachment_service_client::AttachmentServiceClient;
-pub use board_service_client::BoardServiceClient;
-pub use card_service_client::CardServiceClient;
-pub use github_link_service_client::GithubLinkServiceClient;
-pub use project_service_client::ProjectServiceClient;
-pub use public_board_service_client::PublicBoardServiceClient;
-pub use search_service_client::SearchServiceClient;
-pub use templates_service_client::TemplatesServiceClient;
+pub use generated::aggregated_board_service_client::AggregatedBoardServiceClient;
+pub use generated::attachment_service_client::AttachmentServiceClient;
+pub use generated::board_service_client::BoardServiceClient;
+pub use generated::card_service_client::CardServiceClient;
+pub use generated::github_link_service_client::GithubLinkServiceClient;
+pub use generated::project_service_client::ProjectServiceClient;
+pub use generated::public_board_service_client::PublicBoardServiceClient;
+pub use generated::search_service_client::SearchServiceClient;
+pub use generated::templates_service_client::TemplatesServiceClient;
+
+// Re-export all top-level generated message types so callers can use
+// `client::BoardVisibility` instead of `client::generated::BoardVisibility`.
+pub use generated::*;
 
 /// Tonic interceptor that injects an `Authorization: Bearer <token>` header.
 #[derive(Clone)]

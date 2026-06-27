@@ -42,6 +42,27 @@ fn main() {
         .compile_protos(&kanban_proto_paths, kanban_include_dirs)
         .unwrap_or_else(|e| panic!("failed to compile kanban protos: {e}"));
 
+    // The generated stubs are machine-produced. Wrap them in a dedicated module
+    // file with style lints suppressed so we do not have to edit generated code.
+    let generated_rs = manifest_dir.join("src/kanban/client/generated.rs");
+    let generated_allow = concat!(
+        "#![allow(\n",
+        "    clippy::question_mark_used,\n",
+        "    clippy::unwrap_used,\n",
+        "    clippy::expect_used,\n",
+        "    clippy::needless_borrow,\n",
+        "    clippy::collapsible_if,\n",
+        "    clippy::missing_safety_doc,\n",
+        "    clippy::undocumented_unsafe_blocks,\n",
+        "    unused_mut,\n",
+        "    unused_imports,\n",
+        "    unused_variables,\n",
+        ")]\n\n",
+        "include!(concat!(env!(\"OUT_DIR\"), \"/sunbeam.kanban.v1.rs\"));\n"
+    );
+    fs::write(&generated_rs, generated_allow)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", generated_rs.display()));
+
     for p in kanban_protos {
         println!(
             "cargo:rerun-if-changed={}",
