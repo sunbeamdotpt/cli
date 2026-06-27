@@ -313,8 +313,10 @@ mod tests {
         unsafe { std::env::set_var("HOME", dir.path()) };
         let got = vpn_state_dir().unwrap();
         if let Some(p) = prev {
+            // SAFETY: restores the previous HOME value saved before the test.
             unsafe { std::env::set_var("HOME", p) };
         } else {
+            // SAFETY: removes the HOME override created for this test.
             unsafe { std::env::remove_var("HOME") };
         }
         assert_eq!(got, dir.path().join(".sunbeam").join("vpn"));

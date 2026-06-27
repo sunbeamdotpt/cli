@@ -23,9 +23,13 @@ impl RawModeGuard {
     fn new() -> Self {
         use std::os::unix::io::AsRawFd;
         let fd = std::io::stdin().as_raw_fd();
+        // SAFETY: fd is the raw file descriptor for the process stdin.
         let is_tty = unsafe { libc::isatty(fd) } == 1;
+        // SAFETY: libc::termios can be safely zero-initialized.
         let mut saved: libc::termios = unsafe { std::mem::zeroed() };
         if is_tty {
+            // SAFETY: fd is a valid TTY file descriptor. tcgetattr/tcsetattr and
+            // cfmakeraw are called with properly allocated termios values.
             unsafe {
                 libc::tcgetattr(fd, &mut saved);
                 let mut raw = saved;
@@ -41,6 +45,8 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         if self.is_tty {
+            // SAFETY: fd and saved termios were captured by RawModeGuard::new
+            // from a valid TTY and are restored here before the guard is dropped.
             unsafe {
                 libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved);
             }
@@ -64,10 +70,14 @@ impl RawModeGuard {
 fn terminal_size() -> Option<(u16, u16)> {
     use std::os::unix::io::AsRawFd;
     let fd = std::io::stdout().as_raw_fd();
+    // SAFETY: fd is the raw file descriptor for the process stdout.
     if unsafe { libc::isatty(fd) } != 1 {
         return None;
     }
+    // SAFETY: libc::winsize can be safely zero-initialized.
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: fd is a valid TTY file descriptor; ioctl is called with a
+    // properly aligned, mutable winsize pointer.
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 {
         Some((ws.ws_col, ws.ws_row))
     } else {

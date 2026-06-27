@@ -206,6 +206,8 @@ mod tests {
     impl EnvGuard {
         fn set(key: &str, value: &str) -> Self {
             let prior = env::var(key).ok();
+            // SAFETY: test helper mutates a well-known, isolated env key under a
+            // global lock with per-test process isolation configured by nextest.
             unsafe { env::set_var(key, value) };
             Self {
                 key: key.to_string(),
@@ -215,6 +217,8 @@ mod tests {
 
         fn unset(key: &str) -> Self {
             let prior = env::var(key).ok();
+            // SAFETY: test helper mutates a well-known, isolated env key under a
+            // global lock with per-test process isolation configured by nextest.
             unsafe { env::remove_var(key) };
             Self {
                 key: key.to_string(),
@@ -226,8 +230,16 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             match &self.prior {
-                Some(v) => unsafe { env::set_var(&self.key, v) },
-                None => unsafe { env::remove_var(&self.key) },
+                Some(v) => {
+                    // SAFETY: restores the previous env value observed by the
+                    // test helper before the guard goes out of scope.
+                    unsafe { env::set_var(&self.key, v) }
+                }
+                None => {
+                    // SAFETY: removes the env key that was created by the test
+                    // helper, restoring the pre-test state.
+                    unsafe { env::remove_var(&self.key) }
+                }
             }
         }
     }

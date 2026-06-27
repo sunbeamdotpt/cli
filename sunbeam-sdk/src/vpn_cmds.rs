@@ -87,6 +87,8 @@ async fn spawn_background_daemon(state_dir: &std::path::Path) -> Result<()> {
     // Detach from the controlling terminal so closing the parent shell
     // doesn't SIGHUP the daemon.
     use std::os::unix::process::CommandExt;
+    // SAFETY: pre_exec is called before the child process starts; the closure
+    // only calls setsid and is async-signal-safe.
     unsafe {
         cmd.pre_exec(|| {
             // Become a session leader so the child has no controlling TTY.
