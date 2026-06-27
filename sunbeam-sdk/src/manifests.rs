@@ -687,6 +687,17 @@ pub async fn inject_opensearch_model_id(logger: &crate::logger::Logger) {
     }
 }
 
+/// Serialize a JSON value to a string.
+///
+/// `serde_json::to_string` is infallible for `serde_json::Value`, so any
+/// error here represents an implementation bug rather than a runtime failure.
+fn json_to_string(value: &serde_json::Value) -> String {
+    match serde_json::to_string(value) {
+        Ok(s) => s,
+        Err(_) => unreachable!(),
+    }
+}
+
 /// Configure OpenSearch ML Commons for neural search.
 ///
 /// 1. Sets cluster settings to allow ML on data nodes.
@@ -711,7 +722,7 @@ pub async fn ensure_opensearch_ml() {
     os_api(
         "/_cluster/settings",
         "PUT",
-        Some(&serde_json::to_string(&settings).unwrap()),
+        Some(&json_to_string(&settings)),
     )
     .await;
 
@@ -864,7 +875,7 @@ pub async fn ensure_opensearch_ml() {
         let reg_resp = match os_api(
             "/_plugins/_ml/models/_register",
             "POST",
-            Some(&serde_json::to_string(&reg_body).unwrap()),
+            Some(&json_to_string(&reg_body)),
         )
         .await
         {
@@ -944,7 +955,7 @@ pub async fn ensure_opensearch_ml() {
     os_api(
         "/_ingest/pipeline/tuwunel_embedding_pipeline",
         "PUT",
-        Some(&serde_json::to_string(&ingest).unwrap()),
+        Some(&json_to_string(&ingest)),
     )
     .await;
 
@@ -962,7 +973,7 @@ pub async fn ensure_opensearch_ml() {
     os_api(
         "/_search/pipeline/tuwunel_hybrid_pipeline",
         "PUT",
-        Some(&serde_json::to_string(&search).unwrap()),
+        Some(&json_to_string(&search)),
     )
     .await;
 

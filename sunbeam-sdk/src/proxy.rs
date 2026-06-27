@@ -86,7 +86,11 @@ pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
                 continue;
             }
 
-            let kind_idx = kind_idx.unwrap();
+            let kind_idx = match kind_idx {
+                Some(idx) => idx,
+                // is_target is only set when kind_idx was assigned.
+                None => unreachable!(),
+            };
             let indent = "    ";
 
             // Look for an existing image: line after kind: Deployment.

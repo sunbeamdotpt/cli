@@ -46,18 +46,31 @@ fn fmt_time() -> String {
     now.format("%H:%M:%S%.3f").to_string()
 }
 
+impl ThreadedLayer {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, RenderState> {
+        match self.state.lock() {
+            Ok(guard) => guard,
+            // This mutex is never poisoned by the logging layer.
+            Err(_) => unreachable!(),
+        }
+    }
+}
+
 impl<S> Layer<S> for ThreadedLayer
 where
     S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
     fn on_new_span(&self, _attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
 
         // Set up a nice spinner style.
-        let style = indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
-            .unwrap()
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+        let style = match indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}") {
+            Ok(style) => style,
+            // The template is a compile-time constant valid for indicatif.
+            Err(_) => unreachable!(),
+        }
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
         pb.set_style(style);
 
         // Pre-fill the message with the span name if we can look it up.
@@ -70,7 +83,7 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
 
         // Find the current span to route this event to.
         let span_id = match ctx.lookup_current() {
@@ -111,7 +124,7 @@ where
     }
 
     fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let Some(span_bar) = state.spans.remove(&id) else {
             return;
         };
@@ -125,7 +138,11 @@ where
         let secs = elapsed.as_secs_f64();
 
         // Success style: green checkmark.
-        let style = indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}").unwrap();
+        let style = match indicatif::ProgressStyle::with_template("{prefix:.bold.green} {msg}") {
+            Ok(style) => style,
+            // The template is a compile-time constant valid for indicatif.
+            Err(_) => unreachable!(),
+        };
         span_bar.pb.set_style(style);
         span_bar.pb.set_prefix("✓");
         span_bar

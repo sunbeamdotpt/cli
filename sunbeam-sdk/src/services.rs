@@ -291,7 +291,12 @@ pub async fn cmd_status(logger: &crate::logger::Logger, target: Option<&str>) ->
                             .unwrap_or(false);
 
                         if labeled_hit {
-                            for pod in labeled_list.unwrap().items {
+                            let list = match labeled_list {
+                                Some(list) => list,
+                                // labeled_hit is only true when labeled_list is Some.
+                                None => unreachable!(),
+                            };
+                            for pod in list.items {
                                 pods.push(PodRow {
                                     ns: ns.to_string(),
                                     name: pod.name_any(),

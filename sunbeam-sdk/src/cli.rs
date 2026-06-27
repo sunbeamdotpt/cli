@@ -2108,7 +2108,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             }
         },
 
-        Some(Verb::Doctor) => crate::doctor::cmd_doctor(&logger).await,
+        Some(Verb::Doctor) => crate::doctor::cmd_doctor(logger).await,
 
         Some(Verb::Down {
             yes,
@@ -2182,7 +2182,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             .await
             .map_err(|e| SunbeamError::Other(format!("down workflow failed: {e}")))?;
 
-            crate::workflows::down::print_summary(&logger, &instance);
+            crate::workflows::down::print_summary(logger, &instance);
             crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != wfe_core::models::WorkflowStatus::Complete {
@@ -2349,7 +2349,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             .await
             .map_err(|e| SunbeamError::Other(format!("up workflow failed: {e}")))?;
 
-            crate::workflows::up::print_summary(&logger, &instance);
+            crate::workflows::up::print_summary(logger, &instance);
             crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != wfe_core::models::WorkflowStatus::Complete {
@@ -2362,7 +2362,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Some(Verb::Update) => crate::update::cmd_update(&logger).await,
+        Some(Verb::Update) => crate::update::cmd_update(logger).await,
 
         Some(Verb::User { action }) => match action {
             None => {

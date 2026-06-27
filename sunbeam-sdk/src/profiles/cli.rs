@@ -379,10 +379,12 @@ fn print_discover_json(resources: &[crate::profiles::ManifestResource]) {
         );
         out.push(Value::Object(obj.into_iter().collect()));
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&Value::Array(out)).unwrap()
-    );
+    let body = match serde_json::to_string_pretty(&Value::Array(out)) {
+        Ok(s) => s,
+        // Serializing a serde_json::Value is infallible.
+        Err(_) => unreachable!(),
+    };
+    println!("{body}");
 }
 
 #[cfg(test)]

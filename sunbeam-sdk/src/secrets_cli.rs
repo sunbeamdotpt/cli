@@ -610,7 +610,7 @@ async fn read_token() -> Result<String> {
     // 2. Try local keystore
     let domain = crate::config::domain();
     if !domain.is_empty() {
-        if let Ok(ks) = crate::vault_keystore::load_keystore(&domain) {
+        if let Ok(ks) = crate::vault_keystore::load_keystore(domain) {
             if !ks.root_token.is_empty() {
                 return Ok(ks.root_token);
             }

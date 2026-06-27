@@ -64,7 +64,10 @@ pub fn unique_match<S: std::fmt::Display>(
 ) -> Result<String> {
     match matches.len() {
         0 => Err(SunbeamError::Other(format!("no {kind} named {raw:?}"))),
-        1 => Ok(matches.into_iter().next().unwrap().0),
+        1 => match matches.into_iter().next() {
+            Some((id, _)) => Ok(id),
+            None => unreachable!(),
+        },
         _ => {
             let names: Vec<_> = matches.iter().map(|(_, name)| name.to_string()).collect();
             Err(SunbeamError::Other(format!(
