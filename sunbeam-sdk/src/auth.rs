@@ -66,11 +66,15 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
 async fn discover_oidc(domain: &str) -> Result<OidcDiscovery> {
     let url = format!("https://auth.{domain}/.well-known/openid-configuration");
     let client = reqwest::Client::new();
-    let resp = client
+    let resp = match client
         .get(&url)
         .send()
         .await
-        .with_ctx(|| format!("Failed to fetch OIDC discovery from {url}"))?;
+        .with_ctx(|| format!("Failed to fetch OIDC discovery from {url}"))
+    {
+        Ok(resp) => resp,
+        Err(e) => return Err(e),
+    };
 
     if !resp.status().is_success() {
         return Err(SunbeamError::network(format!(
@@ -79,10 +83,10 @@ async fn discover_oidc(domain: &str) -> Result<OidcDiscovery> {
         )));
     }
 
-    let discovery: OidcDiscovery = resp
-        .json()
-        .await
-        .ctx("Failed to parse OIDC discovery response")?;
+    let discovery: OidcDiscovery = match resp.json().await.ctx("Failed to parse OIDC discovery response") {
+        Ok(d) => d,
+        Err(e) => return Err(e),
+    };
     Ok(discovery)
 }
 
@@ -103,13 +107,16 @@ struct TokenResponse {
 
 /// Refresh an access token using a refresh token.
 async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> {
-    let discovery = discover_oidc(domain).await?;
+    let discovery = match discover_oidc(domain).await {
+        Ok(d) => d,
+        Err(e) => return Err(e),
+    };
 
     // Try to get client_id from K8s, fall back to default
     let client_id = resolve_client_id().await;
 
     let client = reqwest::Client::new();
-    let resp = client
+    let resp = match client
         .post(&discovery.token_endpoint)
         .form(&[
             ("grant_type", "refresh_token"),
@@ -118,7 +125,11 @@ async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> 
         ])
         .send()
         .await
-        .ctx("Failed to refresh token")?;
+        .ctx("Failed to refresh token")
+    {
+        Ok(resp) => resp,
+        Err(e) => return Err(e),
+    };
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -128,10 +139,14 @@ async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> 
         )));
     }
 
-    let token_resp: TokenResponse = resp
+    let token_resp: TokenResponse = match resp
         .json()
         .await
-        .ctx("Failed to parse refresh token response")?;
+        .ctx("Failed to parse refresh token response")
+    {
+        Ok(t) => t,
+        Err(e) => return Err(e),
+    };
 
     let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
 
@@ -144,8 +159,10 @@ async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> 
         id_token: token_resp.id_token.or_else(|| cached.id_token.clone()),
     };
 
-    crate::config::set_auth_tokens(domain, &new_tokens)?;
-    Ok(new_tokens)
+    match crate::config::set_auth_tokens(domain, &new_tokens) {
+        Ok(()) => Ok(new_tokens),
+        Err(e) => Err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +209,7 @@ async fn request_device_code(
     client_id: &str,
 ) -> Result<DeviceAuthorizationResponse> {
     let client = reqwest::Client::new();
-    let resp = client
+    let resp = match client
         .post(endpoint)
         .form(&[
             ("client_id", client_id),
@@ -200,7 +217,11 @@ async fn request_device_code(
         ])
         .send()
         .await
-        .with_ctx(|| format!("Failed to request device code from {endpoint}"))?;
+        .with_ctx(|| format!("Failed to request device code from {endpoint}"))
+    {
+        Ok(resp) => resp,
+        Err(e) => return Err(e),
+    };
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -210,10 +231,14 @@ async fn request_device_code(
         )));
     }
 
-    let body = resp
+    let body = match resp
         .bytes()
         .await
-        .ctx("Failed to read device authorization response")?;
+        .ctx("Failed to read device authorization response")
+    {
+        Ok(b) => b,
+        Err(e) => return Err(e),
+    };
     serde_json::from_slice::<DeviceAuthorizationResponse>(&body)
         .ctx("Failed to parse device authorization response")
 }
@@ -232,7 +257,7 @@ async fn poll_device_token(
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
 
-        let resp = client
+        let resp = match client
             .post(token_endpoint)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -241,13 +266,21 @@ async fn poll_device_token(
             ])
             .send()
             .await
-            .ctx("Failed to poll device token endpoint")?;
+            .ctx("Failed to poll device token endpoint")
+        {
+            Ok(resp) => resp,
+            Err(e) => return Err(e),
+        };
 
         if resp.status().is_success() {
-            let body = resp
+            let body = match resp
                 .bytes()
                 .await
-                .ctx("Failed to read device token response")?;
+                .ctx("Failed to read device token response")
+            {
+                Ok(b) => b,
+                Err(e) => return Err(e),
+            };
             return serde_json::from_slice::<TokenResponse>(&body)
                 .ctx("Failed to parse device token response");
         }
@@ -287,12 +320,21 @@ async fn poll_device_token(
 pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
     tracing::info!("Authenticating with Hydra via device code");
 
-    let domain = resolve_domain(domain_override).await?;
-    let discovery = discover_oidc(&domain).await?;
+    let domain = match resolve_domain(domain_override).await {
+        Ok(d) => d,
+        Err(e) => return Err(e),
+    };
+    let discovery = match discover_oidc(&domain).await {
+        Ok(d) => d,
+        Err(e) => return Err(e),
+    };
     let client_id = resolve_client_id().await;
 
     let device_endpoint = device_authorization_endpoint(&discovery, &domain);
-    let device_resp = request_device_code(&device_endpoint, &client_id).await?;
+    let device_resp = match request_device_code(&device_endpoint, &client_id).await {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
 
     println!("\n    Device code: {}\n", device_resp.user_code);
     println!(
@@ -308,14 +350,18 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
     let _open_result = open_browser(browser_url);
 
     tracing::info!("Waiting for device authorization...");
-    let token_resp = poll_device_token(
+    let token_resp = match poll_device_token(
         &discovery.token_endpoint,
         &client_id,
         &device_resp.device_code,
         device_resp.interval,
         device_resp.expires_in,
     )
-    .await?;
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
 
     let expires_at = Utc::now() + chrono::Duration::seconds(token_resp.expires_in.unwrap_or(3600));
 
@@ -333,8 +379,10 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         tracing::info!("Logged in successfully");
     }
 
-    crate::config::set_auth_tokens(&domain, &tokens)?;
-    Ok(())
+    match crate::config::set_auth_tokens(&domain, &tokens) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -360,17 +408,28 @@ fn decode_jwt_payload(token: &str) -> Result<serde_json::Value> {
     if parts.len() < 2 {
         return Err(SunbeamError::identity("Invalid JWT: not enough segments"));
     }
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1])
-        .ctx("Failed to base64-decode JWT payload")?;
-    let payload: serde_json::Value =
-        serde_json::from_slice(&payload_bytes).ctx("Failed to parse JWT payload as JSON")?;
+        .ctx("Failed to base64-decode JWT payload")
+    {
+        Ok(bytes) => bytes,
+        Err(e) => return Err(e),
+    };
+    let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes)
+        .ctx("Failed to parse JWT payload as JSON")
+    {
+        Ok(p) => p,
+        Err(e) => return Err(e),
+    };
     Ok(payload)
 }
 
 /// Extract the email claim from an id_token.
 fn extract_email(id_token: &str) -> Option<String> {
-    let payload = decode_jwt_payload(id_token).ok()?;
+    let payload = match decode_jwt_payload(id_token) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
     payload
         .get("email")
         .and_then(|v| v.as_str())
@@ -430,7 +489,10 @@ pub async fn get_token() -> Result<String> {
 /// Output: {"Authorization": "Bearer <token>"}
 #[tracing::instrument]
 pub async fn cmd_auth_token() -> Result<()> {
-    let token = get_token().await?;
+    let token = match get_token().await {
+        Ok(t) => t,
+        Err(e) => return Err(e),
+    };
     println!("{{\"Authorization\": \"Bearer {token}\"}}");
     Ok(())
 }
@@ -446,8 +508,10 @@ pub async fn cmd_auth_logout() -> Result<()> {
     }
 
     if crate::config::get_auth_tokens(domain).is_some() {
-        crate::config::remove_auth_tokens(domain)?;
-        tracing::info!("Logged out (cached tokens removed)");
+        match crate::config::remove_auth_tokens(domain) {
+            Ok(()) => tracing::info!("Logged out (cached tokens removed)"),
+            Err(e) => return Err(e),
+        }
     } else {
         tracing::info!("Not logged in (no cached tokens to remove)");
     }
@@ -507,11 +571,17 @@ pub async fn cmd_auth_status() -> Result<()> {
 fn open_browser(url: &str) -> std::result::Result<(), std::io::Error> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).spawn()?;
+        match std::process::Command::new("open").arg(url).spawn() {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open").arg(url).spawn()?;
+        match std::process::Command::new("xdg-open").arg(url).spawn() {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
