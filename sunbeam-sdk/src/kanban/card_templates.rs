@@ -7,6 +7,7 @@ use crate::kanban::client::{
     TemplateChecklistItem as ProtoTemplateChecklistItem, TemplatesServiceClient,
     UpdateCardTemplateRequest, request_with_object_id,
 };
+use crate::kanban::resolve;
 use crate::logger::Logger;
 use crate::output::{OutputFormat, render, render_list};
 use async_trait::async_trait;
@@ -27,7 +28,7 @@ pub enum CardTemplateAction {
     },
     /// Get a card template.
     Get {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
     },
     /// Create a card template.
@@ -41,7 +42,7 @@ pub enum CardTemplateAction {
     },
     /// Update a card template.
     Update {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
         /// New name.
         #[arg(short, long)]
@@ -49,7 +50,7 @@ pub enum CardTemplateAction {
     },
     /// Delete a card template.
     Delete {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
     },
 }
@@ -264,6 +265,7 @@ pub async fn run(
             )
         }
         CardTemplateAction::Get { template_id } => {
+            let template_id = resolve::resolve_card_template_id(client, None, &template_id).await?;
             let req = GetCardTemplateRequest {
                 template_id: template_id.clone(),
             };
@@ -288,6 +290,7 @@ pub async fn run(
             render(&CardTemplateOut::from(&resp), format)
         }
         CardTemplateAction::Update { template_id, name } => {
+            let template_id = resolve::resolve_card_template_id(client, None, &template_id).await?;
             let mut paths = Vec::new();
             if name.is_some() {
                 paths.push("name".to_string());
@@ -309,6 +312,7 @@ pub async fn run(
             render(&CardTemplateOut::from(&resp), format)
         }
         CardTemplateAction::Delete { template_id } => {
+            let template_id = resolve::resolve_card_template_id(client, None, &template_id).await?;
             let req = mutation_request(
                 DeleteCardTemplateRequest {
                     template_id: template_id.clone(),
@@ -528,6 +532,33 @@ mod tests {
             nanos: -1,
         };
         assert!(super::format_timestamp(Some(&ts)).is_some());
+    }
+
+    #[tokio::test]
+    async fn get_card_template_by_name_resolves() {
+        let mut mock = MockCardTemplateService::new();
+        mock.expect_list_card_templates()
+            .withf(|req| req.project_id.is_empty())
+            .times(1)
+            .returning(|_| {
+                Ok(client::ListCardTemplatesResponse {
+                    templates: vec![card_template_fixture()],
+                })
+            });
+        mock.expect_get_card_template()
+            .withf(|req| req.template_id == "ctmpl_1")
+            .times(1)
+            .returning(|_| Ok(card_template_fixture()));
+
+        run(
+            CardTemplateAction::Get {
+                template_id: "Bug".into(),
+            },
+            OutputFormat::Json,
+            &mut mock,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

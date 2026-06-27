@@ -7,6 +7,7 @@ use crate::kanban::client::{
     ListMembersRequest, ListProjectsRequest, ProjectServiceClient, RemoveMemberRequest,
     UpdateProjectRequest,
 };
+use crate::kanban::resolve;
 use crate::logger::Logger;
 use crate::output::{OutputFormat, render, render_list};
 use crate::wfectl::output::fmt_proto_time;
@@ -22,7 +23,7 @@ pub enum ProjectAction {
     List,
     /// Get a project.
     Get {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
     },
     /// Create a project.
@@ -45,7 +46,7 @@ pub enum ProjectAction {
     },
     /// Update a project.
     Update {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
         /// New name.
         #[arg(short, long)]
@@ -62,7 +63,7 @@ pub enum ProjectAction {
     },
     /// Delete a project.
     Delete {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
     },
     /// Member management.
@@ -78,12 +79,12 @@ pub enum ProjectAction {
 pub enum MemberAction {
     /// List members.
     List {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
     },
     /// Add a member.
     Add {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
         /// SSO subject.
         subject: String,
@@ -93,7 +94,7 @@ pub enum MemberAction {
     },
     /// Remove a member.
     Remove {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
         /// SSO subject.
         subject: String,
@@ -311,6 +312,7 @@ pub async fn run(
             )
         }
         ProjectAction::Get { project_id } => {
+            let project_id = resolve::resolve_project_id(client, &project_id).await?;
             let req = crate::kanban::client::request_with_object_id(
                 GetProjectRequest {
                     project_id: project_id.clone(),
@@ -351,6 +353,7 @@ pub async fn run(
             color,
             description,
         } => {
+            let project_id = resolve::resolve_project_id(client, &project_id).await?;
             let mut paths = Vec::new();
             if name.is_some() {
                 paths.push("name".to_string());
@@ -386,6 +389,7 @@ pub async fn run(
             render(&ProjectOut::from(resp), format)
         }
         ProjectAction::Delete { project_id } => {
+            let project_id = resolve::resolve_project_id(client, &project_id).await?;
             let req = crate::kanban::client::request_with_object_id(
                 DeleteProjectRequest {
                     project_id: project_id.clone(),
@@ -403,6 +407,7 @@ pub async fn run(
         }
         ProjectAction::Member { action } => match action {
             MemberAction::List { project_id } => {
+                let project_id = resolve::resolve_project_id(client, &project_id).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     ListMembersRequest {
                         project_id: project_id.clone(),
@@ -434,6 +439,7 @@ pub async fn run(
                 subject,
                 relation,
             } => {
+                let project_id = resolve::resolve_project_id(client, &project_id).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     AddMemberRequest {
                         project_id: project_id.clone(),
@@ -460,6 +466,7 @@ pub async fn run(
                 project_id,
                 subject,
             } => {
+                let project_id = resolve::resolve_project_id(client, &project_id).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     RemoveMemberRequest {
                         project_id: project_id.clone(),
@@ -546,7 +553,8 @@ mod tests {
         mock.expect_get_project()
             .withf(|req| {
                 req.get_ref().project_id == "proj_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("proj_1")
@@ -791,6 +799,40 @@ mod tests {
                 icon: Some("I".into()),
                 color: Some("C".into()),
                 description: Some("D".into()),
+            },
+            OutputFormat::Json,
+            &mut mock,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_project_by_name_resolves_through_list() {
+        let mut mock = MockProjectService::new();
+        mock.expect_list_projects()
+            .withf(|req| req.get_ref() == &ListProjectsRequest {})
+            .times(1)
+            .returning(|_| {
+                Ok(client::ListProjectsResponse {
+                    projects: vec![sample_project()],
+                })
+            });
+        mock.expect_get_project()
+            .withf(|req| {
+                req.get_ref().project_id == "proj_1"
+                    && req
+                        .metadata()
+                        .get("x-sunbeam-object-id")
+                        .and_then(|v| v.to_str().ok())
+                        == Some("proj_1")
+            })
+            .times(1)
+            .returning(|_| Ok(sample_project()));
+
+        run(
+            ProjectAction::Get {
+                project_id: "Sunbeam".into(),
             },
             OutputFormat::Json,
             &mut mock,

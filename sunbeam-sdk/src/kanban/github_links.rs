@@ -268,9 +268,7 @@ pub async fn run(
             let req = client::UnlinkGitHubIssueRequest {
                 link_id: link_id.clone(),
             };
-            client
-                .unlink_issue(mutating_request(req, &card)?)
-                .await?;
+            client.unlink_issue(mutating_request(req, &card)?).await?;
             render(
                 &serde_json::json!({
                     "unlinked": true,
@@ -371,7 +369,8 @@ mod tests {
                     && r.repo_owner == "sunbeam"
                     && r.repo_name == "cli"
                     && r.number == 42
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -397,7 +396,8 @@ mod tests {
         mock.expect_unlink_issue()
             .withf(|req| {
                 req.get_ref().link_id == "link_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -423,7 +423,8 @@ mod tests {
         mock.expect_list_links_by_card()
             .withf(|req| {
                 req.get_ref().card_id == "card_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -455,7 +456,8 @@ mod tests {
                 r.repo_owner == "sunbeam"
                     && r.repo_name == "cli"
                     && r.query == "crash"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -494,7 +496,8 @@ mod tests {
         mock.expect_resync_link()
             .withf(|req| {
                 req.get_ref().link_id == "link_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")

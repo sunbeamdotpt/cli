@@ -14,7 +14,7 @@ use serde::Serialize;
 pub enum CardAction {
     /// List cards.
     List {
-        /// Board ID.
+        /// Board ID or name.
         #[arg(short, long)]
         board: String,
         /// Column ID.
@@ -23,12 +23,12 @@ pub enum CardAction {
     },
     /// Get a card.
     Get {
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
     },
     /// Create a card.
     Create {
-        /// Board ID.
+        /// Board ID or name.
         #[arg(short, long)]
         board: String,
         /// Column ID.
@@ -46,7 +46,7 @@ pub enum CardAction {
     },
     /// Update a card.
     Update {
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
         /// New title.
         #[arg(short, long)]
@@ -60,7 +60,7 @@ pub enum CardAction {
     },
     /// Move a card.
     Move {
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
         /// Destination column ID.
         #[arg(short, long)]
@@ -71,7 +71,7 @@ pub enum CardAction {
     },
     /// Delete a card.
     Delete {
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
     },
     /// Dependency management.
@@ -112,22 +112,22 @@ impl PriorityArg {
 pub enum DependencyAction {
     /// Add a dependency.
     Add {
-        /// Board ID.
+        /// Board ID or name.
         #[arg(short, long)]
         board: String,
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
-        /// Card this card depends on.
+        /// Card this card depends on (ID, title, or ref).
         depends_on: String,
     },
     /// Remove a dependency.
     Remove {
-        /// Board ID.
+        /// Board ID or name.
         #[arg(short, long)]
         board: String,
-        /// Card ID.
+        /// Card ID, title, or ref.
         card_id: String,
-        /// Dependency card ID.
+        /// Dependency card ID, title, or ref.
         depends_on: String,
     },
 }
@@ -636,7 +636,8 @@ mod tests {
             .withf(|req| {
                 req.get_ref().board_id == "board_1"
                     && req.get_ref().column_id.is_empty()
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("board_1")
@@ -667,7 +668,8 @@ mod tests {
         mock.expect_get_card()
             .withf(|req| {
                 req.get_ref().card_id == "card_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -800,7 +802,8 @@ mod tests {
                 let r = req.get_ref();
                 r.card_id == "card_1"
                     && r.depends_on_card_id == "card_2"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("board_1")
@@ -831,7 +834,8 @@ mod tests {
                 let r = req.get_ref();
                 r.card_id == "card_1"
                     && r.depends_on_card_id == "card_2"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("board_1")

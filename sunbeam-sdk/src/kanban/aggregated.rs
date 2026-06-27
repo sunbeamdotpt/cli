@@ -4,6 +4,7 @@ use crate::error::{Result, ResultExt};
 use crate::kanban::boards::VisibilityArg;
 use crate::kanban::client::{self, AggregatedBoardServiceClient, request_with_object_id};
 use crate::kanban::new_idempotency_key;
+use crate::kanban::resolve;
 use crate::logger::Logger;
 use crate::output::{OutputFormat, render, render_list};
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ pub enum AggregateAction {
     List,
     /// Get an aggregated board.
     Get {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
     },
     /// Create an aggregated board.
@@ -37,7 +38,7 @@ pub enum AggregateAction {
     },
     /// Update an aggregated board.
     Update {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
         /// New name.
         #[arg(short, long)]
@@ -51,7 +52,7 @@ pub enum AggregateAction {
     },
     /// Delete an aggregated board.
     Delete {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
     },
     /// Source board management.
@@ -67,9 +68,9 @@ pub enum AggregateAction {
 pub enum SourceAction {
     /// Add a source board.
     Add {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
-        /// Source board ID.
+        /// Source board ID or name.
         board_id: String,
         /// Display position.
         #[arg(short, long)]
@@ -77,16 +78,16 @@ pub enum SourceAction {
     },
     /// Remove a source board.
     Remove {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
-        /// Source board ID.
+        /// Source board ID or name.
         board_id: String,
     },
     /// Move a source board.
     Move {
-        /// Aggregated board ID.
+        /// Aggregated board ID or name.
         aggregate_id: String,
-        /// Source board ID.
+        /// Source board ID or name.
         board_id: String,
         /// New position.
         #[arg(short, long)]
@@ -337,6 +338,7 @@ pub async fn run(
             )
         }
         AggregateAction::Get { aggregate_id } => {
+            let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
             let req = client::GetAggregatedBoardRequest {
                 aggregated_board_id: aggregate_id.clone(),
             };
@@ -402,6 +404,7 @@ pub async fn run(
             description,
             icon,
         } => {
+            let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
             let mut board = client::AggregatedBoard {
                 id: aggregate_id.clone(),
                 ..Default::default()
@@ -431,6 +434,7 @@ pub async fn run(
             render(&AggregatedBoardOut::from_proto(resp), format)
         }
         AggregateAction::Delete { aggregate_id } => {
+            let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
             let req = client::DeleteAggregatedBoardRequest {
                 aggregated_board_id: aggregate_id.clone(),
             };
@@ -446,6 +450,7 @@ pub async fn run(
                 board_id,
                 position,
             } => {
+                let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
                 let req = client::AddSourceBoardRequest {
                     aggregated_board_id: aggregate_id.clone(),
                     board_id: board_id.clone(),
@@ -463,6 +468,7 @@ pub async fn run(
                 aggregate_id,
                 board_id,
             } => {
+                let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
                 let req = client::RemoveSourceBoardRequest {
                     aggregated_board_id: aggregate_id.clone(),
                     board_id: board_id.clone(),
@@ -480,6 +486,7 @@ pub async fn run(
                 board_id,
                 position,
             } => {
+                let aggregate_id = resolve::resolve_aggregate_id(client, &aggregate_id).await?;
                 let req = client::MoveSourceBoardRequest {
                     aggregated_board_id: aggregate_id.clone(),
                     board_id: board_id.clone(),
@@ -641,7 +648,8 @@ mod tests {
                         .as_ref()
                         .map(|m| m.paths == ["name"])
                         .unwrap_or(false)
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("agg_1")
@@ -883,6 +891,39 @@ mod tests {
             VisibilityArg::Public.to_proto() as i32,
             client::BoardVisibility::Public as i32
         );
+    }
+
+    #[tokio::test]
+    async fn get_aggregated_board_by_name_resolves() {
+        let mut mock = MockAggregatedBoardService::new();
+        mock.expect_list_aggregated_boards()
+            .withf(|req| req.get_ref() == &client::ListAggregatedBoardsRequest {})
+            .times(1)
+            .returning(|_| {
+                Ok(client::ListAggregatedBoardsResponse {
+                    aggregated_boards: vec![board("agg_1", "Roadmap")],
+                })
+            });
+        mock.expect_get_aggregated_board()
+            .withf(|req| req.get_ref().aggregated_board_id == "agg_1")
+            .times(1)
+            .returning(|_| {
+                Ok(vec![client::AggregatedBoardChunk {
+                    payload: Some(client::aggregated_board_chunk::Payload::Metadata(board(
+                        "agg_1", "Roadmap",
+                    ))),
+                }])
+            });
+
+        run(
+            AggregateAction::Get {
+                aggregate_id: "Roadmap".into(),
+            },
+            OutputFormat::Json,
+            &mut mock,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

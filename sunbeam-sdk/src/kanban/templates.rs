@@ -6,6 +6,7 @@ use crate::kanban::client::{
     self, CreateTemplateRequest, DeleteTemplateRequest, GetTemplateRequest, ListTemplatesRequest,
     TemplatesServiceClient, UpdateTemplateRequest, request_with_object_id,
 };
+use crate::kanban::resolve;
 use crate::logger::Logger;
 use crate::output::{OutputFormat, render, render_list};
 use async_trait::async_trait;
@@ -26,7 +27,7 @@ pub enum TemplateAction {
     },
     /// Get a template.
     Get {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
     },
     /// Create a template.
@@ -43,7 +44,7 @@ pub enum TemplateAction {
     },
     /// Update a template.
     Update {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
         /// New name.
         #[arg(short, long)]
@@ -54,7 +55,7 @@ pub enum TemplateAction {
     },
     /// Delete a template.
     Delete {
-        /// Template ID.
+        /// Template ID or name.
         template_id: String,
     },
 }
@@ -249,6 +250,7 @@ pub async fn run(
             )
         }
         TemplateAction::Get { template_id } => {
+            let template_id = resolve::resolve_template_id(client, None, &template_id).await?;
             let req = GetTemplateRequest {
                 template_id: template_id.clone(),
             };
@@ -278,6 +280,7 @@ pub async fn run(
             name,
             description,
         } => {
+            let template_id = resolve::resolve_template_id(client, None, &template_id).await?;
             let mut paths = Vec::new();
             if name.is_some() {
                 paths.push("name".to_string());
@@ -299,6 +302,7 @@ pub async fn run(
             render(&BoardTemplateOut::from(&resp), format)
         }
         TemplateAction::Delete { template_id } => {
+            let template_id = resolve::resolve_template_id(client, None, &template_id).await?;
             let req = mutation_request(
                 DeleteTemplateRequest {
                     template_id: template_id.clone(),
@@ -546,6 +550,33 @@ mod tests {
             nanos: -1,
         };
         assert!(format_timestamp(Some(&ts)).is_some());
+    }
+
+    #[tokio::test]
+    async fn get_template_by_name_resolves() {
+        let mut mock = MockTemplateService::new();
+        mock.expect_list_templates()
+            .withf(|req| req.project_id.is_empty())
+            .times(1)
+            .returning(|_| {
+                Ok(client::ListTemplatesResponse {
+                    templates: vec![board_template_fixture()],
+                })
+            });
+        mock.expect_get_template()
+            .withf(|req| req.template_id == "tmpl_1")
+            .times(1)
+            .returning(|_| Ok(board_template_fixture()));
+
+        run(
+            TemplateAction::Get {
+                template_id: "Onboarding".into(),
+            },
+            OutputFormat::Json,
+            &mut mock,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

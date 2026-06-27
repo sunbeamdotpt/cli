@@ -6,6 +6,7 @@ use crate::kanban::client::{
     AddColumnRequest, CreateBoardRequest, DeleteBoardRequest, GetBoardRequest, ListBoardsRequest,
     MoveColumnRequest, RemoveColumnRequest, UpdateBoardRequest, UpdateColumnRequest,
 };
+use crate::kanban::resolve;
 use crate::logger::Logger;
 use crate::output::{OutputFormat, render, render_list};
 use crate::wfectl::output::fmt_proto_time;
@@ -25,7 +26,7 @@ pub enum BoardAction {
     },
     /// Get a board.
     Get {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
     },
     /// Create a board.
@@ -48,7 +49,7 @@ pub enum BoardAction {
     },
     /// Update a board.
     Update {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
         /// New name.
         #[arg(short, long)]
@@ -65,7 +66,7 @@ pub enum BoardAction {
     },
     /// Delete a board.
     Delete {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
     },
     /// Column management.
@@ -103,7 +104,7 @@ impl From<VisibilityArg> for i32 {
 pub enum ColumnAction {
     /// Add a column.
     Add {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
         /// Column title.
         #[arg(short, long)]
@@ -120,9 +121,9 @@ pub enum ColumnAction {
     },
     /// Update a column.
     Update {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
-        /// Column ID.
+        /// Column ID or title.
         column_id: String,
         /// New title.
         #[arg(short, long)]
@@ -136,16 +137,16 @@ pub enum ColumnAction {
     },
     /// Remove a column.
     Remove {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
-        /// Column ID.
+        /// Column ID or title.
         column_id: String,
     },
     /// Move a column.
     Move {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
-        /// Column ID.
+        /// Column ID or title.
         column_id: String,
         /// New position.
         #[arg(short, long)]
@@ -403,6 +404,33 @@ pub async fn build_client(
     )))
 }
 
+/// Resolve a column identifier from a raw string within a board.
+///
+/// If `raw` is ID-shaped it is returned unchanged; otherwise the board detail
+/// is fetched and the unique column title match is returned.
+async fn resolve_column_id(
+    client: &mut dyn BoardService,
+    board_id: &str,
+    raw: &str,
+) -> Result<String> {
+    if resolve::looks_like_id(raw) {
+        return Ok(raw.to_string());
+    }
+    let resp = client
+        .get_board(tonic::Request::new(GetBoardRequest {
+            board_id: board_id.to_string(),
+        }))
+        .await
+        .with_ctx(|| format!("get board {board_id} to resolve column name"))?;
+    let matches: Vec<_> = resp
+        .columns
+        .into_iter()
+        .filter(|c| resolve::name_matches(&c.title, raw))
+        .map(|c| (c.id, c.title))
+        .collect();
+    resolve::unique_match(matches, "column", raw)
+}
+
 /// Run a board command.
 pub async fn run(
     cmd: BoardAction,
@@ -567,6 +595,7 @@ pub async fn run(
                 accent,
                 wip_limit,
             } => {
+                let column_id = resolve_column_id(client, &board_id, &column_id).await?;
                 let mut paths = Vec::new();
                 if title.is_some() {
                     paths.push("title".to_string());
@@ -601,6 +630,7 @@ pub async fn run(
                 board_id,
                 column_id,
             } => {
+                let column_id = resolve_column_id(client, &board_id, &column_id).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     RemoveColumnRequest {
                         board_id: board_id.clone(),
@@ -626,6 +656,7 @@ pub async fn run(
                 column_id,
                 position,
             } => {
+                let column_id = resolve_column_id(client, &board_id, &column_id).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     MoveColumnRequest {
                         board_id: board_id.clone(),
@@ -792,7 +823,8 @@ mod tests {
                         .as_ref()
                         .map(|m| m.paths == vec!["name"])
                         .unwrap_or(false)
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("board_1")
@@ -1135,6 +1167,48 @@ mod tests {
             "public"
         );
         assert_eq!(board_visibility_name(99), "unspecified");
+    }
+
+    #[tokio::test]
+    async fn column_update_resolves_title() {
+        let mut mock = MockBoardService::new();
+        mock.expect_get_board()
+            .withf(|req| req.get_ref().board_id == "board_1")
+            .times(1)
+            .returning(|_| {
+                Ok(client::BoardDetail {
+                    board: Some(sample_board("board_1")),
+                    columns: vec![sample_column("col_1", "board_1", 1)],
+                })
+            });
+        mock.expect_update_column()
+            .withf(|req| {
+                let r = req.get_ref();
+                r.board_id == "board_1"
+                    && r.column_id == "col_1"
+                    && r.column
+                        .as_ref()
+                        .map(|c| c.title == "Renamed")
+                        .unwrap_or(false)
+            })
+            .times(1)
+            .returning(|_| Ok(sample_column("col_1", "board_1", 1)));
+
+        run(
+            BoardAction::Column {
+                action: ColumnAction::Update {
+                    board_id: "board_1".into(),
+                    column_id: "To Do".into(),
+                    title: Some("Renamed".into()),
+                    accent: None,
+                    wip_limit: None,
+                },
+            },
+            OutputFormat::Json,
+            &mut mock,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

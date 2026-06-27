@@ -358,7 +358,10 @@ pub async fn run(
                 format,
             )
         }
-        AttachmentAction::Delete { card, attachment_id } => {
+        AttachmentAction::Delete {
+            card,
+            attachment_id,
+        } => {
             let req = client::DeleteAttachmentRequest {
                 attachment_id: attachment_id.clone(),
             };
@@ -403,7 +406,8 @@ mod tests {
         mock.expect_list_attachments_by_card()
             .withf(|req| {
                 req.get_ref().card_id == "card_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -432,7 +436,8 @@ mod tests {
         mock.expect_delete_attachment()
             .withf(|req| {
                 req.get_ref().attachment_id == "att_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -469,7 +474,8 @@ mod tests {
                 r.card_id == "card_1"
                     && r.filename == "file.txt"
                     && r.mime_type == "text/plain"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -487,7 +493,8 @@ mod tests {
         mock.expect_confirm_upload()
             .withf(|req| {
                 req.get_ref().attachment_id == "att_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")
@@ -525,7 +532,8 @@ mod tests {
         mock.expect_request_presigned_download()
             .withf(|req| {
                 req.get_ref().attachment_id == "att_1"
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("card_1")

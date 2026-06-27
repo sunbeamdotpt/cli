@@ -13,12 +13,12 @@ use serde::Serialize;
 pub enum PublicBoardAction {
     /// Get a public board.
     Get {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
     },
     /// List public boards in a project.
     List {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
     },
 }

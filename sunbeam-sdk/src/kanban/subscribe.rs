@@ -16,12 +16,12 @@ use std::pin::Pin;
 pub enum SubscribeAction {
     /// Subscribe to board events.
     Board {
-        /// Board ID.
+        /// Board ID or name.
         board_id: String,
     },
     /// Subscribe to project events.
     Project {
-        /// Project ID.
+        /// Project ID or name.
         project_id: String,
     },
 }
@@ -509,9 +509,7 @@ mod tests {
     async fn subscribe_board_renders_events() {
         let mut mock = MockSubscriptionService::new();
         mock.expect_subscribe_board()
-            .withf(|req| {
-                req.get_ref().board_id == "board_123" && req.get_ref().since_seq == 0
-            })
+            .withf(|req| req.get_ref().board_id == "board_123" && req.get_ref().since_seq == 0)
             .times(1)
             .returning(|_| {
                 Ok(futures::stream::iter(vec![Ok(heartbeat_envelope("board_123"))]).boxed())
@@ -534,7 +532,8 @@ mod tests {
             .withf(|req| {
                 req.get_ref().project_id == "proj_123"
                     && req.get_ref().since_seq == 0
-                    && req.metadata()
+                    && req
+                        .metadata()
                         .get("x-sunbeam-object-id")
                         .and_then(|v| v.to_str().ok())
                         == Some("proj_123")
