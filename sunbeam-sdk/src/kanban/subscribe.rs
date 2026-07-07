@@ -110,7 +110,7 @@ pub async fn build_client(
 /// context. Unresolvable or malformed subjects return `None` so that event
 /// streaming keeps going even when Kratos is temporarily unreachable.
 async fn resolve_subject_email(subject: &str) -> Option<String> {
-    match crate::users::resolve_email_for_subject(subject).await {
+    match crate::auth::resolve_email_for_subject(subject).await {
         Ok(email) if !email.is_empty() => Some(email),
         _ => None,
     }

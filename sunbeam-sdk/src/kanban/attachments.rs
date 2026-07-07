@@ -233,14 +233,27 @@ pub async fn build_client(
 /// admin API. Configure the endpoint with the `kratos-admin-url` field in the
 /// active context.
 async fn resolve_uploader_emails(attachments: &mut [AttachmentOut]) {
+    let subjects: Vec<&str> = attachments
+        .iter()
+        .map(|a| a.uploaded_by.as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if subjects.is_empty() {
+        return;
+    }
+
+    let email_map = match crate::auth::resolve_emails_for_subjects(&subjects).await {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
     for a in attachments.iter_mut() {
         if a.uploaded_by.is_empty() {
             continue;
         }
-        if let Ok(email) = crate::users::resolve_email_for_subject(&a.uploaded_by).await
-            && !email.is_empty()
-        {
-            a.uploaded_by = email;
+        if let Some(email) = email_map.get(&a.uploaded_by) {
+            a.uploaded_by = email.clone();
         }
     }
 }

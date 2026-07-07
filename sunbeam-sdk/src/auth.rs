@@ -83,7 +83,11 @@ async fn discover_oidc(domain: &str) -> Result<OidcDiscovery> {
         )));
     }
 
-    let discovery: OidcDiscovery = match resp.json().await.ctx("Failed to parse OIDC discovery response") {
+    let discovery: OidcDiscovery = match resp
+        .json()
+        .await
+        .ctx("Failed to parse OIDC discovery response")
+    {
         Ok(d) => d,
         Err(e) => return Err(e),
     };
@@ -415,12 +419,11 @@ fn decode_jwt_payload(token: &str) -> Result<serde_json::Value> {
         Ok(bytes) => bytes,
         Err(e) => return Err(e),
     };
-    let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes)
-        .ctx("Failed to parse JWT payload as JSON")
-    {
-        Ok(p) => p,
-        Err(e) => return Err(e),
-    };
+    let payload: serde_json::Value =
+        match serde_json::from_slice(&payload_bytes).ctx("Failed to parse JWT payload as JSON") {
+            Ok(p) => p,
+            Err(e) => return Err(e),
+        };
     Ok(payload)
 }
 
@@ -434,6 +437,184 @@ fn extract_email(id_token: &str) -> Option<String> {
         .get("email")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Kratos identity resolution
+// ---------------------------------------------------------------------------
+
+/// Return the configured Kratos admin API base URL.
+///
+/// Reads `kratos_admin_url` from the active context. The URL must be
+/// configured explicitly; no domain-based default is assumed.
+pub fn kratos_admin_base_url() -> Result<String> {
+    let ctx = crate::config::active_context();
+    let url = ctx.kratos_admin_url.trim_end_matches('/').to_string();
+    if url.is_empty() {
+        return Err(SunbeamError::config(
+            "kratos-admin-url is not set in the active context",
+        ));
+    }
+    Ok(url)
+}
+
+/// Parse a kanban OIDC subject string, returning the Kratos identity ID if present.
+fn identity_id_from_subject(subject: &str) -> Option<&str> {
+    if let Some(id) = subject.strip_prefix("user:") {
+        return Some(id);
+    }
+    // If it already looks like a UUID, treat it as the identity ID directly.
+    if subject.len() == 36 && subject.chars().filter(|&c| c == '-').count() == 4 {
+        return Some(subject);
+    }
+    None
+}
+
+/// Format a Kratos identity ID as the kanban OIDC subject.
+fn subject_from_identity_id(id: &str) -> String {
+    format!("user:{id}")
+}
+
+/// Find identity by UUID or email search. Returns the identity JSON.
+async fn find_identity(base_url: &str, target: &str) -> Result<Option<serde_json::Value>> {
+    let client = reqwest::Client::new();
+
+    // Looks like a UUID? Try direct lookup.
+    if target.len() == 36 && target.chars().filter(|&c| c == '-').count() == 4 {
+        let url = format!("{base_url}/admin/identities/{target}");
+        let resp = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .with_ctx(|| format!("HTTP GET {url} failed"))?;
+        let status = resp.status();
+        if status.is_success() {
+            let val: serde_json::Value =
+                resp.json().await.ctx("Failed to parse identity response")?;
+            return Ok(Some(val));
+        }
+        if status.as_u16() == 404 {
+            return Ok(None);
+        }
+        let err_text = resp.text().await.unwrap_or_default();
+        return Err(SunbeamError::identity(format!(
+            "Kratos API error {status}: {err_text}"
+        )));
+    }
+
+    // Search by email
+    let url = format!("{base_url}/admin/identities?credentials_identifier={target}&page_size=1");
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .with_ctx(|| format!("HTTP GET {url} failed"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
+        return Err(SunbeamError::identity(format!(
+            "Kratos API error {status}: {err_text}"
+        )));
+    }
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .ctx("Failed to parse identity list response")?;
+    if let Some(serde_json::Value::Array(arr)) = &val.get("identities") {
+        if let Some(first) = arr.first() {
+            return Ok(Some(first.clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// Extract the email address from a Kratos identity JSON value.
+fn identity_email(identity: &serde_json::Value) -> String {
+    identity
+        .get("traits")
+        .and_then(|t| t.get("email"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Get identity ID as a string from a JSON value.
+fn identity_id(identity: &serde_json::Value) -> Result<String> {
+    identity
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| SunbeamError::identity("Identity missing 'id' field"))
+}
+
+/// Resolve an email address to the OIDC subject used by the kanban backend.
+///
+/// Calls the Kratos admin `/admin/identities` API directly. Configure the
+/// endpoint with the `kratos-admin-url` field in the active context.
+pub async fn resolve_subject_for_email(email: &str) -> Result<String> {
+    let base_url = kratos_admin_base_url()?;
+    let identity = find_identity(&base_url, email)
+        .await?
+        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {email}")))?;
+    let id = identity_id(&identity)?;
+    Ok(subject_from_identity_id(&id))
+}
+
+/// Resolve an OIDC subject to the user's email address.
+///
+/// Calls the Kratos admin `/admin/identities/{id}` API directly. Configure the
+/// endpoint with the `kratos-admin-url` field in the active context.
+pub async fn resolve_email_for_subject(subject: &str) -> Result<String> {
+    let id = identity_id_from_subject(subject)
+        .ok_or_else(|| SunbeamError::identity(format!("Unrecognised subject format: {subject}")))?;
+    let base_url = kratos_admin_base_url()?;
+    let identity = find_identity(&base_url, id)
+        .await?
+        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {subject}")))?;
+    Ok(identity_email(&identity))
+}
+
+/// Resolve multiple SSO subjects to email addresses in one batched request.
+///
+/// Calls the Kratos admin `/admin/identities` API for each unique subject.
+/// Returns a map of subject → email. Unresolvable subjects are omitted.
+pub async fn resolve_emails_for_subjects(
+    subjects: &[&str],
+) -> Result<std::collections::HashMap<String, String>> {
+    let base_url = kratos_admin_base_url()?;
+    let mut map = std::collections::HashMap::new();
+    for subject in subjects {
+        if let Some(id) = identity_id_from_subject(subject) {
+            if let Ok(Some(identity)) = find_identity(&base_url, id).await {
+                let email = identity_email(&identity);
+                if !email.is_empty() {
+                    map.insert(subject.to_string(), email);
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Resolve multiple email addresses to SSO subjects in one batched request.
+///
+/// Calls the Kratos admin `/admin/identities` API for each unique email.
+/// Returns a map of email → subject. Unresolvable emails are omitted.
+pub async fn resolve_subjects_for_emails(
+    emails: &[&str],
+) -> Result<std::collections::HashMap<String, String>> {
+    let base_url = kratos_admin_base_url()?;
+    let mut map = std::collections::HashMap::new();
+    for email in emails {
+        if let Ok(Some(identity)) = find_identity(&base_url, email).await {
+            if let Ok(id) = identity_id(&identity) {
+                map.insert(email.to_string(), subject_from_identity_id(&id));
+            }
+        }
+    }
+    Ok(map)
 }
 
 // ---------------------------------------------------------------------------

@@ -119,7 +119,7 @@ pub fn materialize(ws: &WorkspaceConfig, workspace_root: &Path) -> Result<PathBu
         None => {
             return Err(SunbeamError::Other(
                 "compose file path has no parent directory".into(),
-            ))
+            ));
         }
     };
     std::fs::create_dir_all(parent)

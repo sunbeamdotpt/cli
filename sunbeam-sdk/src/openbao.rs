@@ -37,10 +37,7 @@ impl BaoClient {
     /// Create a new client pointing at `base_url` (e.g. `http://localhost:8200`).
     pub fn new(base_url: &str) -> Self {
         let url = base_url.trim_end_matches('/');
-        let settings = match VaultClientSettingsBuilder::default()
-            .address(url)
-            .build()
-        {
+        let settings = match VaultClientSettingsBuilder::default().address(url).build() {
             Ok(settings) => settings,
             // A well-formed HTTP URL always produces valid Vault settings.
             Err(_) => unreachable!(),

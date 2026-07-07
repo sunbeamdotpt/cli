@@ -423,6 +423,21 @@ pub async fn build_client(
 /// context. Missing or unresolvable subjects are left as `null` rather than
 /// failing the whole command.
 async fn resolve_assignee_emails(assignees: &mut [serde_json::Value]) -> Result<()> {
+    let subjects: Vec<&str> = assignees
+        .iter()
+        .filter_map(|a| {
+            a.get("subject")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
+        .collect();
+
+    if subjects.is_empty() {
+        return Ok(());
+    }
+
+    let email_map = crate::auth::resolve_emails_for_subjects(&subjects).await?;
+
     for assignee in assignees.iter_mut() {
         let Some(subject) = assignee
             .get("subject")
@@ -431,13 +446,13 @@ async fn resolve_assignee_emails(assignees: &mut [serde_json::Value]) -> Result<
         else {
             continue;
         };
-        match crate::users::resolve_email_for_subject(subject).await {
-            Ok(email) if !email.is_empty() => {
-                if let Some(obj) = assignee.as_object_mut() {
-                    obj.insert("email".to_string(), serde_json::Value::String(email));
-                }
+        if let Some(email) = email_map.get(subject) {
+            if let Some(obj) = assignee.as_object_mut() {
+                obj.insert(
+                    "email".to_string(),
+                    serde_json::Value::String(email.clone()),
+                );
             }
-            _ => {}
         }
     }
     Ok(())

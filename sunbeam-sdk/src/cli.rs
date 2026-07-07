@@ -2016,7 +2016,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                     None => {
                         return Err(SunbeamError::Other(
                             "config subcommand missing from CLI".into(),
-                        ))
+                        ));
                     }
                 };
                 sub.print_help()?;
@@ -2373,7 +2373,7 @@ pub async fn dispatch(logger: &crate::logger::Logger, cli: Cli) -> Result<()> {
                     None => {
                         return Err(SunbeamError::Other(
                             "user subcommand missing from CLI".into(),
-                        ))
+                        ));
                     }
                 };
                 sub.print_help()?;

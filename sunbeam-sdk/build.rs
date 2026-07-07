@@ -4,9 +4,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let out_dir = PathBuf::from(
-        env::var("OUT_DIR").unwrap_or_else(|e| panic!("OUT_DIR not set: {e}")),
-    );
+    let out_dir =
+        PathBuf::from(env::var("OUT_DIR").unwrap_or_else(|e| panic!("OUT_DIR not set: {e}")));
     let target = env::var("TARGET").unwrap_or_default();
 
     // Embed lima-sunbeam.yaml for VM provisioning

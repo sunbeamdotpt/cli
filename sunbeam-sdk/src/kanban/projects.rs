@@ -299,7 +299,7 @@ async fn resolve_member_subject(subject: &str) -> Result<String> {
         let local = subject.split('@').next().unwrap_or(subject);
         return Ok(format!("user:{local}"));
     }
-    crate::users::resolve_subject_for_email(subject).await
+    crate::auth::resolve_subject_for_email(subject).await
 }
 
 /// Run a project command.

@@ -479,13 +479,13 @@ impl Sink for ThreadedSink {
                 pb.set_message(format!("{name}  {line}"));
             } else {
                 let pb = state.mp.add(indicatif::ProgressBar::new_spinner());
-                let style = match indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                {
-                    Ok(style) => style,
-                    // The template string is a compile-time constant valid for indicatif.
-                    Err(_) => unreachable!(),
-                }
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+                let style =
+                    match indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}") {
+                        Ok(style) => style,
+                        // The template string is a compile-time constant valid for indicatif.
+                        Err(_) => unreachable!(),
+                    }
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
                 pb.set_style(style);
                 pb.set_message(format!("{name}  {line}"));
                 state.groups.insert(name, pb);

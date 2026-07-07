@@ -313,48 +313,6 @@ fn identity_id_from_subject(subject: &str) -> Option<&str> {
     None
 }
 
-/// Return the configured Kratos admin API base URL.
-///
-/// Reads `kratos_admin_url` from the active context. The URL must be
-/// configured explicitly; no domain-based default is assumed.
-pub fn kratos_admin_base_url() -> Result<String> {
-    let ctx = crate::config::active_context();
-    let url = ctx.kratos_admin_url.trim_end_matches('/').to_string();
-    if url.is_empty() {
-        return Err(SunbeamError::config(
-            "kratos-admin-url is not set in the active context",
-        ));
-    }
-    Ok(url)
-}
-
-/// Resolve an email address to the OIDC subject used by the kanban backend.
-///
-/// Calls the Kratos admin `/admin/identities` API directly. Configure the
-/// endpoint with the `kratos-admin-url` field in the active context.
-pub async fn resolve_subject_for_email(email: &str) -> Result<String> {
-    let base_url = kratos_admin_base_url()?;
-    let identity = find_identity(&base_url, email, true)
-        .await?
-        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {email}")))?;
-    let id = identity_id(&identity)?;
-    Ok(subject_from_identity_id(&id))
-}
-
-/// Resolve an OIDC subject to the user's email address.
-///
-/// Calls the Kratos admin `/admin/identities/{id}` API directly. Configure the
-/// endpoint with the `kratos-admin-url` field in the active context.
-pub async fn resolve_email_for_subject(subject: &str) -> Result<String> {
-    let id = identity_id_from_subject(subject)
-        .ok_or_else(|| SunbeamError::identity(format!("Unrecognised subject format: {subject}")))?;
-    let base_url = kratos_admin_base_url()?;
-    let identity = find_identity(&base_url, id, true)
-        .await?
-        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {subject}")))?;
-    Ok(identity_email(&identity))
-}
-
 // ---------------------------------------------------------------------------
 // Public commands
 // ---------------------------------------------------------------------------
