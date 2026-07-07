@@ -110,17 +110,17 @@ pub async fn run(
     render_list(
         &hits,
         &[
-            "CARD ID", "REF", "BOARD", "PROJECT", "TITLE", "PRIORITY", "STATUS",
+            "REF", "TITLE", "PRIORITY", "STATUS", "BOARD", "PROJECT", "CARD ID",
         ],
         |h| {
             vec![
-                h.card_id.clone(),
                 h.card_ref.clone(),
-                h.board_id.clone(),
-                h.project_id.clone(),
                 h.title.clone(),
                 h.priority.clone(),
                 h.status.clone(),
+                h.board_id.clone(),
+                h.project_id.clone(),
+                h.card_id.clone(),
             ]
         },
         format,

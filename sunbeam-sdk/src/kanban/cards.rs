@@ -245,6 +245,7 @@ impl CardDetailOut {
                         "subject": a.subject,
                         "display_name": a.display_name,
                         "avatar_url": a.avatar_url,
+                        "email": null,
                     })
                 })
                 .collect(),
@@ -416,6 +417,32 @@ pub async fn build_client(
     )))
 }
 
+/// Resolve assignee subjects to email addresses through the Kratos admin API.
+///
+/// Configure the endpoint with the `kratos-admin-url` field in the active
+/// context. Missing or unresolvable subjects are left as `null` rather than
+/// failing the whole command.
+async fn resolve_assignee_emails(assignees: &mut [serde_json::Value]) -> Result<()> {
+    for assignee in assignees.iter_mut() {
+        let Some(subject) = assignee
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        match crate::users::resolve_email_for_subject(subject).await {
+            Ok(email) if !email.is_empty() => {
+                if let Some(obj) = assignee.as_object_mut() {
+                    obj.insert("email".to_string(), serde_json::Value::String(email));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Run a card command.
 pub async fn run(
     cmd: CardAction,
@@ -438,17 +465,17 @@ pub async fn run(
             render_list(
                 &cards,
                 &[
-                    "ID", "REF", "COLUMN", "TITLE", "PRIORITY", "BLOCKED", "POSITION",
+                    "REF", "COLUMN", "TITLE", "PRIORITY", "BLOCKED", "POSITION", "ID",
                 ],
                 |c| {
                     vec![
-                        c.id.clone(),
                         c.r#ref.clone(),
                         c.column_id.clone(),
                         c.title.clone(),
                         c.priority.clone(),
                         c.blocked.to_string(),
                         c.position.to_string(),
+                        c.id.clone(),
                     ]
                 },
                 format,
@@ -462,7 +489,9 @@ pub async fn run(
                 .get_card(request_with_object_id(req, &card_id)?)
                 .await
                 .with_ctx(|| format!("get card {card_id}"))?;
-            render(&CardDetailOut::from_proto(resp), format)
+            let mut detail = CardDetailOut::from_proto(resp);
+            resolve_assignee_emails(&mut detail.assignees).await?;
+            render(&detail, format)
         }
         CardAction::Create {
             board,
@@ -487,7 +516,9 @@ pub async fn run(
                 .create_card(request_with_object_id(req, &board)?)
                 .await
                 .with_ctx(|| format!("create card on board {board}"))?;
-            render(&CardDetailOut::from_proto(resp), format)
+            let mut detail = CardDetailOut::from_proto(resp);
+            resolve_assignee_emails(&mut detail.assignees).await?;
+            render(&detail, format)
         }
         CardAction::Update {
             card_id,
@@ -522,7 +553,9 @@ pub async fn run(
                 .update_card(request_with_object_id(req, &card_id)?)
                 .await
                 .with_ctx(|| format!("update card {card_id}"))?;
-            render(&CardDetailOut::from_proto(resp), format)
+            let mut detail = CardDetailOut::from_proto(resp);
+            resolve_assignee_emails(&mut detail.assignees).await?;
+            render(&detail, format)
         }
         CardAction::Move {
             card_id,
@@ -539,7 +572,9 @@ pub async fn run(
                 .move_card(request_with_object_id(req, &card_id)?)
                 .await
                 .with_ctx(|| format!("move card {card_id}"))?;
-            render(&CardDetailOut::from_proto(resp), format)
+            let mut detail = CardDetailOut::from_proto(resp);
+            resolve_assignee_emails(&mut detail.assignees).await?;
+            render(&detail, format)
         }
         CardAction::Delete { card_id } => {
             let req = client::DeleteCardRequest {
@@ -566,7 +601,9 @@ pub async fn run(
                     .add_card_dependency(request_with_object_id(req, &board)?)
                     .await
                     .with_ctx(|| format!("add dependency {depends_on} to card {card_id}"))?;
-                render(&CardDetailOut::from_proto(resp), format)
+                let mut detail = CardDetailOut::from_proto(resp);
+                resolve_assignee_emails(&mut detail.assignees).await?;
+                render(&detail, format)
             }
             DependencyAction::Remove {
                 board,
@@ -582,7 +619,9 @@ pub async fn run(
                     .remove_card_dependency(request_with_object_id(req, &board)?)
                     .await
                     .with_ctx(|| format!("remove dependency {depends_on} from card {card_id}"))?;
-                render(&CardDetailOut::from_proto(resp), format)
+                let mut detail = CardDetailOut::from_proto(resp);
+                resolve_assignee_emails(&mut detail.assignees).await?;
+                render(&detail, format)
             }
         },
     }

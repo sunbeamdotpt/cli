@@ -235,15 +235,15 @@ pub async fn run(
                 resp.templates.iter().map(|t| t.into()).collect();
             render_list(
                 &templates,
-                &["ID", "PROJECT", "NAME", "DESCRIPTION", "GLOBAL", "COLUMNS"],
+                &["NAME", "DESCRIPTION", "GLOBAL", "COLUMNS", "PROJECT", "ID"],
                 |t| {
                     vec![
-                        t.id.clone(),
-                        t.project_id.clone(),
                         t.name.clone(),
                         t.description.clone(),
                         t.is_global.to_string(),
                         t.columns.len().to_string(),
+                        t.project_id.clone(),
+                        t.id.clone(),
                     ]
                 },
                 format,

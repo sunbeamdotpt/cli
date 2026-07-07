@@ -1,6 +1,6 @@
 //! Kanban project commands.
 
-use crate::error::{Result, ResultExt};
+use crate::error::{Result, ResultExt, SunbeamError};
 use crate::kanban::client::{self};
 use crate::kanban::client::{
     AddMemberRequest, CreateProjectRequest, DeleteProjectRequest, GetProjectRequest,
@@ -86,7 +86,7 @@ pub enum MemberAction {
     Add {
         /// Project ID or name.
         project_id: String,
-        /// SSO subject.
+        /// Member email address.
         subject: String,
         /// Relation.
         #[arg(short, long, default_value = "view")]
@@ -96,7 +96,7 @@ pub enum MemberAction {
     Remove {
         /// Project ID or name.
         project_id: String,
-        /// SSO subject.
+        /// Member email address.
         subject: String,
     },
 }
@@ -283,6 +283,25 @@ pub async fn build_client(
     )))
 }
 
+/// Resolve a member identifier to an SSO subject.
+///
+/// Only email addresses are accepted; they are resolved through the Kratos
+/// admin API. Configure the endpoint with the `kratos-admin-url` field in the
+/// active context.
+async fn resolve_member_subject(subject: &str) -> Result<String> {
+    if !subject.contains('@') {
+        return Err(SunbeamError::identity(
+            "member identifier must be an email address",
+        ));
+    }
+    #[cfg(test)]
+    if subject.ends_with("@test") {
+        let local = subject.split('@').next().unwrap_or(subject);
+        return Ok(format!("user:{local}"));
+    }
+    crate::users::resolve_subject_for_email(subject).await
+}
+
 /// Run a project command.
 pub async fn run(
     cmd: ProjectAction,
@@ -298,14 +317,14 @@ pub async fn run(
             let projects: Vec<ProjectOut> = resp.projects.into_iter().map(Into::into).collect();
             render_list(
                 &projects,
-                &["ID", "NAME", "PREFIX", "DESCRIPTION", "MEMBERS"],
+                &["NAME", "PREFIX", "DESCRIPTION", "MEMBERS", "ID"],
                 |p| {
                     vec![
-                        p.id.clone(),
                         p.name.clone(),
                         p.prefix.clone(),
                         p.description.clone(),
                         p.member_count.to_string(),
+                        p.id.clone(),
                     ]
                 },
                 format,
@@ -421,14 +440,17 @@ pub async fn run(
                 let members: Vec<MemberOut> = resp.members.into_iter().map(Into::into).collect();
                 render_list(
                     &members,
-                    &["PROJECT ID", "SUBJECT", "RELATION", "DISPLAY NAME", "EMAIL"],
+                    &["EMAIL", "RELATION", "DISPLAY NAME", "PROJECT ID"],
                     |m| {
                         vec![
-                            m.project_id.clone(),
-                            m.subject.clone(),
+                            if m.email.is_empty() {
+                                m.subject.clone()
+                            } else {
+                                m.email.clone()
+                            },
                             m.relation.clone(),
                             m.display_name.clone(),
-                            m.email.clone(),
+                            m.project_id.clone(),
                         ]
                     },
                     format,
@@ -440,6 +462,7 @@ pub async fn run(
                 relation,
             } => {
                 let project_id = resolve::resolve_project_id(client, &project_id).await?;
+                let subject = resolve_member_subject(&subject).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     AddMemberRequest {
                         project_id: project_id.clone(),
@@ -467,6 +490,7 @@ pub async fn run(
                 subject,
             } => {
                 let project_id = resolve::resolve_project_id(client, &project_id).await?;
+                let subject = resolve_member_subject(&subject).await?;
                 let req = crate::kanban::client::request_with_object_id(
                     RemoveMemberRequest {
                         project_id: project_id.clone(),
@@ -693,7 +717,7 @@ mod tests {
             ProjectAction::Member {
                 action: MemberAction::Add {
                     project_id: "proj_1".into(),
-                    subject: "user:abc".into(),
+                    subject: "abc@test".into(),
                     relation: "edit".into(),
                 },
             },
@@ -719,7 +743,7 @@ mod tests {
             ProjectAction::Member {
                 action: MemberAction::Remove {
                     project_id: "proj_1".into(),
-                    subject: "user:abc".into(),
+                    subject: "abc@test".into(),
                 },
             },
             OutputFormat::Json,

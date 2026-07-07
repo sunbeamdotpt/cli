@@ -324,14 +324,14 @@ pub async fn run(
                 .collect();
             render_list(
                 &boards,
-                &["ID", "NAME", "DESCRIPTION", "ICON", "VISIBILITY"],
+                &["NAME", "DESCRIPTION", "ICON", "VISIBILITY", "ID"],
                 |b| {
                     vec![
-                        b.id.clone(),
                         b.name.clone(),
                         b.description.clone(),
                         b.icon.clone(),
                         b.visibility.clone(),
+                        b.id.clone(),
                     ]
                 },
                 format,

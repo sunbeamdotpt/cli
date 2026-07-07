@@ -229,6 +229,22 @@ pub async fn build_client(
     ))
 }
 
+/// Resolve attachment uploader subjects to email addresses through the Kratos
+/// admin API. Configure the endpoint with the `kratos-admin-url` field in the
+/// active context.
+async fn resolve_uploader_emails(attachments: &mut [AttachmentOut]) {
+    for a in attachments.iter_mut() {
+        if a.uploaded_by.is_empty() {
+            continue;
+        }
+        if let Ok(email) = crate::users::resolve_email_for_subject(&a.uploaded_by).await
+            && !email.is_empty()
+        {
+            a.uploaded_by = email;
+        }
+    }
+}
+
 /// Run an attachment command.
 pub async fn run(
     cmd: AttachmentAction,
@@ -243,25 +259,27 @@ pub async fn run(
             let resp = client
                 .list_attachments_by_card(client::request_with_object_id(req, &card_id)?)
                 .await?;
-            let attachments: Vec<_> = resp.attachments.into_iter().map(attachment_out).collect();
+            let mut attachments: Vec<_> =
+                resp.attachments.into_iter().map(attachment_out).collect();
+            resolve_uploader_emails(&mut attachments).await;
             render_list(
                 &attachments,
                 &[
-                    "ID",
                     "FILENAME",
                     "MIME TYPE",
                     "SIZE",
-                    "UPLOADED BY",
                     "UPLOADED AT",
+                    "UPLOADED BY",
+                    "ID",
                 ],
                 |a| {
                     vec![
-                        a.id.clone(),
                         a.filename.clone(),
                         a.mime_type.clone(),
                         a.size_bytes.to_string(),
-                        a.uploaded_by.clone(),
                         a.uploaded_at.clone().unwrap_or_default(),
+                        a.uploaded_by.clone(),
+                        a.id.clone(),
                     ]
                 },
                 format,
@@ -313,7 +331,9 @@ pub async fn run(
                 .confirm_upload(mutating_request(confirm_req, &card_id)?)
                 .await?;
 
-            render(&attachment_out(confirmed), format)
+            let mut out = attachment_out(confirmed);
+            resolve_uploader_emails(std::slice::from_mut(&mut out)).await;
+            render(&out, format)
         }
         AttachmentAction::Download {
             card,

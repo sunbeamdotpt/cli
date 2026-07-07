@@ -242,23 +242,23 @@ pub async fn run(
             render_list(
                 &templates,
                 &[
-                    "ID",
-                    "PROJECT",
                     "NAME",
                     "TITLE",
                     "GLOBAL",
                     "LABELS",
                     "CHECKLIST",
+                    "PROJECT",
+                    "ID",
                 ],
                 |t| {
                     vec![
-                        t.id.clone(),
-                        t.project_id.clone(),
                         t.name.clone(),
                         t.title.clone(),
                         t.is_global.to_string(),
                         t.label_names.len().to_string(),
                         t.checklist_items.len().to_string(),
+                        t.project_id.clone(),
+                        t.id.clone(),
                     ]
                 },
                 format,

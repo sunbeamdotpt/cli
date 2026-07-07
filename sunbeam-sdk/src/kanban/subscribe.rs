@@ -103,6 +103,19 @@ pub async fn build_client(
     ))
 }
 
+/// Resolve a kanban OIDC subject to an email address through the Kratos admin
+/// API.
+///
+/// Configure the endpoint with the `kratos-admin-url` field in the active
+/// context. Unresolvable or malformed subjects return `None` so that event
+/// streaming keeps going even when Kratos is temporarily unreachable.
+async fn resolve_subject_email(subject: &str) -> Option<String> {
+    match crate::users::resolve_email_for_subject(subject).await {
+        Ok(email) if !email.is_empty() => Some(email),
+        _ => None,
+    }
+}
+
 fn ts_to_json(ts: &prost_types::Timestamp) -> Value {
     chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.max(0) as u32)
         .map(|dt| Value::String(dt.to_rfc3339()))
@@ -142,11 +155,13 @@ fn label_to_json(label: &client::Label) -> Value {
     })
 }
 
-fn assignee_to_json(assignee: &client::Assignee) -> Value {
+async fn assignee_to_json(assignee: &client::Assignee) -> Value {
+    let email = resolve_subject_email(&assignee.subject).await;
     json!({
         "subject": assignee.subject,
         "display_name": assignee.display_name,
         "avatar_url": assignee.avatar_url,
+        "email": email,
     })
 }
 
@@ -170,7 +185,8 @@ fn github_link_to_json(link: &client::GitHubLink) -> Value {
     })
 }
 
-fn card_to_json(card: &client::Card) -> Value {
+async fn card_to_json(card: &client::Card) -> Value {
+    let assignees = futures::future::join_all(card.assignees.iter().map(assignee_to_json)).await;
     json!({
         "id": card.id,
         "project_id": card.project_id,
@@ -187,7 +203,7 @@ fn card_to_json(card: &client::Card) -> Value {
         "milestone_id": card.milestone_id,
         "position": card.position,
         "labels": card.labels.iter().map(label_to_json).collect::<Vec<_>>(),
-        "assignees": card.assignees.iter().map(assignee_to_json).collect::<Vec<_>>(),
+        "assignees": assignees,
         "checklist": card.checklist.iter().map(checklist_item_to_json).collect::<Vec<_>>(),
         "github_links": card.github_links.iter().map(github_link_to_json).collect::<Vec<_>>(),
         "comments_count": card.comments_count,
@@ -222,12 +238,15 @@ fn event_board_to_json(board: &client::EventBoard) -> Value {
     })
 }
 
-fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
+async fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
     use client::board_event_envelope::Payload::*;
     match payload {
         CardCreated(e) => json!({
             "type": "CardCreated",
-            "card": e.card.as_ref().map(card_to_json),
+            "card": match e.card.as_ref() {
+                Some(card) => Some(card_to_json(card).await),
+                None => None,
+            },
             "column_id": e.column_id,
             "position": e.position,
             "idempotency_key": e.idempotency_key,
@@ -287,12 +306,16 @@ fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
             "type": "BoardUpdated",
             "board": e.board.as_ref().map(event_board_to_json),
         }),
-        MembershipChanged(e) => json!({
-            "type": "MembershipChanged",
-            "subject": e.subject,
-            "relation": e.relation,
-            "granted": e.granted,
-        }),
+        MembershipChanged(e) => {
+            let email = resolve_subject_email(&e.subject).await;
+            json!({
+                "type": "MembershipChanged",
+                "subject": e.subject,
+                "email": email,
+                "relation": e.relation,
+                "granted": e.granted,
+            })
+        }
         MemberAdded(e) => json!({
             "type": "MemberAdded",
             "project_id": e.project_id,
@@ -301,18 +324,26 @@ fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
             "display_name": e.display_name,
             "email": e.email,
         }),
-        MemberRemoved(e) => json!({
-            "type": "MemberRemoved",
-            "project_id": e.project_id,
-            "subject": e.subject,
-        }),
-        MemberRoleChanged(e) => json!({
-            "type": "MemberRoleChanged",
-            "project_id": e.project_id,
-            "subject": e.subject,
-            "old_relation": e.old_relation,
-            "new_relation": e.new_relation,
-        }),
+        MemberRemoved(e) => {
+            let email = resolve_subject_email(&e.subject).await;
+            json!({
+                "type": "MemberRemoved",
+                "project_id": e.project_id,
+                "subject": e.subject,
+                "email": email,
+            })
+        }
+        MemberRoleChanged(e) => {
+            let email = resolve_subject_email(&e.subject).await;
+            json!({
+                "type": "MemberRoleChanged",
+                "project_id": e.project_id,
+                "subject": e.subject,
+                "email": email,
+                "old_relation": e.old_relation,
+                "new_relation": e.new_relation,
+            })
+        }
         BoardCreated(e) => json!({
             "type": "BoardCreated",
             "project_id": e.project_id,
@@ -337,12 +368,16 @@ fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
             "done": e.done,
             "total": e.total,
         }),
-        CommentAdded(e) => json!({
-            "type": "CommentAdded",
-            "card_id": e.card_id,
-            "comment_id": e.comment_id,
-            "author_sub": e.author_sub,
-        }),
+        CommentAdded(e) => {
+            let author_email = resolve_subject_email(&e.author_sub).await;
+            json!({
+                "type": "CommentAdded",
+                "card_id": e.card_id,
+                "comment_id": e.comment_id,
+                "author_sub": e.author_sub,
+                "author_email": author_email,
+            })
+        }
         CommentEdited(e) => json!({
             "type": "CommentEdited",
             "card_id": e.card_id,
@@ -408,7 +443,12 @@ fn payload_to_json(payload: &client::board_event_envelope::Payload) -> Value {
     }
 }
 
-fn envelope_to_json(envelope: &client::BoardEventEnvelope) -> Value {
+async fn envelope_to_json(envelope: &client::BoardEventEnvelope) -> Value {
+    let actor_email = resolve_subject_email(&envelope.actor_subject).await;
+    let payload = match envelope.payload.as_ref() {
+        Some(p) => payload_to_json(p).await,
+        None => Value::Null,
+    };
     json!({
         "board_id": envelope.board_id,
         "event_id": envelope.event_id,
@@ -417,12 +457,13 @@ fn envelope_to_json(envelope: &client::BoardEventEnvelope) -> Value {
         "emitted_at": opt_ts(&envelope.emitted_at),
         "emitter_pod_id": envelope.emitter_pod_id,
         "actor_subject": envelope.actor_subject,
-        "payload": envelope.payload.as_ref().map_or(Value::Null, payload_to_json),
+        "actor_email": actor_email,
+        "payload": payload,
     })
 }
 
-fn print_envelope(envelope: &client::BoardEventEnvelope) -> Result<()> {
-    let value = envelope_to_json(envelope);
+async fn print_envelope(envelope: &client::BoardEventEnvelope) -> Result<()> {
+    let value = envelope_to_json(envelope).await;
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
@@ -446,7 +487,7 @@ pub async fn run_with_client(
             while let Some(envelope) = stream.next().await {
                 let envelope =
                     envelope.with_ctx(|| "kanban subscribe board stream failed".to_string())?;
-                print_envelope(&envelope)?;
+                print_envelope(&envelope).await?;
             }
         }
         SubscribeAction::Project { project_id } => {
@@ -465,7 +506,7 @@ pub async fn run_with_client(
             while let Some(envelope) = stream.next().await {
                 let envelope =
                     envelope.with_ctx(|| "kanban subscribe project stream failed".to_string())?;
-                print_envelope(&envelope)?;
+                print_envelope(&envelope).await?;
             }
         }
     }
@@ -603,8 +644,8 @@ mod tests {
         assert_eq!(urgency_str(99), "unspecified");
     }
 
-    #[test]
-    fn card_and_helpers_json_cover_all_fields() {
+    #[tokio::test]
+    async fn card_and_helpers_json_cover_all_fields() {
         let label = client::Label {
             id: "l1".into(),
             project_id: "p1".into(),
@@ -658,10 +699,11 @@ mod tests {
             depends_on_card_ids: vec!["c2".into()],
             dependent_card_ids: vec!["c3".into()],
         };
-        let value = card_to_json(&card);
+        let value = card_to_json(&card).await;
         assert_eq!(value["priority"], "medium");
         assert_eq!(value["urgency"], "high");
         assert!(value["labels"].as_array().unwrap().len() == 1);
+        assert!(value["assignees"].as_array().unwrap().len() == 1);
     }
 
     fn payload_envelope(

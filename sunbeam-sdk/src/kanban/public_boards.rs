@@ -135,15 +135,15 @@ pub async fn run_with_client(
             let boards: Vec<_> = resp.boards.iter().map(board_to_out).collect();
             render_list(
                 &boards,
-                &["ID", "PROJECT", "NAME", "COLUMNS", "CARDS", "VISIBILITY"],
+                &["NAME", "COLUMNS", "CARDS", "VISIBILITY", "PROJECT", "ID"],
                 |b| {
                     vec![
-                        b.id.clone(),
-                        b.project_id.clone(),
                         b.name.clone(),
                         b.columns_count.to_string(),
                         b.cards_count.to_string(),
                         b.visibility.clone(),
+                        b.project_id.clone(),
+                        b.id.clone(),
                     ]
                 },
                 format,

@@ -448,15 +448,15 @@ pub async fn run(
             let boards: Vec<BoardOut> = resp.boards.into_iter().map(Into::into).collect();
             render_list(
                 &boards,
-                &["ID", "PROJECT ID", "NAME", "VISIBILITY", "COLUMNS", "CARDS"],
+                &["NAME", "VISIBILITY", "COLUMNS", "CARDS", "PROJECT ID", "ID"],
                 |b| {
                     vec![
-                        b.id.clone(),
-                        b.project_id.clone(),
                         b.name.clone(),
                         b.visibility.clone(),
                         b.columns_count.to_string(),
                         b.cards_count.to_string(),
+                        b.project_id.clone(),
+                        b.id.clone(),
                     ]
                 },
                 format,
@@ -672,13 +672,13 @@ pub async fn run(
                 let columns: Vec<ColumnOut> = resp.columns.into_iter().map(Into::into).collect();
                 render_list(
                     &columns,
-                    &["ID", "TITLE", "POSITION", "WIP LIMIT"],
+                    &["TITLE", "POSITION", "WIP LIMIT", "ID"],
                     |c| {
                         vec![
-                            c.id.clone(),
                             c.title.clone(),
                             c.position.to_string(),
                             c.wip_limit.to_string(),
+                            c.id.clone(),
                         ]
                     },
                     format,

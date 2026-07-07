@@ -287,16 +287,16 @@ pub async fn run(
             let links: Vec<_> = resp.links.into_iter().map(link_detail_out).collect();
             render_list(
                 &links,
-                &["ID", "REPO", "NUMBER", "KIND", "TITLE", "STATE", "URL"],
+                &["REPO", "NUMBER", "KIND", "TITLE", "STATE", "URL", "ID"],
                 |l| {
                     vec![
-                        l.id.clone(),
                         format!("{}/{}", l.repo_owner, l.repo_name),
                         l.issue_or_pr_number.to_string(),
                         l.kind.clone(),
                         l.title.clone(),
                         l.state.clone(),
                         l.url.clone(),
+                        l.id.clone(),
                     ]
                 },
                 format,
