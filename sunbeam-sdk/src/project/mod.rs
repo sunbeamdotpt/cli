@@ -7,7 +7,6 @@
 //! - [`config`] — YAML schema types, parsing, validation.
 //! - [`runner`] (added later) — execute verbs (exec + workflow dispatch).
 
-pub mod cli;
 /// Config.
 pub mod config;
 /// Runner.

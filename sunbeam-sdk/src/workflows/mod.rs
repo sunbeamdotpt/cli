@@ -1,6 +1,5 @@
 //! Workflow engine integration and step context.
 
-pub mod cmd;
 /// Data.
 pub mod data;
 /// Host.

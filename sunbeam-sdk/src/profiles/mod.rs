@@ -17,9 +17,7 @@
 //! | `shortcuts` | Expand shortcut names (`memory`, `scale`, `env.FOO`) to field paths |
 //! | `resolver` | Resolve a profile + presets into `manifest_params::Overrides` |
 //! | `validate` | Validate profile rules against declared tunables |
-//! | `cli` | Profile CRUD command dispatch |
 
-pub mod cli;
 pub mod resolver;
 pub mod shortcuts;
 pub mod tunables;

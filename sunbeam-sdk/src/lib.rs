@@ -16,8 +16,6 @@ pub mod error;
 pub mod auth;
 /// Health check runners for cluster services.
 pub mod checks;
-/// CLI argument definitions (clap) and top-level dispatch.
-pub mod cli;
 /// Cluster topology and node discovery.
 pub mod cluster;
 /// Context-based configuration file I/O.
@@ -65,10 +63,6 @@ pub mod proxy;
 pub mod registry;
 /// OpenBao secret reading and seeding.
 pub mod secrets;
-/// OpenBao secrets engine CLI (KV, transit, generic read/write).
-pub mod secrets_cli;
-/// Service subcommand dispatch.
-pub mod service_cmds;
 /// Service listing and status queries.
 pub mod services;
 /// Embedded binary extraction (kustomize, helm).

@@ -6,7 +6,6 @@
 //! - [`compose`]  (added later) — `ops compose up/down` (docker compose wrapper).
 //! - [`stack`]    (added later) — `ops stack pin/apply` for pinned snapshots.
 
-pub mod cli;
 /// Compose.
 pub mod compose;
 /// Config.
