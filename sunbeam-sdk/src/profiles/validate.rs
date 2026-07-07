@@ -1,7 +1,7 @@
 //! Profile validation against declared tunables.
 
 use crate::config::{Preset, Profile};
-use crate::error::{Result, SunbeamError};
+use crate::error::Result;
 use std::collections::HashMap;
 
 use super::ManifestResource;

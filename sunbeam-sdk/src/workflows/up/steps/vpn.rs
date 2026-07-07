@@ -27,8 +27,8 @@ use kube::api::Api;
 use wfe_core::models::ExecutionResult;
 use wfe_core::traits::{StepBody, StepExecutionContext};
 
+use crate::info;
 use crate::kube as k;
-use crate::{info, trace};
 
 use crate::workflows::data::UpData;
 

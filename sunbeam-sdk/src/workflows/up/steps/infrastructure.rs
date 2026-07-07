@@ -301,7 +301,7 @@ impl StepBody for WaitForCNPGWebhook {
                     .status
                     .as_ref()
                     .and_then(|s| s.conditions.as_ref())
-                    .map_or(false, |conds| {
+                    .is_some_and(|conds| {
                         conds
                             .iter()
                             .any(|c| c.type_ == "Available" && c.status == "True")
@@ -396,11 +396,11 @@ impl StepBody for WaitForLonghornWebhook {
 
             match ds_api.get_opt("longhorn-manager").await {
                 Ok(Some(ds)) => {
-                    if let Some(status) = &ds.status {
-                        if is_daemonset_ready(status) {
-                            tracing::info!(msg = "Longhorn manager DaemonSet ready.");
-                            return Ok(ExecutionResult::next());
-                        }
+                    if let Some(status) = &ds.status
+                        && is_daemonset_ready(status)
+                    {
+                        tracing::info!(msg = "Longhorn manager DaemonSet ready.");
+                        return Ok(ExecutionResult::next());
                     }
                 }
                 Ok(None) => {}

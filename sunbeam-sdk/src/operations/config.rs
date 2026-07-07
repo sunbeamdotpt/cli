@@ -160,6 +160,7 @@ pub enum RepoBucket {
 }
 
 impl RepoBucket {
+    /// Return the canonical short name for this bucket.
     pub fn as_str(self) -> &'static str {
         match self {
             RepoBucket::Owned => "owned",
@@ -176,11 +177,11 @@ impl WorkspaceConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_ctx(|| format!("reading {}", path.display()))?;
-        Self::from_str(&text).with_ctx(|| format!("parsing {}", path.display()))
+        Self::from_yaml(&text).with_ctx(|| format!("parsing {}", path.display()))
     }
 
     /// Parse and validate from a YAML string.
-    pub fn from_str(text: &str) -> Result<Self> {
+    pub fn from_yaml(text: &str) -> Result<Self> {
         let cfg: WorkspaceConfig = serde_yaml::from_str(text)?;
         cfg.validate()?;
         Ok(cfg)
@@ -309,7 +310,7 @@ schema: 1
 workspace:
   name: sunbeam
 ";
-        let cfg = WorkspaceConfig::from_str(yaml).unwrap();
+        let cfg = WorkspaceConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.workspace.name, "sunbeam");
         assert_eq!(cfg.workspace.root, ".");
         assert!(cfg.repos.owned.is_empty());
@@ -335,7 +336,7 @@ repos:
   retired:
     docs: { path: retired/docs }
 ";
-        let cfg = WorkspaceConfig::from_str(yaml).unwrap();
+        let cfg = WorkspaceConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.repos.owned.len(), 3);
         assert_eq!(cfg.repos.third_party.len(), 1);
         assert_eq!(cfg.repos.forks.len(), 1);
@@ -363,7 +364,7 @@ repos:
   3p:
     tokio: { path: 3p/tokio, upstream: tokio-rs/tokio }
 ";
-        let cfg = WorkspaceConfig::from_str(yaml).unwrap();
+        let cfg = WorkspaceConfig::from_yaml(yaml).unwrap();
         let names: Vec<&str> = cfg.iter_repos().map(|e| e.name).collect();
         assert_eq!(names, vec!["sol", "tokio"]);
 
@@ -386,7 +387,7 @@ repos:
   forks:
     foo: { path: b }
 ";
-        let err = WorkspaceConfig::from_str(yaml).unwrap_err();
+        let err = WorkspaceConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("foo"));
         assert!(err.to_string().contains("owned"));
         assert!(err.to_string().contains("forks"));
@@ -406,7 +407,7 @@ services:
     image: y
     ports: ["5432:9999"]
 "#;
-        let err = WorkspaceConfig::from_str(yaml).unwrap_err();
+        let err = WorkspaceConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("5432"));
     }
 
@@ -424,7 +425,7 @@ services:
     image: y
     ports: ["6379:6379"]
 "#;
-        WorkspaceConfig::from_str(yaml).unwrap();
+        WorkspaceConfig::from_yaml(yaml).unwrap();
     }
 
     #[test]
@@ -442,7 +443,7 @@ stacks:
       sol: abcd1234
       ghost: deadbeef
 "#;
-        let err = WorkspaceConfig::from_str(yaml).unwrap_err();
+        let err = WorkspaceConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("ghost"));
     }
 
@@ -462,7 +463,7 @@ stacks:
       sol: abcd1234
     pinned_at: "2026-04-16T12:00:00Z"
 "#;
-        let cfg = WorkspaceConfig::from_str(yaml).unwrap();
+        let cfg = WorkspaceConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.stacks["rc1"].projects["sol"], "abcd1234");
     }
 
@@ -482,7 +483,7 @@ schema: 2
 workspace:
   name: x
 ";
-        let err = WorkspaceConfig::from_str(yaml).unwrap_err();
+        let err = WorkspaceConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("schema"));
     }
 }

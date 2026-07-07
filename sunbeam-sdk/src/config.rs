@@ -81,10 +81,13 @@ pub struct Rule {
 /// Shortcuts scoped to a named container.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContainerShortcuts {
+    /// Memory request/limit shortcut for the container.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+    /// CPU request/limit shortcut for the container.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu: Option<String>,
+    /// Per-container environment variable shortcuts.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, serde_json::Value>,
 }
@@ -92,6 +95,7 @@ pub struct ContainerShortcuts {
 /// How a context references a profile: by name, inline, or not at all.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[derive(Default)]
 pub enum ProfileRef {
     /// Reference a named profile from the top-level `profiles` map.
     Name(String),
@@ -99,6 +103,7 @@ pub enum ProfileRef {
     Inline(Profile),
     /// No profile — serialized as absent.
     #[serde(skip)]
+    #[default]
     None,
 }
 
@@ -106,12 +111,6 @@ impl ProfileRef {
     /// Returns true if this is the `None` variant.
     pub fn is_none(&self) -> bool {
         matches!(self, ProfileRef::None)
-    }
-}
-
-impl Default for ProfileRef {
-    fn default() -> Self {
-        ProfileRef::None
     }
 }
 

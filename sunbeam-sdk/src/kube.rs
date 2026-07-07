@@ -116,15 +116,15 @@ async fn discover_broken_api_groups(client: &Client) -> Result<Vec<String>> {
                 .iter()
                 .find(|c| c.type_ == "Available")
         });
-        if available.map(|c| c.status != "True").unwrap_or(true) {
-            if let Some(name) = svc.metadata.name {
-                // APIService names are like "v1alpha1.acme.scaleway.com"
-                // Extract the group part (everything after the first dot)
-                if let Some(dot) = name.find('.') {
-                    let group = &name[dot + 1..];
-                    if !group.is_empty() && !broken.contains(&group.to_string()) {
-                        broken.push(group.to_string());
-                    }
+        if available.map(|c| c.status != "True").unwrap_or(true)
+            && let Some(name) = svc.metadata.name
+        {
+            // APIService names are like "v1alpha1.acme.scaleway.com"
+            // Extract the group part (everything after the first dot)
+            if let Some(dot) = name.find('.') {
+                let group = &name[dot + 1..];
+                if !group.is_empty() && !broken.contains(&group.to_string()) {
+                    broken.push(group.to_string());
                 }
             }
         }
@@ -499,15 +499,15 @@ async fn apply_one_doc(
                 "sunbeam.pt/spec-hash".to_string(),
                 serde_json::Value::String(hash),
             );
-        } else if let Some(metadata) = patch.get_mut("metadata") {
-            if let Some(obj) = metadata.as_object_mut() {
-                let mut ann = serde_json::Map::new();
-                ann.insert(
-                    "sunbeam.pt/spec-hash".to_string(),
-                    serde_json::Value::String(hash),
-                );
-                obj.insert("annotations".to_string(), serde_json::Value::Object(ann));
-            }
+        } else if let Some(metadata) = patch.get_mut("metadata")
+            && let Some(obj) = metadata.as_object_mut()
+        {
+            let mut ann = serde_json::Map::new();
+            ann.insert(
+                "sunbeam.pt/spec-hash".to_string(),
+                serde_json::Value::String(hash),
+            );
+            obj.insert("annotations".to_string(), serde_json::Value::Object(ann));
         }
     }
 
@@ -767,15 +767,14 @@ pub async fn find_pod_by_label_or_any(ns: &str, label: &str) -> Option<(String, 
 
     // Fast path: labeled query.
     let lp = kube::api::ListParams::default().labels(label);
-    if let Ok(pod_list) = pods.list(&lp).await {
-        if let Some(name) = pod_list
+    if let Ok(pod_list) = pods.list(&lp).await
+        && let Some(name) = pod_list
             .items
             .iter()
             .find(|p| p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running"))
             .and_then(|p| p.metadata.name.clone())
-        {
-            return Some((name, false));
-        }
+    {
+        return Some((name, false));
     }
 
     // Fallback: any Running pod in the namespace.
@@ -869,17 +868,17 @@ pub async fn kube_exec_with_stdin(
 
     // Write stdin data if provided.  Chunked writes avoid websocket frame
     // size limits that can trigger "broken pipe" on large stdin payloads.
-    if let Some(data) = stdin_data {
-        if let Some(mut stdin_writer) = attached.stdin() {
-            use tokio::io::AsyncWriteExt;
-            const CHUNK_SIZE: usize = 64 * 1024;
-            for chunk in data.chunks(CHUNK_SIZE) {
-                stdin_writer.write_all(chunk).await?;
-                stdin_writer.flush().await?;
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            stdin_writer.shutdown().await.ok();
+    if let Some(data) = stdin_data
+        && let Some(mut stdin_writer) = attached.stdin()
+    {
+        use tokio::io::AsyncWriteExt;
+        const CHUNK_SIZE: usize = 64 * 1024;
+        for chunk in data.chunks(CHUNK_SIZE) {
+            stdin_writer.write_all(chunk).await?;
+            stdin_writer.flush().await?;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        stdin_writer.shutdown().await.ok();
     }
 
     let stdout = {
@@ -971,21 +970,18 @@ async fn get_lima_ip() -> String {
     };
 
     let nodes: Api<Node> = Api::all(client);
-    match nodes.list(&ListParams::default()).await {
-        Ok(node_list) => {
-            for node in node_list.items {
-                if let Some(status) = node.status
-                    && let Some(addrs) = status.addresses
-                {
-                    for addr in addrs {
-                        if addr.type_ == "InternalIP" {
-                            return addr.address;
-                        }
+    if let Ok(node_list) = nodes.list(&ListParams::default()).await {
+        for node in node_list.items {
+            if let Some(status) = node.status
+                && let Some(addrs) = status.addresses
+            {
+                for addr in addrs {
+                    if addr.type_ == "InternalIP" {
+                        return addr.address;
                     }
                 }
             }
         }
-        Err(_) => {}
     }
 
     String::new()

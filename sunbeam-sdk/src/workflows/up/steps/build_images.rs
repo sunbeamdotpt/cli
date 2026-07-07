@@ -4,7 +4,7 @@
 //! with a non-skip `package` target, topologically sorts by `deps.projects`,
 //! and runs each `package` target with `SUNBEAM_REGISTRY` injected.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use wfe_core::models::ExecutionResult;

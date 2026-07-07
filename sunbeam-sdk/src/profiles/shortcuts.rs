@@ -32,7 +32,6 @@
 use crate::error::{Result, SunbeamError};
 use crate::manifest_params::Override;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Expand a shortcut key + value into one or more `Override::Set` objects.
 ///
@@ -542,16 +541,16 @@ fn expand_config_key(
         };
     }
 
-    if let Some(obj) = current.as_object() {
-        if obj.contains_key(key) {
-            // Key exists — set it directly
-            let key_path = format!("{field_path}/{key}");
-            return Ok(vec![Override::Set {
-                resource: addr.into(),
-                field_path: key_path,
-                value: json_to_string(value),
-            }]);
-        }
+    if let Some(obj) = current.as_object()
+        && obj.contains_key(key)
+    {
+        // Key exists — set it directly
+        let key_path = format!("{field_path}/{key}");
+        return Ok(vec![Override::Set {
+            resource: addr.into(),
+            field_path: key_path,
+            value: json_to_string(value),
+        }]);
     }
 
     // Key doesn't exist — set the whole object with this key merged in

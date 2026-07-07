@@ -47,7 +47,7 @@ impl StepBody for EnsureLimaVm {
         let data: UpData = serde_json::from_value(ctx.workflow.data.clone())
             .map_err(|e| step_err(format!("UpData parse: {e}")))?;
 
-        let domain = if data.domain.is_empty() {
+        let _domain = if data.domain.is_empty() {
             data.ctx.as_ref().map(|c| c.domain.as_str()).unwrap_or("")
         } else {
             &data.domain
@@ -177,7 +177,6 @@ impl StepBody for EnsureLimaVm {
         // cluster API is reachable using the Rust k8s client (no shelling out).
         info!(logger, "Waiting for k3s API to be reachable...");
         let k3s_deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
-        let mut k3s_ready = false;
         let mut k3s_attempt = 0;
         loop {
             k3s_attempt += 1;
@@ -194,7 +193,6 @@ impl StepBody for EnsureLimaVm {
                 // Try to create a kube client from the Lima kubeconfig.
                 match load_kubeconfig_and_probe(&lima_kc).await {
                     Ok(true) => {
-                        k3s_ready = true;
                         info!(logger, "k3s API is reachable.", attempt = k3s_attempt,);
                         break;
                     }

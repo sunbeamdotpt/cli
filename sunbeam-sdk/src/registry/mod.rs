@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{debug, info};
+use crate::debug;
 use kube::Client;
 use kube::api::{Api, ListParams};
 // ── Label / annotation keys ──────────────────────────────────────────
@@ -176,7 +176,10 @@ pub enum HealthCheck {
     /// Podready.
     PodReady,
     /// Http.
-    Http { path: String },
+    Http {
+        /// HTTP path to probe.
+        path: String,
+    },
     /// Custom.
     Custom(String),
     /// None.

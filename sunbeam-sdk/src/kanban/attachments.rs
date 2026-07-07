@@ -415,7 +415,6 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn sample_attachment(id: &str) -> client::Attachment {
         client::Attachment {

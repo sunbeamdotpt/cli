@@ -37,7 +37,9 @@ pub enum SunbeamError {
     /// Kubernetes API or cluster-related error.
     #[error("{context}")]
     Kube {
+        /// Human-readable description of what was happening.
         context: String,
+        /// Underlying kube client error, if any.
         #[source]
         source: Option<Box<kube::Error>>,
     },
@@ -49,7 +51,9 @@ pub enum SunbeamError {
     /// Network/HTTP error.
     #[error("{context}")]
     Network {
+        /// Human-readable description of what was happening.
         context: String,
+        /// Underlying HTTP client error, if any.
         #[source]
         source: Option<reqwest::Error>,
     },
@@ -68,12 +72,19 @@ pub enum SunbeamError {
 
     /// External tool error (kustomize, linkerd, buildctl, yarn, etc.).
     #[error("{tool}: {detail}")]
-    ExternalTool { tool: String, detail: String },
+    ExternalTool {
+        /// Name of the external tool.
+        tool: String,
+        /// Details from the tool's failure.
+        detail: String,
+    },
 
     /// IO error.
     #[error("{context}: {source}")]
     Io {
+        /// Human-readable context for the IO operation.
         context: String,
+        /// Underlying IO error.
         source: std::io::Error,
     },
 
@@ -272,6 +283,7 @@ impl<T> ResultExt<T> for Option<T> {
 // ---------------------------------------------------------------------------
 
 impl SunbeamError {
+    /// Build a Kubernetes error with the given context.
     pub fn kube(context: impl Into<String>) -> Self {
         SunbeamError::Kube {
             context: context.into(),
@@ -279,10 +291,12 @@ impl SunbeamError {
         }
     }
 
+    /// Build a configuration error with the given message.
     pub fn config(msg: impl Into<String>) -> Self {
         SunbeamError::Config(msg.into())
     }
 
+    /// Build a network/HTTP error with the given context.
     pub fn network(context: impl Into<String>) -> Self {
         SunbeamError::Network {
             context: context.into(),
@@ -290,18 +304,22 @@ impl SunbeamError {
         }
     }
 
+    /// Build a secrets/Vault error with the given message.
     pub fn secrets(msg: impl Into<String>) -> Self {
         SunbeamError::Secrets(msg.into())
     }
 
+    /// Build an image/build error with the given message.
     pub fn build(msg: impl Into<String>) -> Self {
         SunbeamError::Build(msg.into())
     }
 
+    /// Build an identity/user-management error with the given message.
     pub fn identity(msg: impl Into<String>) -> Self {
         SunbeamError::Identity(msg.into())
     }
 
+    /// Build an external-tool error with tool name and detail.
     pub fn tool(tool: impl Into<String>, detail: impl Into<String>) -> Self {
         SunbeamError::ExternalTool {
             tool: tool.into(),

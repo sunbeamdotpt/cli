@@ -70,8 +70,8 @@ pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
             let mut is_target = false;
             let mut kind_idx = None;
 
-            for j in (i + 1)..lines.len() {
-                let trimmed = lines[j].trim();
+            for (j, line) in lines.iter().enumerate().skip(i + 1) {
+                let trimmed = line.trim();
                 // Stop at next rule or section boundary.
                 if trimmed.starts_with('-') && !trimmed.starts_with("- name:") {
                     break;
@@ -95,8 +95,8 @@ pub fn bump_proxy_image(profile: &str, new_image: &str) -> Result<String> {
 
             // Look for an existing image: line after kind: Deployment.
             let mut image_idx = None;
-            for j in (kind_idx + 1)..lines.len() {
-                let trimmed = lines[j].trim();
+            for (j, line) in lines.iter().enumerate().skip(kind_idx + 1) {
+                let trimmed = line.trim();
                 if trimmed.starts_with('-') && !trimmed.starts_with("- name:") {
                     break;
                 }

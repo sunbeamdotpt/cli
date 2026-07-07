@@ -2,7 +2,7 @@
 
 use crate::config::{Preset, Profile, Rule};
 use crate::error::{Result, SunbeamError};
-use crate::manifest_params::{Override, Overrides};
+use crate::manifest_params::Overrides;
 use std::collections::HashMap;
 
 use super::ManifestResource;
@@ -137,15 +137,13 @@ fn resolve_resource<'a>(
     let kind = rule.kind.as_deref();
 
     // 1. Exact match
-    if let Some(n) = ns {
-        if let Some(k) = kind {
-            if let Some(r) = resources
-                .iter()
-                .find(|r| r.name == *name && r.namespace == *n && r.kind == *k)
-            {
-                return Ok(r);
-            }
-        }
+    if let Some(n) = ns
+        && let Some(k) = kind
+        && let Some(r) = resources
+            .iter()
+            .find(|r| r.name == *name && r.namespace == *n && r.kind == *k)
+    {
+        return Ok(r);
     }
 
     // 2. Name + namespace + kind filter
@@ -155,7 +153,7 @@ fn resolve_resource<'a>(
     if let Some(n) = ns {
         let matches: Vec<_> = resources
             .iter()
-            .filter(|r| r.name == *name && r.namespace == *n && kind.map_or(true, |k| r.kind == k))
+            .filter(|r| r.name == *name && r.namespace == *n && kind.is_none_or(|k| r.kind == k))
             .collect();
         if matches.len() == 1 {
             return Ok(matches[0]);
@@ -193,6 +191,7 @@ fn resolve_resource<'a>(
 mod tests {
     use super::*;
     use crate::config::{ContainerShortcuts, Preset, Profile, Rule};
+    use crate::manifest_params::Override;
     use crate::profiles::Tunable;
     use serde_json::Value;
     use std::collections::HashMap;
@@ -558,8 +557,10 @@ mod tests {
         )];
 
         let mut profile = Profile::default();
-        let mut cs = ContainerShortcuts::default();
-        cs.memory = Some("128Mi".to_string());
+        let cs = ContainerShortcuts {
+            memory: Some("128Mi".to_string()),
+            ..Default::default()
+        };
         let mut containers = HashMap::new();
         containers.insert("exporter".to_string(), cs);
         profile.rules.push(Rule {

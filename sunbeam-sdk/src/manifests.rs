@@ -125,10 +125,8 @@ pub fn discover_services(infra_dir: &std::path::Path) -> Result<Vec<String>> {
         if path.is_dir() {
             let has_kustomization = path.join("kustomization.yaml").is_file()
                 || path.join("kustomization.yml").is_file();
-            if has_kustomization {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    services.push(name.to_string());
-                }
+            if has_kustomization && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                services.push(name.to_string());
             }
         }
     }

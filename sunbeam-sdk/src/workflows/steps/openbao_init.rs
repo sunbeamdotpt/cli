@@ -156,7 +156,11 @@ impl StepBody for InitOrUnsealOpenBao {
                 }
             }
         }
-        let pf = pf.unwrap();
+        let Some(pf) = pf else {
+            return Err(step_err(
+                "Port-forward to OpenBao succeeded but port-forward handle is missing".to_string(),
+            ));
+        };
         let mut bao_url = format!("http://127.0.0.1:{}", pf.local_port);
         let mut bao = BaoClient::new(&bao_url);
 
@@ -226,26 +230,25 @@ impl StepBody for InitOrUnsealOpenBao {
             }
 
             // If cluster secret is missing keys but local keystore has them, restore
-            if (root_token.is_empty() || unseal_key.is_empty()) && local_keystore.is_some() {
-                let ks = local_keystore.as_ref().unwrap();
-                if !ks.root_token.is_empty() && !ks.unseal_keys_b64.is_empty() {
-                    tracing::error!(
-                        "Cluster secret missing keys — restoring from local keystore..."
-                    );
-                    let mut unseal_data = HashMap::new();
-                    unseal_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
-                    k::create_secret("openbao", "openbao-unseal-key", unseal_data)
-                        .await
-                        .map_err(|e| step_err(e.to_string()))?;
-                    let mut token_data = HashMap::new();
-                    token_data.insert("root-token".to_string(), ks.root_token.clone());
-                    k::create_secret("openbao", "openbao-bootstrap-token", token_data)
-                        .await
-                        .map_err(|e| step_err(e.to_string()))?;
-                    unseal_key = ks.unseal_keys_b64[0].clone();
-                    root_token = ks.root_token.clone();
-                    tracing::info!("Cluster secret restored from local keystore.");
-                }
+            if (root_token.is_empty() || unseal_key.is_empty())
+                && let Some(ks) = local_keystore.as_ref()
+                && !ks.root_token.is_empty()
+                && !ks.unseal_keys_b64.is_empty()
+            {
+                tracing::error!("Cluster secret missing keys — restoring from local keystore...");
+                let mut unseal_data = HashMap::new();
+                unseal_data.insert("key".to_string(), ks.unseal_keys_b64[0].clone());
+                k::create_secret("openbao", "openbao-unseal-key", unseal_data)
+                    .await
+                    .map_err(|e| step_err(e.to_string()))?;
+                let mut token_data = HashMap::new();
+                token_data.insert("root-token".to_string(), ks.root_token.clone());
+                k::create_secret("openbao", "openbao-bootstrap-token", token_data)
+                    .await
+                    .map_err(|e| step_err(e.to_string()))?;
+                unseal_key = ks.unseal_keys_b64[0].clone();
+                root_token = ks.root_token.clone();
+                tracing::info!("Cluster secret restored from local keystore.");
             }
 
             // If vault is initialized but we lost the root token, reset storage
@@ -266,24 +269,19 @@ impl StepBody for InitOrUnsealOpenBao {
                     .labels("app.kubernetes.io/name=openbao,component=server");
                 let mut new_pod = String::new();
                 for attempt in 0..60 {
-                    if let Ok(pod_list) = pods.list(&lp).await {
-                        if let Some(pod) = pod_list.items.first() {
-                            if let Some(name) = pod.metadata.name.as_deref() {
-                                if let Some(phase) =
-                                    pod.status.as_ref().and_then(|s| s.phase.as_deref())
-                                {
-                                    if phase == "Running" {
-                                        new_pod = name.to_string();
-                                        tracing::info!(
-                                            msg = "OpenBao restarted.",
-                                            pod = %new_pod,
-                                            attempt = attempt + 1,
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                    if let Ok(pod_list) = pods.list(&lp).await
+                        && let Some(pod) = pod_list.items.first()
+                        && let Some(name) = pod.metadata.name.as_deref()
+                        && let Some(phase) = pod.status.as_ref().and_then(|s| s.phase.as_deref())
+                        && phase == "Running"
+                    {
+                        new_pod = name.to_string();
+                        tracing::info!(
+                            msg = "OpenBao restarted.",
+                            pod = %new_pod,
+                            attempt = attempt + 1,
+                        );
+                        break;
                     }
                     if attempt % 6 == 0 && attempt > 0 {
                         tracing::info!(
@@ -316,17 +314,22 @@ impl StepBody for InitOrUnsealOpenBao {
                         }
                     }
                 }
-                let pf2 = pf2.unwrap();
+                let Some(pf2) = pf2 else {
+                    return Err(step_err(
+                        "Port-forward to restarted OpenBao succeeded but handle is missing"
+                            .to_string(),
+                    ));
+                };
                 bao_url = format!("http://127.0.0.1:{}", pf2.local_port);
                 bao = BaoClient::new(&bao_url);
 
                 // Wait for API and confirm uninitialized.
                 for attempt in 0..30 {
-                    if let Ok(s) = bao.seal_status().await {
-                        if !s.initialized {
-                            tracing::info!("OpenBao is fresh (uninitialized).");
-                            break;
-                        }
+                    if let Ok(s) = bao.seal_status().await
+                        && !s.initialized
+                    {
+                        tracing::info!("OpenBao is fresh (uninitialized).");
+                        break;
                     }
                     if attempt < 29 {
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -403,9 +406,11 @@ impl StepBody for InitOrUnsealOpenBao {
                     }
                 }
                 None => {
+                    let err_detail = init_err
+                        .map(|e| format!("{e}"))
+                        .unwrap_or_else(|| "unknown error".to_string());
                     return Err(step_err(format!(
-                        "OpenBao init failed after 5 attempts: {}. Manual fix required: check pod logs and network connectivity.",
-                        init_err.unwrap()
+                        "OpenBao init failed after 5 attempts: {err_detail}. Manual fix required: check pod logs and network connectivity."
                     )));
                 }
             }

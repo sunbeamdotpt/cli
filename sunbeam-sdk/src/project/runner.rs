@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::error::{Result, SunbeamError};
+use crate::info;
 use crate::project::config::{ExecCommand, ExecTarget, WorkflowTarget};
 use crate::project::{ProjectConfig, Target};
-use crate::{error, info};
 
 /// Outcome of attempting to run a verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -427,8 +427,10 @@ mod tests {
         let cfg = cfg_with_target("build", shell("false"));
         let tmp = TempDir::new().unwrap();
         let logger = crate::logger::Logger::new(crate::logger::NoopSink);
-        let mut opts = RunOptions::default();
-        opts.dry_run = true;
+        let opts = RunOptions {
+            dry_run: true,
+            ..Default::default()
+        };
         let out = run(&logger, &cfg, tmp.path(), "build", &opts)
             .await
             .unwrap();

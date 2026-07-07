@@ -59,6 +59,7 @@ pub enum Override {
 /// Collection of user overrides.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Overrides {
+    /// Ordered override entries to apply.
     pub items: Vec<Override>,
 }
 
@@ -116,10 +117,8 @@ impl Overrides {
                         disabled = true;
                     }
                 }
-                Override::Enable { pattern } => {
-                    if glob_match(pattern, &addr) {
-                        disabled = false;
-                    }
+                Override::Enable { pattern } if glob_match(pattern, &addr) => {
+                    disabled = false;
                 }
                 _ => {}
             }
@@ -276,17 +275,16 @@ pub fn build_catalog(manifests: &str) -> Vec<ResourceEntry> {
                 }
             }
             "PersistentVolumeClaim" => {
-                if let Some(spec) = value.get("spec").and_then(|v| v.as_object()) {
-                    if let Some(res) = spec.get("resources").and_then(|v| v.as_object()) {
-                        if let Some(req) = res.get("requests").and_then(|v| v.as_object()) {
-                            for (k, v) in req {
-                                fields.push(FieldEntry {
-                                    path: format!("spec/resources/requests/{k}"),
-                                    current: v.clone(),
-                                    type_hint: "quantity",
-                                });
-                            }
-                        }
+                if let Some(spec) = value.get("spec").and_then(|v| v.as_object())
+                    && let Some(res) = spec.get("resources").and_then(|v| v.as_object())
+                    && let Some(req) = res.get("requests").and_then(|v| v.as_object())
+                {
+                    for (k, v) in req {
+                        fields.push(FieldEntry {
+                            path: format!("spec/resources/requests/{k}"),
+                            current: v.clone(),
+                            type_hint: "quantity",
+                        });
                     }
                 }
             }
@@ -320,16 +318,16 @@ pub fn build_catalog(manifests: &str) -> Vec<ResourceEntry> {
                 }
             }
             "Ingress" => {
-                if let Some(spec) = value.get("spec").and_then(|v| v.as_object()) {
-                    if let Some(rules) = spec.get("rules").and_then(|v| v.as_array()) {
-                        for (idx, r) in rules.iter().enumerate() {
-                            if let Some(host) = r.get("host").and_then(|v| v.as_str()) {
-                                fields.push(FieldEntry {
-                                    path: format!("spec/rules/{idx}/host"),
-                                    current: Value::String(host.to_string()),
-                                    type_hint: "string",
-                                });
-                            }
+                if let Some(spec) = value.get("spec").and_then(|v| v.as_object())
+                    && let Some(rules) = spec.get("rules").and_then(|v| v.as_array())
+                {
+                    for (idx, r) in rules.iter().enumerate() {
+                        if let Some(host) = r.get("host").and_then(|v| v.as_str()) {
+                            fields.push(FieldEntry {
+                                path: format!("spec/rules/{idx}/host"),
+                                current: Value::String(host.to_string()),
+                                type_hint: "string",
+                            });
                         }
                     }
                 }
@@ -500,7 +498,7 @@ pub fn apply_overrides(manifests: &str, overrides: &Overrides) -> Result<String>
             // key (path ends with the key name, not "parameters" itself).
             // When replacing the entire parameters object (path ends with "parameters"),
             // let parse_value handle it normally so the object structure is preserved.
-            if parts.iter().any(|p| *p == "parameters") && parts.last() != Some(&"parameters") {
+            if parts.contains(&"parameters") && parts.last() != Some(&"parameters") {
                 // Always force string for CRD parameters - CRD schemas usually
                 // define these as strings even for numeric-looking values.
                 parsed_value = Value::String(value.clone());
@@ -551,16 +549,16 @@ fn parse_value(s: &str) -> Value {
         return Value::Number(n.into());
     }
     // Try float
-    if let Ok(f) = s.parse::<f64>() {
-        if let Some(n) = serde_json::Number::from_f64(f) {
-            return Value::Number(n);
-        }
+    if let Ok(f) = s.parse::<f64>()
+        && let Some(n) = serde_json::Number::from_f64(f)
+    {
+        return Value::Number(n);
     }
     // Try JSON object/array
-    if (s.starts_with('{') && s.ends_with('}')) || (s.starts_with('[') && s.ends_with(']')) {
-        if let Ok(v) = serde_json::from_str(s) {
-            return v;
-        }
+    if ((s.starts_with('{') && s.ends_with('}')) || (s.starts_with('[') && s.ends_with(']')))
+        && let Ok(v) = serde_json::from_str(s)
+    {
+        return v;
     }
     // Default to string
     Value::String(s.to_string())
@@ -616,9 +614,7 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
         // Navigate deeper — create missing intermediates
         current = match current {
             Value::Object(map) => {
-                let next_is_index = parts
-                    .get(i + 1)
-                    .map_or(false, |p| p.parse::<usize>().is_ok());
+                let next_is_index = parts.get(i + 1).is_some_and(|p| p.parse::<usize>().is_ok());
                 map.entry(part.to_string()).or_insert_with(|| {
                     if next_is_index {
                         Value::Array(vec![])
@@ -633,9 +629,8 @@ fn set_field(doc: &mut Value, path: &str, value: Value) -> Result<()> {
                 })?;
                 // Extend array if needed
                 while arr.len() <= idx {
-                    let next_is_index = parts
-                        .get(i + 1)
-                        .map_or(false, |p| p.parse::<usize>().is_ok());
+                    let next_is_index =
+                        parts.get(i + 1).is_some_and(|p| p.parse::<usize>().is_ok());
                     arr.push(if next_is_index {
                         Value::Array(vec![])
                     } else {

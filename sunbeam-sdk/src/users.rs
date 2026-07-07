@@ -286,33 +286,6 @@ fn identity_id(identity: &Value) -> Result<String> {
         .ok_or_else(|| SunbeamError::identity("Identity missing 'id' field"))
 }
 
-/// Extract the email address from a Kratos identity JSON value.
-fn identity_email(identity: &Value) -> String {
-    identity
-        .get("traits")
-        .and_then(|t| t.get("email"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-/// Format a Kratos identity ID as the kanban OIDC subject.
-fn subject_from_identity_id(id: &str) -> String {
-    format!("user:{id}")
-}
-
-/// Parse a kanban OIDC subject string, returning the Kratos identity ID if present.
-fn identity_id_from_subject(subject: &str) -> Option<&str> {
-    if let Some(id) = subject.strip_prefix("user:") {
-        return Some(id);
-    }
-    // If it already looks like a UUID, treat it as the identity ID directly.
-    if subject.len() == 36 && subject.chars().filter(|&c| c == '-').count() == 4 {
-        return Some(subject);
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // Public commands
 // ---------------------------------------------------------------------------

@@ -197,6 +197,7 @@ fn default_device_expires() -> u64 {
 #[derive(Debug, Deserialize)]
 struct OAuth2ErrorResponse {
     error: String,
+    #[allow(dead_code)]
     #[serde(default)]
     error_description: Option<String>,
 }
@@ -412,18 +413,11 @@ fn decode_jwt_payload(token: &str) -> Result<serde_json::Value> {
     if parts.len() < 2 {
         return Err(SunbeamError::identity("Invalid JWT: not enough segments"));
     }
-    let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1])
-        .ctx("Failed to base64-decode JWT payload")
-    {
-        Ok(bytes) => bytes,
-        Err(e) => return Err(e),
-    };
+        .ctx("Failed to base64-decode JWT payload")?;
     let payload: serde_json::Value =
-        match serde_json::from_slice(&payload_bytes).ctx("Failed to parse JWT payload as JSON") {
-            Ok(p) => p,
-            Err(e) => return Err(e),
-        };
+        serde_json::from_slice(&payload_bytes).ctx("Failed to parse JWT payload as JSON")?;
     Ok(payload)
 }
 
@@ -522,10 +516,10 @@ async fn find_identity(base_url: &str, target: &str) -> Result<Option<serde_json
         .json()
         .await
         .ctx("Failed to parse identity list response")?;
-    if let Some(serde_json::Value::Array(arr)) = &val.get("identities") {
-        if let Some(first) = arr.first() {
-            return Ok(Some(first.clone()));
-        }
+    if let Some(serde_json::Value::Array(arr)) = &val.get("identities")
+        && let Some(first) = arr.first()
+    {
+        return Ok(Some(first.clone()));
     }
     Ok(None)
 }
@@ -586,12 +580,12 @@ pub async fn resolve_emails_for_subjects(
     let base_url = kratos_admin_base_url()?;
     let mut map = std::collections::HashMap::new();
     for subject in subjects {
-        if let Some(id) = identity_id_from_subject(subject) {
-            if let Ok(Some(identity)) = find_identity(&base_url, id).await {
-                let email = identity_email(&identity);
-                if !email.is_empty() {
-                    map.insert(subject.to_string(), email);
-                }
+        if let Some(id) = identity_id_from_subject(subject)
+            && let Ok(Some(identity)) = find_identity(&base_url, id).await
+        {
+            let email = identity_email(&identity);
+            if !email.is_empty() {
+                map.insert(subject.to_string(), email);
             }
         }
     }
@@ -608,10 +602,10 @@ pub async fn resolve_subjects_for_emails(
     let base_url = kratos_admin_base_url()?;
     let mut map = std::collections::HashMap::new();
     for email in emails {
-        if let Ok(Some(identity)) = find_identity(&base_url, email).await {
-            if let Ok(id) = identity_id(&identity) {
-                map.insert(email.to_string(), subject_from_identity_id(&id));
-            }
+        if let Ok(Some(identity)) = find_identity(&base_url, email).await
+            && let Ok(id) = identity_id(&identity)
+        {
+            map.insert(email.to_string(), subject_from_identity_id(&id));
         }
     }
     Ok(map)

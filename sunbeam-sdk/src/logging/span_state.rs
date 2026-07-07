@@ -14,6 +14,7 @@ pub struct SpanBar {
 }
 
 impl SpanBar {
+    /// Create a new span bar with the given progress bar and default capacity.
     pub fn new(pb: ProgressBar) -> Self {
         Self {
             pb,

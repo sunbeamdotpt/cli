@@ -89,9 +89,9 @@ fn find_ancestor(start: &Path, filename: &str) -> Option<PathBuf> {
         if current.join(filename).is_file() {
             return Some(current.to_path_buf());
         }
-        match current.parent() {
-            Some(parent) => current = parent,
-            None => return None,
+        {
+            let parent = current.parent()?;
+            current = parent
         }
     }
 }

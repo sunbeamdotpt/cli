@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn line_sink_filters_by_level() {
         let sink = TestSink::default();
-        let logger = Logger::new(sink.clone());
+        let _logger = Logger::new(sink.clone());
         let line_logger = Logger::new(LineSink::new().with_level(Level::Warn));
         // Just verify it doesn't panic and filters correctly at the sink level.
         line_logger.debug("hidden", &[]);

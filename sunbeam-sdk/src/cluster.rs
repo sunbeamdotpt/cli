@@ -10,7 +10,6 @@ pub(crate) async fn wait_rollout(
     deployment: &str,
     timeout_secs: u64,
 ) -> Result<()> {
-    use k8s_openapi::api::apps::v1::Deployment;
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);

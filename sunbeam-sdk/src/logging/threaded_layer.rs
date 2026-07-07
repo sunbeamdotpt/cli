@@ -29,7 +29,14 @@ pub struct ThreadedLayer {
     state: Arc<Mutex<RenderState>>,
 }
 
+impl Default for ThreadedLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadedLayer {
+    /// Create a new threaded rendering layer.
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(RenderState {

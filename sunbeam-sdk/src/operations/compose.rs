@@ -294,10 +294,10 @@ fn parse_ps_output(raw: &[u8]) -> Result<Vec<ServiceStatus>> {
 
 fn string_field(v: &serde_json::Value, keys: &[&str]) -> String {
     for key in keys {
-        if let Some(s) = v.get(key).and_then(|f| f.as_str()) {
-            if !s.is_empty() {
-                return s.to_string();
-            }
+        if let Some(s) = v.get(key).and_then(|f| f.as_str())
+            && !s.is_empty()
+        {
+            return s.to_string();
         }
     }
     String::new()
@@ -305,10 +305,10 @@ fn string_field(v: &serde_json::Value, keys: &[&str]) -> String {
 
 fn optional_string_field(v: &serde_json::Value, keys: &[&str]) -> Option<String> {
     for key in keys {
-        if let Some(s) = v.get(key).and_then(|f| f.as_str()) {
-            if !s.is_empty() {
-                return Some(s.to_string());
-            }
+        if let Some(s) = v.get(key).and_then(|f| f.as_str())
+            && !s.is_empty()
+        {
+            return Some(s.to_string());
         }
     }
     None
@@ -382,7 +382,7 @@ services:
 volumes:
   sunbeam-pg-data:
 "#;
-        let ws = WorkspaceConfig::from_str(yaml).unwrap();
+        let ws = WorkspaceConfig::from_yaml(yaml).unwrap();
         let rendered = render(&ws).unwrap();
         let reparsed: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
 

@@ -8,7 +8,7 @@
 //!
 //! This breaks the chicken-and-egg cycle: proxy image → ingress → registries.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k8s_openapi::api::core::v1::{
@@ -256,7 +256,7 @@ async fn image_exists_in_k3s(
         return Ok(false);
     }
 
-    let client = match k8s_client().await {
+    let _client = match k8s_client().await {
         Ok(c) => c,
         Err(_) => {
             delete_ctr_pod(pod_name).await;
@@ -380,7 +380,7 @@ async fn build_proxy_image(logger: &crate::logger::Logger) -> wfe_core::Result<P
     Ok(tar_path)
 }
 
-async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core::Result<()> {
+async fn import_image_into_k3s(tar_path: &Path, target_ref: &str) -> wfe_core::Result<()> {
     let node = get_node_name().await?;
     let pod_name = "sunbeam-ctr-import";
     let host_tar = "/host-tmp/sunbeam-proxy-bootstrap.tar";
@@ -429,11 +429,11 @@ async fn import_image_into_k3s(tar_path: &PathBuf, target_ref: &str) -> wfe_core
         delete_ctr_pod(pod_name).await;
         return Err(step_err(format!("ctr images import failed: {e}")));
     }
-    if let Ok((code, stderr)) = import_result {
-        if code != 0 {
-            delete_ctr_pod(pod_name).await;
-            return Err(step_err(format!("ctr images import failed: {stderr}")));
-        }
+    if let Ok((code, stderr)) = import_result
+        && code != 0
+    {
+        delete_ctr_pod(pod_name).await;
+        return Err(step_err(format!("ctr images import failed: {stderr}")));
     }
 
     // Find the imported image name and tag it.

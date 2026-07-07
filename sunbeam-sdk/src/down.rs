@@ -1,6 +1,6 @@
 //! Cluster tear-down — deletes all Sunbeam-managed namespaces.
 
-use crate::error::{Result, SunbeamError};
+use crate::error::Result;
 use crate::{debug, info};
 use kube::api::{Api, Patch, PatchParams};
 
@@ -93,7 +93,7 @@ pub async fn cmd_down(
 
     for ns in &to_delete {
         info!(logger, "Deleting namespace...", ns = ns);
-        match ns_api.delete(*ns, &dp).await {
+        match ns_api.delete(ns, &dp).await {
             Ok(_) => {
                 info!(logger, "  deletion started.", ns = ns);
             }

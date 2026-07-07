@@ -332,7 +332,7 @@ impl StepBody for WaitForCertManagerWebhook {
                             .status
                             .as_ref()
                             .and_then(|s| s.conditions.as_ref())
-                            .map_or(false, |conds| {
+                            .is_some_and(|conds| {
                                 conds
                                     .iter()
                                     .any(|c| c.type_ == "Available" && c.status == "True")
@@ -362,7 +362,7 @@ impl StepBody for WaitForCertManagerWebhook {
                             .status
                             .as_ref()
                             .and_then(|s| s.conditions.as_ref())
-                            .map_or(false, |conds| {
+                            .is_some_and(|conds| {
                                 conds
                                     .iter()
                                     .any(|c| c.type_ == "Available" && c.status == "True")

@@ -78,10 +78,9 @@ where
                 if let Some(fields) = span
                     .extensions()
                     .get::<tracing_subscriber::fmt::FormattedFields<N>>()
+                    && !fields.is_empty()
                 {
-                    if !fields.is_empty() {
-                        write!(writer, "{} ", fields)?;
-                    }
+                    write!(writer, "{} ", fields)?;
                 }
             }
         }

@@ -197,8 +197,8 @@ pub async fn cmd_update(logger: &crate::logger::Logger) -> Result<()> {
 ///
 /// This function never blocks for long and never returns errors — it silently
 /// returns None on any failure.
-#[tracing::instrument(skip(logger))]
-pub async fn check_update_background(logger: &crate::logger::Logger) -> Option<String> {
+#[tracing::instrument(skip(_logger))]
+pub async fn check_update_background(_logger: &crate::logger::Logger) -> Option<String> {
     // Read cache
     let cache_path = update_cache_path();
     if let Ok(data) = fs::read_to_string(&cache_path)

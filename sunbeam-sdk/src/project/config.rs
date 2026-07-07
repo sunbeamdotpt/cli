@@ -168,11 +168,11 @@ impl ProjectConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_ctx(|| format!("reading {}", path.display()))?;
-        Self::from_str(&text).with_ctx(|| format!("parsing {}", path.display()))
+        Self::from_yaml(&text).with_ctx(|| format!("parsing {}", path.display()))
     }
 
     /// Parse and validate from a YAML string.
-    pub fn from_str(text: &str) -> Result<Self> {
+    pub fn from_yaml(text: &str) -> Result<Self> {
         let cfg: ProjectConfig = serde_yaml::from_str(text)?;
         cfg.validate()?;
         Ok(cfg)
@@ -259,7 +259,7 @@ schema: 1
 project:
   name: wfe
 ";
-        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        let cfg = ProjectConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.project.name, "wfe");
         assert!(cfg.targets.is_empty());
         assert!(cfg.deps.projects.is_empty());
@@ -296,7 +296,7 @@ tenant:
 outputs:
   - target/release/sol
 "#;
-        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        let cfg = ProjectConfig::from_yaml(yaml).unwrap();
         assert_eq!(cfg.project.name, "sol");
         assert_eq!(cfg.project.kind.as_deref(), Some("rust-bin"));
         assert_eq!(cfg.deps.projects, vec!["wfe", "cli"]);
@@ -344,7 +344,7 @@ schema: 1
 project:
   name: x
 ";
-        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        let cfg = ProjectConfig::from_yaml(yaml).unwrap();
         for v in STANDARD_VERBS {
             assert!(matches!(cfg.target(v), Target::Skip(_)));
             assert!(!cfg.has_target(v));
@@ -358,7 +358,7 @@ schema: 2
 project:
   name: x
 ";
-        let err = ProjectConfig::from_str(yaml).unwrap_err();
+        let err = ProjectConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("schema"));
     }
 
@@ -374,7 +374,7 @@ targets:
   coverage:
     exec: [cargo, llvm-cov]
 ";
-        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        let cfg = ProjectConfig::from_yaml(yaml).unwrap();
         assert!(cfg.has_target("seed"));
         assert!(cfg.has_target("coverage"));
         assert!(!is_standard_verb("seed"));
@@ -391,7 +391,7 @@ targets:
   bad verb:
     exec: do-it
 ";
-        let err = ProjectConfig::from_str(yaml).unwrap_err();
+        let err = ProjectConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("invalid target verb"));
     }
 
@@ -405,7 +405,7 @@ targets:
   build:
     exec: ""
 "#;
-        let err = ProjectConfig::from_str(yaml).unwrap_err();
+        let err = ProjectConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("empty exec"));
     }
 
@@ -416,7 +416,7 @@ schema: 1
 project:
   name: ""
 "#;
-        let err = ProjectConfig::from_str(yaml).unwrap_err();
+        let err = ProjectConfig::from_yaml(yaml).unwrap_err();
         assert!(err.to_string().contains("name"));
     }
 
@@ -431,7 +431,7 @@ tenant:
   replicas: 3
   image: ghcr.io/x/y
 ";
-        let cfg = ProjectConfig::from_str(yaml).unwrap();
+        let cfg = ProjectConfig::from_yaml(yaml).unwrap();
         let t = cfg.tenant.unwrap();
         assert_eq!(t.namespace.as_deref(), Some("foo"));
         assert_eq!(t.extra.get("replicas").and_then(|v| v.as_u64()), Some(3));

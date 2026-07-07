@@ -446,13 +446,13 @@ async fn resolve_assignee_emails(assignees: &mut [serde_json::Value]) -> Result<
         else {
             continue;
         };
-        if let Some(email) = email_map.get(subject) {
-            if let Some(obj) = assignee.as_object_mut() {
-                obj.insert(
-                    "email".to_string(),
-                    serde_json::Value::String(email.clone()),
-                );
-            }
+        if let Some(email) = email_map.get(subject)
+            && let Some(obj) = assignee.as_object_mut()
+        {
+            obj.insert(
+                "email".to_string(),
+                serde_json::Value::String(email.clone()),
+            );
         }
     }
     Ok(())

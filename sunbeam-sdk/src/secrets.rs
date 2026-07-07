@@ -106,8 +106,9 @@ pub(crate) fn rand_string_32() -> String {
 // ── Port-forward helper ─────────────────────────────────────────────────────
 
 /// Port-forward guard — cancels the background forwarder on drop.
-pub(crate) struct PortForwardGuard {
+pub struct PortForwardGuard {
     _abort_handle: tokio::task::AbortHandle,
+    /// Local TCP port bound for the port-forward.
     pub local_port: u16,
 }
 
@@ -119,7 +120,7 @@ impl Drop for PortForwardGuard {
 
 /// Open a kube-rs port-forward to `pod_name` in `namespace` on `remote_port`.
 /// Binds a local TCP listener and proxies connections to the pod.
-pub(crate) async fn port_forward(
+pub async fn port_forward(
     namespace: &str,
     pod_name: &str,
     remote_port: u16,

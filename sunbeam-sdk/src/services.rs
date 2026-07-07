@@ -456,8 +456,8 @@ pub async fn cmd_logs(logger: &crate::logger::Logger, target: &str, follow: bool
 }
 
 /// Print raw pod output in YAML or JSON format.
-#[tracing::instrument(skip(logger, target, output))]
-pub async fn cmd_get(logger: &crate::logger::Logger, target: &str, output: &str) -> Result<()> {
+#[tracing::instrument(skip(_logger, target, output))]
+pub async fn cmd_get(_logger: &crate::logger::Logger, target: &str, output: &str) -> Result<()> {
     let (ns_opt, name_opt) = parse_target(Some(target))?;
     let ns = match ns_opt {
         Some(n) if !n.is_empty() => n,

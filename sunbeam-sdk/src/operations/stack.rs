@@ -180,8 +180,8 @@ pub async fn apply(ws: &WorkspaceConfig, workspace_root: &Path, stack_name: &str
 // ---------------------------------------------------------------------------
 
 /// Diff.
-pub fn diff<'a>(
-    ws: &'a WorkspaceConfig,
+pub fn diff(
+    ws: &WorkspaceConfig,
     workspace_root: &Path,
     left: &str,
     right: Option<&str>,
@@ -226,7 +226,7 @@ pub fn diff<'a>(
                         let abs_path = workspace_root.join(&entry.repo.path);
                         let abs_str = abs_path.to_string_lossy();
                         match std::process::Command::new("git")
-                            .args(["-C", &abs_str.to_string(), "rev-parse", "HEAD"])
+                            .args(["-C", abs_str.as_ref(), "rev-parse", "HEAD"])
                             .output()
                         {
                             Err(_) => None,

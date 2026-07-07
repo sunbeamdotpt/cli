@@ -4,11 +4,20 @@ use tracing::field::{Field, Visit};
 
 /// Visitor that extracts the message and remaining fields into strings.
 pub struct FieldVisitor {
+    /// Extracted message field value.
     pub message: String,
+    /// Extracted structured fields as (name, value) pairs.
     pub fields: Vec<(String, String)>,
 }
 
+impl Default for FieldVisitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FieldVisitor {
+    /// Create a new, empty visitor.
     pub fn new() -> Self {
         Self {
             message: String::new(),

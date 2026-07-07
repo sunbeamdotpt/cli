@@ -27,6 +27,7 @@ impl SortedGroups {
         self.0.iter().map(|g| g.len()).sum()
     }
 
+    /// True if there are no projects in any group.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

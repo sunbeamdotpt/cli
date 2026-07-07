@@ -11,6 +11,7 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 // Bring the generated Tonic/Prost client stubs into this module.
 // The generated module suppresses style lints for machine-produced code.
+#[allow(clippy::large_enum_variant)]
 mod generated;
 
 /// Re-export the generated clients so subcommand modules can use them directly.

@@ -60,7 +60,7 @@ fn main() {
         "    clippy::undocumented_unsafe_blocks,\n",
         "    unused_mut,\n",
         "    unused_imports,\n",
-        "    unused_variables,\n",
+        "    unused_variables\n",
         ")]\n\n",
         "include!(concat!(env!(\"OUT_DIR\"), \"/sunbeam.kanban.v1.rs\"));\n"
     );

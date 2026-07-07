@@ -104,7 +104,10 @@ pub fn build() -> WorkflowDefinition {
         .parallel(|p| {
             let mut p = p;
             for cfg in kv_service_configs::all_service_configs() {
-                let service = cfg["service"].as_str().unwrap().to_string();
+                let service = cfg["service"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 p = p.branch(|b| {
                     let seed_id = b.add_step_typed::<SeedKVPath>(
                         &format!("seed-{service}"), Some(cfg.clone()));
