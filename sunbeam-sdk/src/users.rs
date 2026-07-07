@@ -286,6 +286,75 @@ fn identity_id(identity: &Value) -> Result<String> {
         .ok_or_else(|| SunbeamError::identity("Identity missing 'id' field"))
 }
 
+/// Extract the email address from a Kratos identity JSON value.
+fn identity_email(identity: &Value) -> String {
+    identity
+        .get("traits")
+        .and_then(|t| t.get("email"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Format a Kratos identity ID as the kanban OIDC subject.
+fn subject_from_identity_id(id: &str) -> String {
+    format!("user:{id}")
+}
+
+/// Parse a kanban OIDC subject string, returning the Kratos identity ID if present.
+fn identity_id_from_subject(subject: &str) -> Option<&str> {
+    if let Some(id) = subject.strip_prefix("user:") {
+        return Some(id);
+    }
+    // If it already looks like a UUID, treat it as the identity ID directly.
+    if subject.len() == 36 && subject.chars().filter(|&c| c == '-').count() == 4 {
+        return Some(subject);
+    }
+    None
+}
+
+/// Return the configured Kratos admin API base URL.
+///
+/// Reads `kratos_admin_url` from the active context. The URL must be
+/// configured explicitly; no domain-based default is assumed.
+pub fn kratos_admin_base_url() -> Result<String> {
+    let ctx = crate::config::active_context();
+    let url = ctx.kratos_admin_url.trim_end_matches('/').to_string();
+    if url.is_empty() {
+        return Err(SunbeamError::config(
+            "kratos-admin-url is not set in the active context",
+        ));
+    }
+    Ok(url)
+}
+
+/// Resolve an email address to the OIDC subject used by the kanban backend.
+///
+/// Calls the Kratos admin `/admin/identities` API directly. Configure the
+/// endpoint with the `kratos-admin-url` field in the active context.
+pub async fn resolve_subject_for_email(email: &str) -> Result<String> {
+    let base_url = kratos_admin_base_url()?;
+    let identity = find_identity(&base_url, email, true)
+        .await?
+        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {email}")))?;
+    let id = identity_id(&identity)?;
+    Ok(subject_from_identity_id(&id))
+}
+
+/// Resolve an OIDC subject to the user's email address.
+///
+/// Calls the Kratos admin `/admin/identities/{id}` API directly. Configure the
+/// endpoint with the `kratos-admin-url` field in the active context.
+pub async fn resolve_email_for_subject(subject: &str) -> Result<String> {
+    let id = identity_id_from_subject(subject)
+        .ok_or_else(|| SunbeamError::identity(format!("Unrecognised subject format: {subject}")))?;
+    let base_url = kratos_admin_base_url()?;
+    let identity = find_identity(&base_url, id, true)
+        .await?
+        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {subject}")))?;
+    Ok(identity_email(&identity))
+}
+
 // ---------------------------------------------------------------------------
 // Public commands
 // ---------------------------------------------------------------------------

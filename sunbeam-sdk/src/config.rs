@@ -183,6 +183,15 @@ pub struct Context {
     #[serde(default, rename = "acme-email")]
     pub acme_email: String,
 
+    /// Kratos admin API base URL. Used by the kanban module to resolve SSO
+    /// subjects to email addresses.
+    #[serde(
+        default,
+        rename = "kratos-admin-url",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub kratos_admin_url: String,
+
     /// Profile reference: name string, inline object, or omitted.
     #[serde(default, skip_serializing_if = "ProfileRef::is_none")]
     pub profile: ProfileRef,
