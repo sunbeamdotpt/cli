@@ -8,13 +8,25 @@
 
 use std::io::IsTerminal;
 
+mod cli;
+mod kanban;
+mod operations_cli;
+mod output;
+mod profiles_cli;
+mod project_cli;
+mod secrets_cli;
+mod service_cmds;
+mod vcs;
+mod workflows_cmd;
+
 #[tokio::main]
 async fn main() {
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
+    if let Err(e) = rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        eprintln!("Failed to install rustls crypto provider: {e:?}");
+        std::process::exit(1);
+    }
 
-    let cli = <sunbeam_sdk::cli::Cli as clap::Parser>::parse();
+    let cli = <cli::Cli as clap::Parser>::parse();
 
     // Keep a tracing subscriber as a fallback for any remaining tracing::
     // calls in the codebase until the migration is fully complete.
@@ -82,7 +94,7 @@ async fn main() {
         log_mode = format!("{:?}", cli.log_mode)
     );
 
-    match sunbeam_sdk::cli::dispatch(&logger, cli).await {
+    match cli::dispatch(&logger, cli).await {
         Ok(()) => {}
         Err(e) => {
             let code = e.exit_code();

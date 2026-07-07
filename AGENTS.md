@@ -149,7 +149,7 @@ cargo doc --workspace --no-deps
 
 ### Entry Point
 
-`src/main.rs` installs the rustls aws-lc-rs crypto provider, parses CLI args, initializes the tracing subscriber (with `LogMode::Line` / `Json` / `Threaded`), sets a panic hook, and dispatches to `sunbeam_sdk::cli::dispatch(cli)`. On error it prints the error chain and exits with the error's exit code.
+`src/main.rs` installs the rustls aws-lc-rs crypto provider, parses CLI args, initializes the tracing subscriber (with `LogMode::Line` / `Json` / `Threaded`), sets a panic hook, and dispatches to `cli::dispatch(cli)`. On error it prints the error chain and exits with the error's exit code.
 
 ### CLI Dispatch
 
