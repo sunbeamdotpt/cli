@@ -1,38 +1,19 @@
 //! Name-to-ID resolution helpers for the Kanban CLI UX layer.
 //!
-//! Everywhere the CLI currently accepts a raw UUID/ULID identifier, users can
-//! instead supply a human-readable name. If the argument already looks like an
-//! identifier it is returned unchanged; otherwise the helper lists the visible
-//! entities and matches by name (case-insensitive exact match).
+//! Everywhere the CLI accepts a raw ULID identifier, users can instead supply a
+//! human-readable name. If the argument already looks like an identifier it is
+//! returned unchanged; otherwise the helper lists the visible entities and
+//! matches by name (case-insensitive exact match).
 
 use crate::error::{Result, ResultExt, SunbeamError};
 
 /// Returns true if `raw` already looks like a backend identifier.
 ///
-/// IDs are recognised in three shapes:
-/// - UUIDs (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)
+/// IDs are recognised in two shapes:
 /// - ULIDs (Crockford base32, 26 chars)
 /// - Prefixed test/production IDs such as `proj_1`, `board_abc123`
 pub fn looks_like_id(raw: &str) -> bool {
-    is_uuid(raw) || is_ulid(raw) || is_prefixed_id(raw)
-}
-
-fn is_uuid(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    if bytes.len() != 36 {
-        return false;
-    }
-    let separators = [8, 13, 18, 23];
-    for (i, &b) in bytes.iter().enumerate() {
-        if separators.contains(&i) {
-            if b != b'-' {
-                return false;
-            }
-        } else if !b.is_ascii_hexdigit() {
-            return false;
-        }
-    }
-    true
+    is_ulid(raw) || is_prefixed_id(raw)
 }
 
 fn is_ulid(s: &str) -> bool {
@@ -516,12 +497,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn looks_like_id_recognises_uuids() {
-        assert!(looks_like_id("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(looks_like_id("550E8400-E29B-41D4-A716-446655440000"));
-    }
-
-    #[test]
     fn looks_like_id_recognises_ulids() {
         assert!(looks_like_id("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
     }
@@ -537,10 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn looks_like_id_rejects_names() {
+    fn looks_like_id_rejects_names_and_uuids() {
         assert!(!looks_like_id("Sunbeam"));
         assert!(!looks_like_id("Backlog"));
         assert!(!looks_like_id("Fix frontend crash"));
+        assert!(!looks_like_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(!looks_like_id("550E8400-E29B-41D4-A716-446655440000"));
     }
 
     #[test]
