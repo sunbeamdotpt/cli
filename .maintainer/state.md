@@ -23,6 +23,11 @@ timestamp: 2026-07-21T00:00:00Z
   deliberately untouched until sbbb drops Ory (see Blocked).
 - Build/clippy/fmt/nextest green (680 tests, ~82.7% line coverage — ceiling
   analysis in known-issues).
+- **Homebrew tap** (`../tap`, UNCOMMITTED): `Formula/sunbeam.rb` written —
+  buf+rust build deps, `SUNBEAM_SSO_CLIENT_ID` baked at build time when set
+  (caveats otherwise), shell completions + 168 man pages installed.
+  **sha256 is a placeholder** until v3.0.0 is tagged; then `brew audit`/
+  `brew test` and commit. Tap README lists the formula.
 - **Logger migration still mid-flight**: `main.rs` keeps a tracing subscriber
   as fallback (`logger-design.md`).
 
