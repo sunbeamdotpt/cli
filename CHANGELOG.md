@@ -7,6 +7,31 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.1.0] - 2026-07-22
+
+### Changed
+
+- **Logging is opt-in:** the default level is now `warn` — commands emit only
+  data output plus warnings/errors unless `-v` (info), `-vv` (debug), or
+  `-vvv` (trace) is passed; `--quiet` = error. Logging unifies on a single
+  stderr pipeline. Piping (`sunbeam kanban ... | jq`) is clean by default.
+- **Breaking (kanban):** entity IDs are positional across the kanban command
+  tree; modifiers stay flags (`board create <PROJECT>`, `card list <BOARD>`, …).
+- Kanban identifiers resolve everywhere: exact ULID, ULID prefix,
+  case-insensitive name, and project key prefixes (e.g. `TRI`).
+- Kanban errors are actionable: ambiguity lists candidates, not-found lists
+  available names, and column resolution fails client-side with the board's
+  valid columns.
+- Data previously logged at info level (`auth status`, `user create/onboard`
+  IDs, `secrets init`/`unseal` results) now prints to stdout as data.
+
+### Added
+
+- One-shot retry on cold-start kanban transport failures (client rebuilt per
+  attempt; mutations are safe via idempotency keys).
+- `card create` defaults to the board's sole column when `--column` is omitted.
+- Regression test locking `kanban auth whoami` expiry reporting.
+
 ## [3.0.0] - 2026-07-22
 
 ### Changed
