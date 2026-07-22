@@ -6,8 +6,6 @@
 // just keeps syntax consistent
 #![deny(clippy::needless_borrow)]
 
-use std::io::IsTerminal;
-
 mod auth;
 mod checks;
 mod cli;
@@ -43,57 +41,30 @@ async fn main() {
 
     let cli = <cli::Cli as clap::Parser>::parse();
 
-    // Keep a tracing subscriber as a fallback for any remaining tracing::
-    // calls in the codebase until the migration is fully complete.
-    let base_filter = "sunbeam=info,tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,kube_client::client::builder=off,warn";
-    let level_override = if cli.quiet {
-        Some(format!(
-            "sunbeam=warn,{}",
-            &base_filter["sunbeam=info,".len()..]
-        ))
+    // Logging is opt-in: the default level is WARN so stdout/stderr stay
+    // script-safe; -v/-vv/-vvv raise sunbeam+sdk to info/debug/trace and
+    // --quiet drops to error. RUST_LOG overrides everything (handled inside
+    // init_subscriber). Both the sdk Logger macros (via TracingSink) and
+    // direct tracing:: calls flow through this one subscriber, which renders
+    // the --log-mode line/json/threaded formats to stderr.
+    let base = "tonic=off,hyper=off,h2=off,tower=off,reqwest=off,kube_client::client::tls=off,kube_client::client::builder=off,warn";
+    let level = if cli.quiet {
+        "error"
     } else {
         match cli.verbose {
-            0 => None,
-            1 => Some(format!(
-                "sunbeam=debug,{}",
-                &base_filter["sunbeam=info,".len()..]
-            )),
-            _ => Some(format!(
-                "sunbeam=trace,{}",
-                &base_filter["sunbeam=info,".len()..]
-            )),
+            0 => "warn",
+            1 => "info",
+            2 => "debug",
+            _ => "trace",
         }
     };
-    if let Err(e) = sdk::logging::init_subscriber(cli.log_mode, level_override.as_deref()) {
-        eprintln!("Failed to initialize fallback logger: {e}");
+    let filter = format!("sunbeam={level},sdk={level},{base}");
+    if let Err(e) = sdk::logging::init_subscriber(cli.log_mode, Some(&filter)) {
+        eprintln!("Failed to initialize logging: {e}");
         std::process::exit(1);
     }
 
-    let min_level = if cli.quiet {
-        sdk::logger::Level::Warn
-    } else {
-        match cli.verbose {
-            0 => sdk::logger::Level::Info,
-            1 => sdk::logger::Level::Debug,
-            _ => sdk::logger::Level::Trace,
-        }
-    };
-
-    let logger = match cli.log_mode {
-        sdk::logging::LogMode::Line => {
-            sdk::logger::Logger::new(sdk::logger::LineSink::new().with_level(min_level))
-        }
-        sdk::logging::LogMode::Json => {
-            sdk::logger::Logger::new(sdk::logger::JsonSink::new().with_level(min_level))
-        }
-        sdk::logging::LogMode::Threaded => {
-            if std::io::stderr().is_terminal() {
-                sdk::logger::Logger::new(sdk::logger::ThreadedSink::new().with_level(min_level))
-            } else {
-                sdk::logger::Logger::new(sdk::logger::LineSink::new().with_level(min_level))
-            }
-        }
-    };
+    let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
 
     std::panic::set_hook(Box::new(|info| {
         eprintln!("panic: {info}");

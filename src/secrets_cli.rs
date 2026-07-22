@@ -569,8 +569,10 @@ async fn cmd_status(client: &BaoClient) -> Result<()> {
 
 async fn cmd_init(client: &BaoClient) -> Result<()> {
     let resp = client.init(1, 1).await?;
-    tracing::info!("OpenBao initialized.");
-    tracing::info!(
+    // The root token is the command's data output: stdout, not the log
+    // pipeline, so it stays visible at the default WARN log level.
+    println!("OpenBao initialized.");
+    println!(
         "Root token: {}",
         resp.keys_base64.first().unwrap_or(&"???".to_string())
     );
@@ -580,9 +582,9 @@ async fn cmd_init(client: &BaoClient) -> Result<()> {
 async fn cmd_unseal(client: &BaoClient, key: &str) -> Result<()> {
     let resp = client.unseal(key).await?;
     if resp.sealed {
-        tracing::info!("Still sealed — more unseal keys needed.");
+        println!("Still sealed — more unseal keys needed.");
     } else {
-        tracing::info!("Unsealed.");
+        println!("Unsealed.");
     }
     Ok(())
 }

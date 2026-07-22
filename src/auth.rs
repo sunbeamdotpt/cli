@@ -787,6 +787,9 @@ pub async fn cmd_auth_logout() -> Result<()> {
 }
 
 /// Print current auth status.
+///
+/// The status lines are the command's data output, so they go to stdout via
+/// `println!` rather than the log pipeline (hidden by default at WARN).
 #[tracing::instrument]
 pub async fn cmd_auth_status() -> Result<()> {
     let domain = sdk::config::domain();
@@ -809,23 +812,23 @@ pub async fn cmd_auth_status() -> Result<()> {
                 .unwrap_or_else(|| "unknown".to_string());
 
             if expired {
-                tracing::info!(
+                println!(
                     "Logged in as {identity} (token expired at {})",
                     tokens.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
                 );
                 if !tokens.refresh_token.is_empty() {
-                    tracing::info!("Token can be refreshed automatically on next use");
+                    println!("Token can be refreshed automatically on next use");
                 }
             } else {
-                tracing::info!(
+                println!(
                     "Logged in as {identity} (token valid until {})",
                     tokens.expires_at.format("%Y-%m-%d %H:%M:%S UTC")
                 );
             }
-            tracing::info!("Domain: {domain}");
+            println!("Domain: {domain}");
         }
         None => {
-            tracing::info!("Not logged in. Run `sunbeam auth login` to authenticate.");
+            println!("Not logged in. Run `sunbeam auth login` to authenticate.");
         }
     }
     Ok(())

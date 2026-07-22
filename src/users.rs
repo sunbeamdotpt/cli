@@ -97,10 +97,13 @@ async fn generate_recovery(client: &AuthClient, identity_id: &str) -> Result<iam
 }
 
 /// Print the recovery link + token to the user.
+///
+/// This is the command's data output (stdout), not a log line — it must stay
+/// visible at the default WARN log level.
 fn print_recovery(link: &iam::RecoveryLink) {
-    tracing::info!("Recovery link (valid 24h):");
+    println!("Recovery link (valid 24h):");
     println!("{}", link.recovery_link);
-    tracing::info!("Recovery token (enter on the page above):");
+    println!("Recovery token (enter on the page above):");
     println!("{}", link.recovery_token);
 }
 
@@ -238,7 +241,8 @@ pub async fn cmd_user_create(email: &str, name: &str, schema_id: &str) -> Result
         .into_owned();
 
     let iid = identity.id.clone();
-    tracing::info!("Created identity: {iid}");
+    // The new identity's ID is command output (stdout), not a log line.
+    println!("Created identity: {iid}");
 
     let link = generate_recovery(&client, &iid).await?;
     print_recovery(&link);
@@ -545,7 +549,7 @@ pub async fn cmd_user_onboard(
         .await?;
     }
 
-    tracing::info!("Identity ID: {iid}");
+    println!("Identity ID: {iid}");
     print_recovery(&link);
     Ok(())
 }
