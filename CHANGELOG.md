@@ -1,5 +1,52 @@
 # Changelog
 
+All notable changes to this project are documented in this file. The format
+follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+> **Note:** v2.x history was not maintained in this file. The changelog
+> restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
+> for v2.x archeology.
+
+## [3.0.0] - 2026-07-22
+
+### Changed
+
+- **Breaking:** the in-tree `sunbeam-sdk` crate is replaced by the external
+  [`sdk`](https://github.com/sunbeamdotpt/sdk) crate, pinned as a git-tag
+  dependency (v3.1.1).
+- **Breaking:** the kanban client moved to ConnectRPC; some request and type
+  names changed.
+- **Breaking:** `user offboard` is now destructive — it revokes all sessions
+  and deletes the identity (the sso-gateway has no disable/state API).
+- **Breaking:** `auth login` uses the sso-gateway OAuth2 device flow only.
+
+### Removed
+
+- `project`, `operations`/`wt`, and `vcs` verbs, plus the project shortcut
+  verbs (`build`, `test`, `lint`, `fmt`, `package`, `deploy`, `dev`, `clean`,
+  `doc`). The project/operations library code remains as internal modules used
+  by the `up` workflow.
+- `user disable`, `user enable`, and `user set-password` (the sso-gateway IAM
+  exposes no identity-state or admin credential-set RPC).
+- The in-tree SDK crate and the cargo workspace — the CLI is now a single bin
+  crate depending on the external `sdk`.
+
+### Added
+
+- Man page generation: hidden `sunbeam __man <dir>` renders the full command
+  tree (root + every subcommand, recursively) as section-1 man pages.
+- `kanban auth whoami` and `kanban auth logout`.
+- Integration test suites for OpenBao, SsoGateway, Headscale, the kanban full
+  stack, and profiles (testcontainers via the sdk `testing` feature; they skip
+  cleanly without Docker).
+- In-tree `wfectl` command layer under `sunbeam workflow` (local + remote WFE
+  instance control).
+- sso-gateway SSO for runtime authentication and identity management.
+
+### Fixed
+
+- Kanban `--visibility` short-flag collision with the global `--verbose` flag.
+
 ## v1.1.2
 
 - 30dc4f9 fix(opensearch): make ML model registration idempotent

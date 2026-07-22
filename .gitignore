@@ -9,7 +9,6 @@ build/
 # Rust
 /target/
 /libstate.rlib
-sunbeam-sdk/src/kanban/client/generated.rs
 
 # Environment
 .envrc

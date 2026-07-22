@@ -1,0 +1,157 @@
+# release.yml — build binary artifacts and publish the GitHub release.
+#
+# Triggered by version tags (v*) pushed by the WFE CI pipeline (see
+# workflows.yaml — it tags from Cargo.toml on mainline), or manually via
+# workflow_dispatch to rebuild artifacts for an existing tag.
+#
+# Docs: docs/release.md (the release train process).
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to rebuild artifacts for (e.g. v3.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Platform-provisioned public SSO client ID, baked in at compile time
+  # (option_env! in src/auth.rs). Stored as a repo secret — never in git.
+  SUNBEAM_SSO_CLIENT_ID: ${{ secrets.SUNBEAM_SSO_CLIENT_ID }}
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.71.0"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.tag }}"
+            VERSION="${VERSION#v}"
+          fi
+          TARGET="${{ matrix.target }}"
+          BIN="target/${TARGET}/release/sunbeam"
+
+          strip "$BIN" || true
+
+          STAGE="sunbeam_${VERSION}_${TARGET}"
+          mkdir -p "$STAGE/man"
+          cp "$BIN" "$STAGE/sunbeam"
+
+          # Man pages, rendered from the clap tree by the built binary.
+          "$BIN" __man "$STAGE/man"
+          gzip "$STAGE"/man/*.1
+
+          # Shell completions.
+          for shell in bash zsh fish; do
+            "$BIN" completions "$shell" > "$STAGE/sunbeam.$shell"
+          done
+
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+
+          # Raw binary asset: what `sunbeam update` downloads (no archive
+          # extraction needed for self-replacement).
+          cp "$BIN" "sunbeam-raw-${TARGET}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunbeam-${{ matrix.target }}
+          path: |
+            sunbeam_*_*.tar.gz
+            sunbeam-raw-${{ matrix.target }}
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sunbeam-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          sha256sum sunbeam_*.tar.gz sunbeam-raw-* > checksums.txt
+          cat checksums.txt
+
+      - name: Source archive sha256 for the Homebrew tap
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.tag }}"
+            VERSION="${VERSION#v}"
+          fi
+          SHA=$(curl -sL "https://github.com/sunbeamdotpt/cli/archive/refs/tags/v${VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
+          {
+            echo "### Homebrew tap update"
+            echo ""
+            echo "\`\`\`ruby"
+            echo "sha256 \"${SHA}\""
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            sunbeam_*.tar.gz
+            sunbeam-raw-*
+            checksums.txt
+          generate_release_notes: true
