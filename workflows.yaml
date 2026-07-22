@@ -1,19 +1,22 @@
 # workflows.yaml -- sunbeam CLI CI pipeline
 #
 # Runs on every push via wfe-server webhook → ci workflow.
-# Workspace crates: the top-level `sunbeam` binary and `sunbeam-sdk`
-# (publishable library). Only `sunbeam-sdk` ships to the sunbeam cargo
-# registry. `sunbeam-net` is consumed as an external git dependency.
+# Single bin crate `sunbeam` (v3). Platform client logic lives in the
+# external `sdk` crate (git-tag dependency, github.com/sunbeamdotpt/sdk).
+#
+# PREREQUISITE: the sdk generates its ConnectRPC stubs at build time via
+# `buf export buf.build/sunbeamdotpt/kanban` — every step that compiles
+# (clippy, nextest) must install `buf` first (see &buf_install below) and
+# needs network access to buf.build.
 #
 # Binary distribution is handled out-of-band via `dist/` tarballs —
 # cross-compilation for darwin/linux isn't wired into this pipeline yet
 # (no Dockerfile, no `cross` runner), so the image step is intentionally
 # omitted. Revisit once we have a cross-build story.
 #
-# sunbeam-sdk integration tests under sunbeam-sdk/tests/ use
-# docker-compose and are NOT run in CI — they want real services that
-# wfe-provided service pods would have to mirror by hand. Lib tests
-# only for now.
+# Integration tests under tests/ use testcontainers (via the sdk `testing`
+# feature) and skip cleanly when Docker is unavailable — safe to run in CI
+# either way.
 #
 # === Prerequisites ===
 #
@@ -53,6 +56,12 @@ _templates:
     cpu: "4"
     timeout: 60m
     env: *ci_env
+
+  # NOTE: steps that compile must install `buf` first (sdk build.rs codegen).
+  # YAML aliases don't expand inside `run: |` blocks, so these two lines are
+  # inlined in each compiling step:
+  #   curl -sSfL "https://github.com/bufbuild/buf/releases/download/v1.71.0/buf-Linux-$(uname -m)" -o /usr/local/bin/buf
+  #   chmod +x /usr/local/bin/buf
 
 # --- Workflows ---
 
@@ -120,44 +129,35 @@ workflows:
           <<: *ci_long_config
           run: |
             set -euo pipefail
+            curl -sSfL "https://github.com/bufbuild/buf/releases/download/v1.71.0/buf-Linux-$(uname -m)" -o /usr/local/bin/buf
+            chmod +x /usr/local/bin/buf
             cd /workspace/cli
-            cargo clippy --workspace --all-targets -- -D warnings
+            cargo clippy --all-targets -- -D warnings
             echo "##wfe[output clippy_ok=true]"
 
-  # === test-unit: lib tests across the workspace (no integration) ===
+  # === test-unit: bin-crate tests (integration suites skip without docker) ===
 
   - id: test-unit
     name: Unit Tests
     version: 1
     outputs:
-      sunbeam_ok: bool
-      sdk_ok: bool
+      tests_ok: bool
     steps:
-      - name: sunbeam-tests
+      - name: nextest
         type: kubernetes
         outputs:
-          - name: sunbeam_ok
+          - name: tests_ok
         config:
           <<: *ci_long_config
           run: |
             set -euo pipefail
+            curl -sSfL "https://github.com/bufbuild/buf/releases/download/v1.71.0/buf-Linux-$(uname -m)" -o /usr/local/bin/buf
+            chmod +x /usr/local/bin/buf
             cd /workspace/cli
-            cargo nextest run -p sunbeam --lib
-            echo "##wfe[output sunbeam_ok=true]"
+            cargo nextest run
+            echo "##wfe[output tests_ok=true]"
 
-      - name: sdk-tests
-        type: kubernetes
-        outputs:
-          - name: sdk_ok
-        config:
-          <<: *ci_long_config
-          run: |
-            set -euo pipefail
-            cd /workspace/cli
-            cargo nextest run -p sunbeam-sdk --lib
-            echo "##wfe[output sdk_ok=true]"
-
-  # === tag: read workspace version from the top-level Cargo.toml ===
+  # === tag: read version from the top-level Cargo.toml ===
 
   - id: tag
     name: Tag Release
@@ -216,31 +216,10 @@ workflows:
             git push origin "$TAG"
             echo "##wfe[output tag_created=true]"
 
-  # === publish: sunbeam-sdk only (the binary doesn't publish) ===
-
-  - id: publish
-    name: Publish
-    version: 1
-    outputs:
-      published: bool
-    steps:
-      - name: publish-sdk
-        type: kubernetes
-        outputs:
-          - name: published
-        config:
-          <<: *ci_long_config
-          run: |
-            set -euo pipefail
-            cd /workspace/cli
-            cargo publish -p sunbeam-sdk --registry sunbeam 2>&1 || echo "Already published"
-            echo "##wfe[output published=true]"
-        error_behavior:
-          type: retry
-          interval: 10s
-          max_retries: 2
-
   # === release: create Gitea release ===
+  # (Nothing is published to a cargo registry from this repo anymore — the
+  # sdk crate lives in its own repo. The tag + Gitea release are the
+  # distribution record; binaries are attached out-of-band.)
 
   - id: release
     name: Gitea Release
@@ -266,7 +245,7 @@ workflows:
               --repo studio/cli \
               --tag "$TAG" \
               --title "$TAG" \
-              --note "sunbeam-sdk ${VERSION} published to the sunbeam registry. Binaries are built out-of-band and attached manually." 2>&1; then
+              --note "sunbeam CLI ${VERSION}. Binaries are built out-of-band and attached manually." 2>&1; then
               echo "##wfe[output release_created=true]"
             else
               echo "##wfe[output release_created=false]"
@@ -284,7 +263,6 @@ workflows:
       branch: string?
     outputs:
       version: string
-      published: bool
       released: bool
 
     steps:
@@ -308,8 +286,7 @@ workflows:
       - name: run-tests
         type: workflow
         outputs:
-          - name: sunbeam_ok
-          - name: sdk_ok
+          - name: tests_ok
         config:
           workflow: test-unit
           version: 1
@@ -324,17 +301,6 @@ workflows:
           - name: tag_created
         config:
           workflow: tag
-          version: 1
-
-      - name: run-publish
-        type: workflow
-        when:
-          field: .outputs.tag_created
-          equals: true
-        outputs:
-          - name: published
-        config:
-          workflow: publish
           version: 1
 
       - name: run-release
