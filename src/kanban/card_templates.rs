@@ -11,7 +11,7 @@ use super::{fmt_ts, mutating_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Card template actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum CardTemplateAction {
     /// List card templates.
     List {

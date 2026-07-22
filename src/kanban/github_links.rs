@@ -10,7 +10,7 @@ use super::{fmt_ts, mutating_options, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// GitHub link actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum GitHubAction {
     /// Link a GitHub issue/PR to a card.
     Link {
@@ -22,7 +22,6 @@ pub enum GitHubAction {
     /// Unlink a GitHub issue/PR.
     Unlink {
         /// Card ID.
-        #[arg(short, long)]
         card: String,
         /// Link ID.
         link_id: String,
@@ -35,7 +34,6 @@ pub enum GitHubAction {
     /// Search GitHub issues.
     Search {
         /// Card ID.
-        #[arg(short, long)]
         card: String,
         /// Repository: owner/repo.
         repo: String,
@@ -45,7 +43,6 @@ pub enum GitHubAction {
     /// Resync a link.
     Resync {
         /// Card ID.
-        #[arg(short, long)]
         card: String,
         /// Link ID.
         link_id: String,

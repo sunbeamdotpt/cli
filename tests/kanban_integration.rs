@@ -173,7 +173,6 @@ async fn kanban_cli_end_to_end() {
         &[
             "board",
             "create",
-            "--project",
             "Integration Test",
             "--name",
             "Sprint Board",
@@ -181,11 +180,7 @@ async fn kanban_cli_end_to_end() {
     );
     assert_eq!(board["name"], "Sprint Board");
 
-    let boards = json(
-        home,
-        &url,
-        &["board", "list", "--project", "Integration Test"],
-    );
+    let boards = json(home, &url, &["board", "list", "Integration Test"]);
     assert!(
         boards
             .as_array()
@@ -227,7 +222,6 @@ async fn kanban_cli_end_to_end() {
         &[
             "card",
             "create",
-            "--board",
             "Sprint Board",
             "--column",
             &todo_id,
@@ -239,7 +233,7 @@ async fn kanban_cli_end_to_end() {
     assert_eq!(card["column_id"], todo["id"]);
     let card_id = card["id"].as_str().unwrap().to_string();
 
-    let cards = json(home, &url, &["card", "list", "--board", "Sprint Board"]);
+    let cards = json(home, &url, &["card", "list", "Sprint Board"]);
     assert!(
         cards.as_array().unwrap().iter().any(|c| c["id"] == card_id),
         "card list should contain the created card: {cards}"

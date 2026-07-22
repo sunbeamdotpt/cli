@@ -11,7 +11,7 @@ use super::{fmt_ts, mutating_options, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Attachment actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum AttachmentAction {
     /// List attachments for a card.
     List {
@@ -28,7 +28,6 @@ pub enum AttachmentAction {
     /// Download an attachment.
     Download {
         /// Card ID.
-        #[arg(short, long)]
         card: String,
         /// Attachment ID.
         attachment_id: String,
@@ -38,7 +37,6 @@ pub enum AttachmentAction {
     /// Delete an attachment.
     Delete {
         /// Card ID.
-        #[arg(short, long)]
         card: String,
         /// Attachment ID.
         attachment_id: String,

@@ -11,14 +11,13 @@ use super::{fmt_ts, new_idempotency_key, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Card actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum CardAction {
     /// List cards.
     List {
         /// Board ID or name.
-        #[arg(short, long)]
         board: String,
-        /// Column ID.
+        /// Column ID or title.
         #[arg(short, long)]
         column: Option<String>,
     },
@@ -30,9 +29,8 @@ pub enum CardAction {
     /// Create a card.
     Create {
         /// Board ID or name.
-        #[arg(short, long)]
         board: String,
-        /// Column ID.
+        /// Column ID or title (defaults to the board's only column).
         #[arg(short, long)]
         column: Option<String>,
         /// Title.
@@ -63,7 +61,7 @@ pub enum CardAction {
     Move {
         /// Card ID, title, or ref.
         card_id: String,
-        /// Destination column ID.
+        /// Destination column ID or title.
         #[arg(short, long)]
         column: String,
         /// Position within the column.
@@ -130,12 +128,11 @@ pub(crate) fn urgency_name(value: i32) -> String {
 }
 
 /// Card dependency actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum DependencyAction {
     /// Add a dependency.
     Add {
         /// Board ID or name.
-        #[arg(short, long)]
         board: String,
         /// Card ID, title, or ref.
         card_id: String,
@@ -145,7 +142,6 @@ pub enum DependencyAction {
     /// Remove a dependency.
     Remove {
         /// Board ID or name.
-        #[arg(short, long)]
         board: String,
         /// Card ID, title, or ref.
         card_id: String,
@@ -350,6 +346,14 @@ pub(crate) async fn run(
 ) -> Result<()> {
     match cmd {
         CardAction::List { board, column } => {
+            let column = match column {
+                Some(raw) => Some(
+                    super::resolve::NameResolver::new(client)
+                        .column(&board, &raw)
+                        .await?,
+                ),
+                None => None,
+            };
             let resp = client
                 .cards()
                 .list_cards_by_board_with_options(
@@ -403,12 +407,15 @@ pub(crate) async fn run(
             description,
             priority,
         } => {
+            let column = super::resolve::NameResolver::new(client)
+                .column_for_create(&board, column.as_deref())
+                .await?;
             let resp = client
                 .cards()
                 .create_card_with_options(
                     v1::CreateCardRequest {
                         board_id: board.clone(),
-                        column_id: column.unwrap_or_default(),
+                        column_id: column,
                         title,
                         description: description.unwrap_or_default(),
                         priority: priority
@@ -475,6 +482,26 @@ pub(crate) async fn run(
             column,
             position,
         } => {
+            // Resolve column titles against the card's current board.
+            let column = if super::resolve::looks_like_id(&column) {
+                column
+            } else {
+                let card = client
+                    .cards()
+                    .get_card_with_options(
+                        v1::GetCardRequest {
+                            card_id: card_id.clone(),
+                            ..Default::default()
+                        },
+                        object_id_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+                let board_id = required(card.card, "card")?.board_id;
+                super::resolve::NameResolver::new(client)
+                    .column(&board_id, &column)
+                    .await?
+            };
             let resp = client
                 .cards()
                 .move_card_with_options(

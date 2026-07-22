@@ -11,12 +11,11 @@ use super::{fmt_ts, new_idempotency_key, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Board actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum BoardAction {
     /// List boards.
     List {
-        /// Project ID.
-        #[arg(short, long)]
+        /// Project ID, key, or name.
         project: String,
     },
     /// Get a board.
@@ -26,8 +25,7 @@ pub enum BoardAction {
     },
     /// Create a board.
     Create {
-        /// Project ID.
-        #[arg(short, long)]
+        /// Project ID, key, or name.
         project: String,
         /// Board name.
         #[arg(short, long)]
@@ -105,7 +103,7 @@ pub(crate) fn visibility_name(value: i32) -> String {
 }
 
 /// Board column actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum ColumnAction {
     /// Add a column.
     Add {
@@ -229,30 +227,12 @@ struct BoardDetailOut {
 
 /// Resolve a column identifier from a raw string within a board.
 ///
-/// If `raw` is ID-shaped it is returned unchanged; otherwise the board detail
-/// is fetched and the unique column title match is returned.
+/// Thin wrapper over [`super::resolve::NameResolver::column`]; failures list
+/// the board's columns (title + id).
 async fn resolve_column_id(client: &KanbanClient, board_id: &str, raw: &str) -> Result<String> {
-    if super::resolve::looks_like_id(raw) {
-        return Ok(raw.to_string());
-    }
-    let resp = client
-        .boards()
-        .get_board(v1::GetBoardRequest {
-            board_id: board_id.to_string(),
-            ..Default::default()
-        })
-        .await?
-        .into_owned();
-    let matches: Vec<_> = resp
-        .detail
-        .into_option()
-        .unwrap_or_default()
-        .columns
-        .into_iter()
-        .filter(|c| super::resolve::name_matches(&c.title, raw))
-        .map(|c| (c.id, c.title))
-        .collect();
-    super::resolve::unique_match(matches, "column", raw)
+    super::resolve::NameResolver::new(client)
+        .column(board_id, raw)
+        .await
 }
 
 /// Run a board command.

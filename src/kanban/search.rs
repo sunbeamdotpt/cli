@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::output::{OutputFormat, render_list};
 
 /// Search arguments.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct SearchArgs {
     /// Query string.
     pub query: String,

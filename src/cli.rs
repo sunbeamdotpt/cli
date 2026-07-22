@@ -30,11 +30,13 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = sdk::logging::LogMode::Line, global = true)]
     pub log_mode: sdk::logging::LogMode,
 
-    /// Increase logging verbosity. Use once for debug, twice for trace.
+    /// Increase log verbosity: -v info, -vv debug, -vvv trace (default: warn).
+    ///
+    /// Logs always go to stderr, keeping stdout script-safe.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
 
-    /// Suppress non-error output (sets log level to warn).
+    /// Suppress all non-error log output (sets log level to error).
     #[arg(short, long, global = true, conflicts_with = "verbose")]
     pub quiet: bool,
 
@@ -206,11 +208,11 @@ EXAMPLES:
   # List projects you can access
   sunbeam kanban project list
 
-  # List boards in a project
-  sunbeam kanban board list --project proj_xxx
+  # List boards in a project (ID, key, or name)
+  sunbeam kanban board list proj_xxx
 
-  # Create a card
-  sunbeam kanban card create --board board_xxx --title "Fix the thing"
+  # Create a card (defaults to the board's only column)
+  sunbeam kanban card create board_xxx --title "Fix the thing"
 
   # Search cards
   sunbeam kanban search "frontend crash"

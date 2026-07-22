@@ -1,9 +1,16 @@
 //! Name-to-ID resolution helpers for the Kanban CLI UX layer.
 //!
-//! Everywhere the CLI accepts a raw ULID identifier, users can instead supply a
-//! human-readable name. If the argument already looks like an identifier it is
-//! returned unchanged; otherwise the helper lists the visible entities and
-//! matches by name (case-insensitive exact match).
+//! Everywhere the CLI accepts a raw ULID identifier, users can instead supply
+//! a human-readable reference. An argument is resolved against the visible
+//! entities by, in no particular order:
+//!
+//! - exact ULID (returned unchanged, no RPC)
+//! - ULID prefix (e.g. `01KY0QK98`)
+//! - exact name (case-insensitive)
+//! - project key/prefix (e.g. `TRI`) for projects
+//!
+//! Ambiguous input fails listing the candidates (name + id); unknown input
+//! fails listing the available names.
 
 use sdk::error::{Result, SunbeamError};
 use sdk::kanban::KanbanClient;
@@ -34,28 +41,83 @@ fn is_prefixed_id(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Returns true if `raw` is a Crockford base32 prefix of `id`.
+///
+/// Anything decoding as a full ULID never reaches here ([`looks_like_id`]
+/// passes it through unchanged), so this covers proper prefixes only. A
+/// minimum length of 4 keeps single-character input from prefix-matching
+/// half the alphabet; shorter input can still match by name.
+fn id_prefix_matches(id: &str, raw: &str) -> bool {
+    raw.len() >= 4
+        && raw.len() < 26
+        && raw.chars().all(|c| {
+            matches!(c.to_ascii_uppercase(), '0'..='9' | 'A'..='H' | 'J' | 'K' | 'M' | 'N' | 'P'..='T' | 'V'..='Z')
+        })
+        && id.len() > raw.len()
+        && id.to_ascii_uppercase().starts_with(&raw.to_ascii_uppercase())
+}
+
 /// Case-insensitive exact name match.
 pub(crate) fn name_matches(candidate: &str, target: &str) -> bool {
     candidate.eq_ignore_ascii_case(target)
 }
 
+/// Match an entity by name or ULID prefix.
+fn entity_matches(id: &str, name: &str, raw: &str) -> bool {
+    name_matches(name, raw) || id_prefix_matches(id, raw)
+}
+
+/// How many candidates to list in error messages before truncating.
+const MAX_LISTED: usize = 10;
+
+/// Format a candidate list for an error message, truncated past [`MAX_LISTED`].
+fn format_candidates<S: std::fmt::Display>(labels: &[S]) -> String {
+    let shown: Vec<_> = labels
+        .iter()
+        .take(MAX_LISTED)
+        .map(|l| l.to_string())
+        .collect();
+    let mut out = shown.join(", ");
+    if labels.len() > MAX_LISTED {
+        out.push_str(&format!(" … and {} more", labels.len() - MAX_LISTED));
+    }
+    out
+}
+
 /// Pick the unique matching ID or return a helpful error.
+///
+/// `matches` holds the `(id, label)` pairs that matched the user input;
+/// `available` labels every candidate the user could have meant, and is
+/// listed (names only) when nothing matched.
 pub(crate) fn unique_match<S: std::fmt::Display>(
     matches: Vec<(String, S)>,
     kind: &str,
     raw: &str,
+    available: &[S],
 ) -> Result<String> {
     match matches.len() {
-        0 => Err(SunbeamError::Other(format!("no {kind} named {raw:?}"))),
+        0 => {
+            let mut msg = format!("no {kind} matches {raw:?}");
+            if !available.is_empty() {
+                msg.push_str(&format!(
+                    "; available {kind}s: {}",
+                    format_candidates(available)
+                ));
+            }
+            Err(SunbeamError::Other(msg))
+        }
         1 => match matches.into_iter().next() {
             Some((id, _)) => Ok(id),
             None => unreachable!(),
         },
         _ => {
-            let names: Vec<_> = matches.iter().map(|(_, name)| name.to_string()).collect();
+            let candidates: Vec<_> = matches
+                .iter()
+                .map(|(id, name)| format!("{name} ({id})"))
+                .collect();
             Err(SunbeamError::Other(format!(
                 "multiple {kind}s match {raw:?}: {}",
-                names.join(", ")
+                candidates.join(", ")
             )))
         }
     }
@@ -75,7 +137,7 @@ impl<'a> NameResolver<'a> {
         Self { client }
     }
 
-    /// Resolve a project name (or return the ID unchanged).
+    /// Resolve a project reference (ID, ULID prefix, name, or project key).
     pub(crate) async fn project(&self, raw: &str) -> Result<String> {
         if looks_like_id(raw) {
             return Ok(raw.to_string());
@@ -86,13 +148,17 @@ impl<'a> NameResolver<'a> {
             .list_projects(v1::ListProjectsRequest::default())
             .await?
             .into_owned();
+        let available: Vec<String> = resp.projects.iter().map(|p| p.name.clone()).collect();
         let matches: Vec<_> = resp
             .projects
             .into_iter()
-            .filter(|p| name_matches(&p.name, raw))
+            .filter(|p| {
+                entity_matches(&p.id, &p.name, raw)
+                    || (!p.prefix.is_empty() && name_matches(&p.prefix, raw))
+            })
             .map(|p| (p.id, p.name))
             .collect();
-        unique_match(matches, "project", raw)
+        unique_match(matches, "project", raw, &available)
     }
 
     /// Resolve a board name within a project (or return the ID unchanged).
@@ -112,13 +178,14 @@ impl<'a> NameResolver<'a> {
             })
             .await?
             .into_owned();
+        let available: Vec<String> = resp.boards.iter().map(|b| b.name.clone()).collect();
         let matches: Vec<_> = resp
             .boards
             .into_iter()
-            .filter(|b| name_matches(&b.name, raw))
+            .filter(|b| entity_matches(&b.id, &b.name, raw))
             .map(|b| (b.id, b.name))
             .collect();
-        unique_match(matches, "board", raw)
+        unique_match(matches, "board", raw, &available)
     }
 
     /// Resolve a card title or ref within a board (or return the ID unchanged).
@@ -138,16 +205,25 @@ impl<'a> NameResolver<'a> {
             })
             .await?
             .into_owned();
+        let available: Vec<String> = resp
+            .cards
+            .iter()
+            .map(|c| format!("{} {}", c.r#ref, c.title))
+            .collect();
         let matches: Vec<_> = resp
             .cards
             .into_iter()
-            .filter(|c| name_matches(&c.title, raw) || name_matches(&c.r#ref, raw))
+            .filter(|c| {
+                name_matches(&c.title, raw)
+                    || name_matches(&c.r#ref, raw)
+                    || id_prefix_matches(&c.id, raw)
+            })
             .map(|c| (c.id, format!("{} {}", c.r#ref, c.title)))
             .collect();
-        unique_match(matches, "card", raw)
+        unique_match(matches, "card", raw, &available)
     }
 
-    /// Resolve an aggregated-board name (or return the ID unchanged).
+    /// Resolve an aggregated-board name or ULID prefix.
     pub(crate) async fn aggregate(&self, raw: &str) -> Result<String> {
         if looks_like_id(raw) {
             return Ok(raw.to_string());
@@ -158,16 +234,21 @@ impl<'a> NameResolver<'a> {
             .list_aggregated_boards(v1::ListAggregatedBoardsRequest::default())
             .await?
             .into_owned();
+        let available: Vec<String> = resp
+            .aggregated_boards
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
         let matches: Vec<_> = resp
             .aggregated_boards
             .into_iter()
-            .filter(|b| name_matches(&b.name, raw))
+            .filter(|b| entity_matches(&b.id, &b.name, raw))
             .map(|b| (b.id, b.name))
             .collect();
-        unique_match(matches, "aggregated board", raw)
+        unique_match(matches, "aggregated board", raw, &available)
     }
 
-    /// Resolve a board-template name (or return the ID unchanged).
+    /// Resolve a board-template name or ULID prefix.
     ///
     /// `project_id` is `Some` to include project-scoped templates in the
     /// search, or `None` to search only global templates.
@@ -184,16 +265,17 @@ impl<'a> NameResolver<'a> {
             })
             .await?
             .into_owned();
+        let available: Vec<String> = resp.templates.iter().map(|t| t.name.clone()).collect();
         let matches: Vec<_> = resp
             .templates
             .into_iter()
-            .filter(|t| name_matches(&t.name, raw))
+            .filter(|t| entity_matches(&t.id, &t.name, raw))
             .map(|t| (t.id, t.name))
             .collect();
-        unique_match(matches, "template", raw)
+        unique_match(matches, "template", raw, &available)
     }
 
-    /// Resolve a card-template name (or return the ID unchanged).
+    /// Resolve a card-template name or ULID prefix.
     ///
     /// Searches global templates (matching the old CLI behaviour of passing
     /// no project when resolving card-template names).
@@ -210,13 +292,14 @@ impl<'a> NameResolver<'a> {
             })
             .await?
             .into_owned();
+        let available: Vec<String> = resp.templates.iter().map(|t| t.name.clone()).collect();
         let matches: Vec<_> = resp
             .templates
             .into_iter()
-            .filter(|t| name_matches(&t.name, raw))
+            .filter(|t| entity_matches(&t.id, &t.name, raw))
             .map(|t| (t.id, t.name))
             .collect();
-        unique_match(matches, "card template", raw)
+        unique_match(matches, "card template", raw, &available)
     }
 
     /// Resolve a board name anywhere the caller can see.
@@ -236,6 +319,7 @@ impl<'a> NameResolver<'a> {
             .projects;
 
         let mut matches = Vec::new();
+        let mut available = Vec::new();
         for project in projects {
             let boards = self
                 .client
@@ -249,18 +333,17 @@ impl<'a> NameResolver<'a> {
                 continue;
             };
             for board in resp.into_owned().boards {
-                if name_matches(&board.name, raw) {
-                    matches.push((
-                        board.id,
-                        format!("{} (project: {})", board.name, project.name),
-                    ));
+                let label = format!("{} (project: {})", board.name, project.name);
+                if entity_matches(&board.id, &board.name, raw) {
+                    matches.push((board.id, label.clone()));
                 }
+                available.push(label);
             }
         }
-        unique_match(matches, "board", raw)
+        unique_match(matches, "board", raw, &available)
     }
 
-    /// Resolve a card title or ref anywhere the caller can see.
+    /// Resolve a card title, ref, or ULID prefix anywhere the caller can see.
     ///
     /// Uses full-text search and then filters for an exact title or ref match.
     pub(crate) async fn card_anywhere(&self, raw: &str) -> Result<String> {
@@ -277,10 +360,19 @@ impl<'a> NameResolver<'a> {
             })
             .await?
             .into_owned();
+        let available: Vec<String> = resp
+            .hits
+            .iter()
+            .map(|h| format!("{} {}", h.card_ref, h.title))
+            .collect();
         let matches: Vec<_> = resp
             .hits
             .into_iter()
-            .filter(|h| name_matches(&h.title, raw) || name_matches(&h.card_ref, raw))
+            .filter(|h| {
+                name_matches(&h.title, raw)
+                    || name_matches(&h.card_ref, raw)
+                    || id_prefix_matches(&h.card_id, raw)
+            })
             .map(|h| {
                 (
                     h.card_id,
@@ -288,7 +380,7 @@ impl<'a> NameResolver<'a> {
                 )
             })
             .collect();
-        unique_match(matches, "card", raw)
+        unique_match(matches, "card", raw, &available)
     }
 
     /// Resolve a public-board name anywhere it is visible.
@@ -308,6 +400,7 @@ impl<'a> NameResolver<'a> {
             .projects;
 
         let mut matches = Vec::new();
+        let mut available = Vec::new();
         for project in projects {
             let boards = self
                 .client
@@ -321,15 +414,81 @@ impl<'a> NameResolver<'a> {
                 continue;
             };
             for board in resp.into_owned().boards {
-                if name_matches(&board.name, raw) {
-                    matches.push((
-                        board.id,
-                        format!("{} (project: {})", board.name, project.name),
-                    ));
+                let label = format!("{} (project: {})", board.name, project.name);
+                if entity_matches(&board.id, &board.name, raw) {
+                    matches.push((board.id, label.clone()));
                 }
+                available.push(label);
             }
         }
-        unique_match(matches, "public board", raw)
+        unique_match(matches, "public board", raw, &available)
+    }
+
+    /// Fetch the columns of a board via the board detail.
+    async fn board_columns(&self, board_id: &str) -> Result<Vec<v1::Column>> {
+        let resp = self
+            .client
+            .boards()
+            .get_board(v1::GetBoardRequest {
+                board_id: board_id.to_string(),
+                ..Default::default()
+            })
+            .await?
+            .into_owned();
+        Ok(resp.detail.into_option().unwrap_or_default().columns)
+    }
+
+    /// Resolve a column title or ULID prefix within a board.
+    ///
+    /// Failures list the board's columns (title + id) so the user can pick a
+    /// valid value without a second lookup.
+    pub(crate) async fn column(&self, board_id: &str, raw: &str) -> Result<String> {
+        if looks_like_id(raw) {
+            return Ok(raw.to_string());
+        }
+        let columns = self.board_columns(board_id).await?;
+        let available: Vec<String> = columns
+            .iter()
+            .map(|c| format!("{} {}", c.title, c.id))
+            .collect();
+        let matches: Vec<_> = columns
+            .into_iter()
+            .filter(|c| entity_matches(&c.id, &c.title, raw))
+            .map(|c| (c.id, c.title))
+            .collect();
+        unique_match(matches, "column", raw, &available)
+    }
+
+    /// Resolve the target column for `card create`.
+    ///
+    /// Without an explicit `--column`, a board with exactly one column
+    /// defaults to it; a board with several fails listing the valid columns.
+    pub(crate) async fn column_for_create(
+        &self,
+        board_id: &str,
+        raw: Option<&str>,
+    ) -> Result<String> {
+        if let Some(raw) = raw {
+            return self.column(board_id, raw).await;
+        }
+        let columns = self.board_columns(board_id).await?;
+        match columns.as_slice() {
+            [only] => Ok(only.id.clone()),
+            _ => {
+                let available = if columns.is_empty() {
+                    "none — the board has no columns".to_string()
+                } else {
+                    columns
+                        .iter()
+                        .map(|c| format!("{} {}", c.title, c.id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                Err(SunbeamError::Other(format!(
+                    "required: --column <ID|name> (columns on this board: {available})"
+                )))
+            }
+        }
     }
 }
 
@@ -364,6 +523,17 @@ mod tests {
     }
 
     #[test]
+    fn id_prefix_matches_ulid_prefixes() {
+        let id = "01KY0QK9800000000000000000";
+        assert!(id_prefix_matches(id, "01KY0QK98"));
+        assert!(id_prefix_matches(id, "01ky0qk98"));
+        assert!(!id_prefix_matches(id, "01K"));
+        assert!(!id_prefix_matches(id, id));
+        assert!(!id_prefix_matches(id, "backlog"));
+        assert!(!id_prefix_matches("board_1", "board"));
+    }
+
+    #[test]
     fn name_matches_is_case_insensitive() {
         assert!(name_matches("Sunbeam", "sunbeam"));
         assert!(name_matches("Backlog", "BACKLOG"));
@@ -371,9 +541,18 @@ mod tests {
     }
 
     #[test]
-    fn unique_match_zero_errors() {
-        let err = unique_match::<String>(Vec::new(), "project", "Sunbeam").unwrap_err();
-        assert!(err.to_string().contains("no project named"));
+    fn unique_match_zero_errors_and_lists_available() {
+        let err = unique_match::<String>(
+            Vec::new(),
+            "project",
+            "Moonlight",
+            &["Sunbeam".to_string(), "Trident".to_string()],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no project matches"), "{msg}");
+        assert!(msg.contains("Sunbeam"), "{msg}");
+        assert!(msg.contains("Trident"), "{msg}");
     }
 
     #[test]
@@ -382,23 +561,37 @@ mod tests {
             vec![("id".to_string(), "Sunbeam".to_string())],
             "project",
             "Sunbeam",
+            &[],
         )
         .unwrap();
         assert_eq!(id, "id");
     }
 
     #[test]
-    fn unique_match_many_errors() {
+    fn unique_match_many_errors_with_name_and_id() {
         let err = unique_match(
             vec![
-                ("a".to_string(), "Sunbeam".to_string()),
-                ("b".to_string(), "Sunbeam 2".to_string()),
+                ("id_a".to_string(), "Sunbeam".to_string()),
+                ("id_b".to_string(), "Sunbeam 2".to_string()),
             ],
             "project",
             "Sun",
+            &[],
         )
         .unwrap_err();
-        assert!(err.to_string().contains("multiple projects match"));
+        let msg = err.to_string();
+        assert!(msg.contains("multiple projects match"), "{msg}");
+        assert!(msg.contains("Sunbeam (id_a)"), "{msg}");
+        assert!(msg.contains("Sunbeam 2 (id_b)"), "{msg}");
+    }
+
+    #[test]
+    fn format_candidates_truncates_long_lists() {
+        let labels: Vec<String> = (0..15).map(|i| format!("n{i}")).collect();
+        let out = format_candidates(&labels);
+        assert!(out.contains("n9"), "{out}");
+        assert!(!out.contains("n10"), "{out}");
+        assert!(out.contains("and 5 more"), "{out}");
     }
 
     fn project(id: &str, name: &str) -> v1::Project {
@@ -429,17 +622,22 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn project_resolves_by_name() {
-        let server = MockServer::start().await;
+    /// Mount a ListProjects responder returning the given projects.
+    async fn mount_projects(server: &MockServer, projects: Vec<v1::Project>) {
         Mock::given(method("POST"))
             .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
             .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
-                projects: vec![project("proj_1", "Sunbeam")],
+                projects,
                 ..Default::default()
             }))
-            .mount(&server)
+            .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn project_resolves_by_name() {
+        let server = MockServer::start().await;
+        mount_projects(&server, vec![project("proj_1", "Sunbeam")]).await;
 
         let client = testutil::client_for(&server.uri());
         let resolver = NameResolver::new(&client);
@@ -447,36 +645,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_resolves_by_key_and_ulid_prefix() {
+        let server = MockServer::start().await;
+        let p = v1::Project {
+            id: "01KY0QK9800000000000000000".into(),
+            name: "Trident".into(),
+            prefix: "TRI".into(),
+            ..Default::default()
+        };
+        mount_projects(&server, vec![p]).await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver.project("tri").await.unwrap(),
+            "01KY0QK9800000000000000000"
+        );
+        assert_eq!(
+            resolver.project("01KY0QK98").await.unwrap(),
+            "01KY0QK9800000000000000000"
+        );
+    }
+
+    #[tokio::test]
     async fn project_miss_and_ambiguous() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
-            .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
-                projects: vec![project("proj_1", "Sunbeam"), project("proj_2", "SUNBEAM")],
-                ..Default::default()
-            }))
-            .mount(&server)
-            .await;
+        mount_projects(
+            &server,
+            vec![project("proj_1", "Sunbeam"), project("proj_2", "SUNBEAM")],
+        )
+        .await;
 
         let client = testutil::client_for(&server.uri());
         let resolver = NameResolver::new(&client);
         let err = resolver.project("sunbeam").await.unwrap_err();
-        assert!(err.to_string().contains("multiple projects match"));
+        let msg = err.to_string();
+        assert!(msg.contains("multiple projects match"), "{msg}");
+        assert!(msg.contains("proj_1"), "{msg}");
         let err = resolver.project("moonlight").await.unwrap_err();
-        assert!(err.to_string().contains("no project named"));
+        let msg = err.to_string();
+        assert!(msg.contains("no project matches"), "{msg}");
+        assert!(msg.contains("available projects: Sunbeam"), "{msg}");
     }
 
     #[tokio::test]
     async fn board_anywhere_searches_all_projects() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
-            .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
-                projects: vec![project("proj_1", "One")],
-                ..Default::default()
-            }))
-            .mount(&server)
-            .await;
+        mount_projects(&server, vec![project("proj_1", "One")]).await;
         Mock::given(method("POST"))
             .and(path("/sunbeam.kanban.v1.BoardService/ListBoards"))
             .respond_with(testutil::proto_response(&v1::ListBoardsResponse {
@@ -521,14 +736,7 @@ mod tests {
     #[tokio::test]
     async fn public_board_anywhere_uses_public_endpoint() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
-            .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
-                projects: vec![project("proj_1", "One")],
-                ..Default::default()
-            }))
-            .mount(&server)
-            .await;
+        mount_projects(&server, vec![project("proj_1", "One")]).await;
         Mock::given(method("POST"))
             .and(path(
                 "/sunbeam.kanban.v1.PublicBoardService/ListPublicBoards",
@@ -549,6 +757,116 @@ mod tests {
         assert_eq!(
             resolver.public_board_anywhere("roadmap").await.unwrap(),
             "board_pub"
+        );
+    }
+
+    fn column(id: &str, title: &str) -> v1::Column {
+        v1::Column {
+            id: id.to_string(),
+            board_id: "board_1".into(),
+            title: title.to_string(),
+            position: 1,
+            ..Default::default()
+        }
+    }
+
+    async fn mount_board_detail(server: &MockServer, columns: Vec<v1::Column>) {
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/GetBoard"))
+            .respond_with(testutil::proto_response(&v1::GetBoardResponse {
+                detail: v1::BoardDetail {
+                    board: v1::Board {
+                        id: "board_1".into(),
+                        name: "Backlog".into(),
+                        ..Default::default()
+                    }
+                    .into(),
+                    columns,
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn column_resolves_by_title_and_lists_columns_on_miss() {
+        let server = MockServer::start().await;
+        mount_board_detail(
+            &server,
+            vec![column("col_1", "cli-test"), column("col_2", "backlog")],
+        )
+        .await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver.column("board_1", "BACKLOG").await.unwrap(),
+            "col_2"
+        );
+        let err = resolver.column("board_1", "done").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no column matches"), "{msg}");
+        assert!(msg.contains("cli-test col_1"), "{msg}");
+        assert!(msg.contains("backlog col_2"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn column_for_create_defaults_to_single_column() {
+        let server = MockServer::start().await;
+        mount_board_detail(&server, vec![column("col_only", "Todo")]).await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver.column_for_create("board_1", None).await.unwrap(),
+            "col_only"
+        );
+    }
+
+    #[tokio::test]
+    async fn column_for_create_requires_choice_on_multi_column_board() {
+        let server = MockServer::start().await;
+        mount_board_detail(
+            &server,
+            vec![
+                column("01KY5JAZ000000000000000000", "cli-test"),
+                column("01KY5JB1000000000000000000", "backlog"),
+            ],
+        )
+        .await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        let err = resolver
+            .column_for_create("board_1", None)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("required: --column"), "{msg}");
+        assert!(msg.contains("cli-test 01KY5JAZ"), "{msg}");
+        assert!(msg.contains("backlog 01KY5JB1"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn column_for_create_explicit_resolves_title() {
+        let server = MockServer::start().await;
+        mount_board_detail(
+            &server,
+            vec![column("col_1", "cli-test"), column("col_2", "backlog")],
+        )
+        .await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver
+                .column_for_create("board_1", Some("cli-test"))
+                .await
+                .unwrap(),
+            "col_1"
         );
     }
 }

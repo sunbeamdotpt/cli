@@ -11,7 +11,7 @@ use super::required;
 use crate::output::{OutputFormat, render, render_list};
 
 /// Public board actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum PublicBoardAction {
     /// Get a public board.
     Get {

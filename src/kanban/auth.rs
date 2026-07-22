@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::output::{OutputFormat, render};
 
 /// Kanban auth actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum AuthAction {
     /// Show the current SSO identity and token status.
     Whoami,
@@ -119,10 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn whoami_flags_expired_tokens() {
-        let tokens = tokens(None, Duration::hours(-1));
-        let out = whoami_out("sunbeam.test", &tokens);
-        assert!(out.expired);
+    fn whoami_expired_flag_matches_expiry_direction() {
+        // Regression: a token whose expires_at is in the past must report
+        // expired = true; a token still in the future must report false.
+        let past = tokens(None, Duration::hours(-1));
+        assert!(whoami_out("sunbeam.test", &past).expired);
+        let future = tokens(None, Duration::hours(1));
+        assert!(!whoami_out("sunbeam.test", &future).expired);
     }
 
     #[test]

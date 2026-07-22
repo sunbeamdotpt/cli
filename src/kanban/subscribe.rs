@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::{fmt_ts, object_id_options};
 
 /// Subscription actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum SubscribeAction {
     /// Subscribe to board events.
     Board {

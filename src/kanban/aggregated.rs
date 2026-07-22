@@ -13,7 +13,7 @@ use super::{fmt_ts, new_idempotency_key, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Aggregated board actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum AggregateAction {
     /// List aggregated boards.
     List,
@@ -65,7 +65,7 @@ pub enum AggregateAction {
 }
 
 /// Source board actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum SourceAction {
     /// Add a source board.
     Add {

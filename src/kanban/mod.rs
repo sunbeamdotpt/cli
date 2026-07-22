@@ -22,7 +22,7 @@ use sdk::kanban::prelude::{buffa, buffa_types, connectrpc, sunbeam_g2v};
 use crate::output::OutputFormat;
 
 /// Top-level `kanban` subcommands.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 #[command(name = "kanban")]
 pub enum KanbanCommand {
     /// Project management.
@@ -178,6 +178,41 @@ pub(crate) fn fmt_ts(ts: &buffa::MessageField<buffa_types::google::protobuf::Tim
         .unwrap_or_default()
 }
 
+/// Returns true for transport-class failures worth one cold-start retry.
+///
+/// Fresh H2 connection setup intermittently fails the first RPC of a new
+/// process (`unavailable: error sending request for url (...)`); server-side
+/// application errors are never retried.
+fn is_cold_start_transport(err: &SunbeamError) -> bool {
+    let SunbeamError::Network { context, .. } = err else {
+        return false;
+    };
+    context.starts_with("unavailable:") || context.contains("error sending request")
+}
+
+/// Run `op`, retrying once on a cold-start transport failure.
+///
+/// Reads are naturally idempotent and mutations carry ULID idempotency keys,
+/// so a single retry is safe for every subcommand. Each attempt runs `op`
+/// fresh so callers can rebuild their client per attempt.
+async fn retry_once_on_transport<F, Fut>(logger: &sdk::logger::Logger, op: F) -> Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    match op().await {
+        Err(e) if is_cold_start_transport(&e) => {
+            sdk::info!(
+                logger,
+                "kanban transport error on first attempt, retrying once",
+                err = e.to_string()
+            );
+            op().await
+        }
+        result => result,
+    }
+}
+
 /// Dispatch a kanban subcommand.
 pub async fn dispatch(
     logger: &sdk::logger::Logger,
@@ -191,12 +226,23 @@ pub async fn dispatch(
     match cmd {
         KanbanCommand::Auth { action } => auth::run(action, format).await,
         KanbanCommand::PublicBoard { action } => {
-            dispatch_public_board(action, format, &server).await
+            retry_once_on_transport(logger, || {
+                dispatch_public_board(action.clone(), format, &server)
+            })
+            .await
         }
         cmd => {
             let token = require_token().await?;
-            let client = build_client(&server, Some(&token))?;
-            dispatch_authed(cmd, format, &client).await
+            retry_once_on_transport(logger, || {
+                let cmd = cmd.clone();
+                let token = token.clone();
+                let server = server.clone();
+                async move {
+                    let client = build_client(&server, Some(&token))?;
+                    dispatch_authed(cmd, format, &client).await
+                }
+            })
+            .await
         }
     }
 }
@@ -796,6 +842,12 @@ mod tests {
             testutil::proto_response(&v1::GetBoardResponse {
                 detail: v1::BoardDetail {
                     board: board.into(),
+                    columns: vec![v1::Column {
+                        id: "col_1".into(),
+                        board_id: "board_1".into(),
+                        title: "Todo".into(),
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 }
                 .into(),
@@ -1151,5 +1203,116 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn cold_start_transport_matches_unavailable_and_send_failures() {
+        let connect = SunbeamError::from(connectrpc::ConnectError::new(
+            connectrpc::ErrorCode::Unavailable,
+            "error sending request for url (https://kanban.sunbeam.test/)",
+        ));
+        assert!(is_cold_start_transport(&connect));
+        let plain =
+            SunbeamError::network("error sending request for url (https://kanban.sunbeam.test/)");
+        assert!(is_cold_start_transport(&plain));
+        let invalid = SunbeamError::from(connectrpc::ConnectError::new(
+            connectrpc::ErrorCode::InvalidArgument,
+            "invalid column_id",
+        ));
+        assert!(!is_cold_start_transport(&invalid));
+        assert!(!is_cold_start_transport(&SunbeamError::Other(
+            "no project matches".into()
+        )));
+    }
+
+    #[tokio::test]
+    async fn dispatch_retries_once_on_transport_unavailable() {
+        use sdk::kanban::v1;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        // One-shot `unavailable` mounted first: wiremock prefers the earliest
+        // mounted matching mock, so attempt one fails and the retry falls
+        // through to the success responder below.
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/ListCardsByBoard"))
+            .respond_with(testutil::connect_error(
+                503,
+                "unavailable",
+                "error sending request for url (http://localhost/)",
+            ))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/ListCardsByBoard"))
+            .respond_with(testutil::proto_response(
+                &v1::ListCardsByBoardResponse::default(),
+            ))
+            .mount(&server)
+            .await;
+
+        let logger = sdk::logger::Logger::new(sdk::logger::NoopSink);
+        let uri = server.uri();
+        retry_once_on_transport(&logger, || {
+            let client = testutil::client_for(&uri);
+            async move {
+                dispatch_authed(
+                    KanbanCommand::Card {
+                        action: cards::CardAction::List {
+                            board: "board_1".into(),
+                            column: None,
+                        },
+                    },
+                    OutputFormat::Table,
+                    &client,
+                )
+                .await
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_does_not_retry_application_errors() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/ListCardsByBoard"))
+            .respond_with(testutil::connect_error(
+                400,
+                "invalid_argument",
+                "invalid board_id",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let logger = sdk::logger::Logger::new(sdk::logger::NoopSink);
+        let uri = server.uri();
+        let err = retry_once_on_transport(&logger, || {
+            let client = testutil::client_for(&uri);
+            async move {
+                dispatch_authed(
+                    KanbanCommand::Card {
+                        action: cards::CardAction::List {
+                            board: "board_1".into(),
+                            column: None,
+                        },
+                    },
+                    OutputFormat::Table,
+                    &client,
+                )
+                .await
+            }
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid board_id"));
     }
 }

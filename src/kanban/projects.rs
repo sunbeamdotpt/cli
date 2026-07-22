@@ -11,7 +11,7 @@ use super::{fmt_ts, mutating_options, new_idempotency_key, object_id_options, re
 use crate::output::{OutputFormat, render, render_list};
 
 /// Project actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum ProjectAction {
     /// List projects.
     List,
@@ -69,7 +69,7 @@ pub enum ProjectAction {
 }
 
 /// Project member actions.
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum MemberAction {
     /// List members.
     List {
