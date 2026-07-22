@@ -10,28 +10,36 @@ use sdk::kanban::prelude::{connectrpc, sunbeam_g2v};
 use sdk::reqwest;
 use serde::Deserialize;
 
-/// Public OAuth2 client ID of the Sunbeam CLI, registered with the
-/// sso-gateway (`ApplicationService`) by the platform seeding.
-///
-/// Client registration:
-///   client_name: "Sunbeam CLI"
-///   token_endpoint_auth_method: "none" (public client, no secret)
-///   grant_types: authorization_code, refresh_token, urn:ietf:params:oauth:grant-type:device_code
-///   response_types: ["code"]
-///   scope: "openid email profile offline_access"
-///   redirect_uris: http://localhost:9876-9880/callback, http://127.0.0.1:9876-9880/callback
-///   post_logout_redirect_uris: http://localhost:9876/callback, http://127.0.0.1:9876/callback
-const DEFAULT_CLIENT_ID: &str = "62c878f8-4229-4bf9-a73c-1e3aae0ae425";
+// Public OAuth2 client ID of the Sunbeam CLI, registered with the
+// sso-gateway (`ApplicationService`) by the platform seeding.
+//
+// Client registration:
+//   client_name: "Sunbeam CLI"
+//   token_endpoint_auth_method: "none" (public client, no secret)
+//   grant_types: authorization_code, refresh_token, urn:ietf:params:oauth:grant-type:device_code
+// The OAuth2 client ID is NOT committed to this repo — it is provisioned
+// per-platform by sbbb (a public client named "Sunbeam CLI"; grants:
+// authorization_code, refresh_token, device_code; loopback redirect URIs
+// 9876-9880). Release builds bake it in at compile time via
+// SUNBEAM_SSO_CLIENT_ID (option_env! in resolve_client_id).
+//
+//   response_types: ["code"]
+//   scope: "openid email profile offline_access"
+//   redirect_uris: http://localhost:9876-9880/callback, http://127.0.0.1:9876-9880/callback
+//   post_logout_redirect_uris: http://localhost:9876/callback, http://127.0.0.1:9876/callback
 
 /// Environment override for the sso-gateway base URL. Used by integration
 /// tests and local development against a non-standard gateway address.
 pub(crate) const SSO_URL_ENV: &str = "SUNBEAM_SSO_URL";
 
+/// Environment variable carrying the CLI's public OAuth2 client ID.
+pub(crate) const SSO_CLIENT_ID_ENV: &str = "SUNBEAM_SSO_CLIENT_ID";
+
 /// Base URL of the sso-gateway for a domain.
 ///
-/// Follows the platform's subdomain convention (`https://sso.{domain}`), the
-/// same pattern the sdk uses for `search.{domain}` and the CLI uses for
-/// `kanban.{domain}`. The [`SSO_URL_ENV`] variable overrides the derivation.
+/// Follows the platform's subdomain convention (`https://auth.{domain}` —
+/// confirmed by sbbb; the gateway fronts the legacy Ory stack). The
+/// [`SSO_URL_ENV`] variable overrides the derivation.
 pub(crate) fn sso_base_url_for(domain: &str) -> Result<String> {
     if let Ok(u) = std::env::var(SSO_URL_ENV)
         && !u.is_empty()
@@ -43,7 +51,7 @@ pub(crate) fn sso_base_url_for(domain: &str) -> Result<String> {
             "no domain configured; set one with `sunbeam config set --domain ...`",
         ));
     }
-    Ok(format!("https://sso.{domain}"))
+    Ok(format!("https://auth.{domain}"))
 }
 
 /// Build an [`AuthClient`] for the sso-gateway at `base_url`.
@@ -176,7 +184,7 @@ async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> 
         Err(e) => return Err(e),
     };
 
-    let client_id = resolve_client_id().await;
+    let client_id = resolve_client_id()?;
 
     let client = reqwest::Client::new();
     let resp = match client
@@ -364,6 +372,11 @@ async fn poll_device_token(
 
         match err.as_str() {
             "authorization_pending" => {}
+            // WORKAROUND (upstream COE-2026-004): the gateway currently masks
+            // `authorization_pending` as `server_error` on /oauth2/token
+            // polls. Treat it as pending; the device-code expiry check below
+            // still bounds the loop. Remove once the gateway is fixed.
+            "server_error" => {}
             "slow_down" => {
                 interval_secs += 5;
             }
@@ -400,7 +413,7 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
         Ok(d) => d,
         Err(e) => return Err(e),
     };
-    let client_id = resolve_client_id().await;
+    let client_id = resolve_client_id()?;
 
     let device_endpoint = device_authorization_endpoint(&discovery, &base_url);
     let device_resp = match request_device_code(&device_endpoint, &client_id).await {
@@ -463,10 +476,27 @@ pub async fn cmd_auth_login(domain_override: Option<&str>) -> Result<()> {
 
 /// Resolve the OAuth2 client ID for device login.
 ///
-/// The CLI is a public sso-gateway client (no secret). The client_id is
-/// hardcoded to match the pre-registered Sunbeam CLI client.
-async fn resolve_client_id() -> String {
-    DEFAULT_CLIENT_ID.to_string()
+/// The CLI is a public sso-gateway client (no secret), but the client ID is
+/// platform-provisioned and deliberately not committed to the repo. Release
+/// builds bake it in at compile time via `SUNBEAM_SSO_CLIENT_ID`
+/// (`option_env!` — the same pattern AWS/Azure CLIs use for their public
+/// client IDs); the same-named runtime env var overrides it for dev/tests.
+/// (A `sdk::config` field has been requested as a third source.)
+fn resolve_client_id() -> Result<String> {
+    if let Ok(id) = std::env::var(SSO_CLIENT_ID_ENV)
+        && !id.is_empty()
+    {
+        return Ok(id);
+    }
+    if let Some(id) = option_env!("SUNBEAM_SSO_CLIENT_ID")
+        && !id.is_empty()
+    {
+        return Ok(id.to_string());
+    }
+    Err(SunbeamError::config(format!(
+        "no SSO client ID configured; set {SSO_CLIENT_ID_ENV} to the \
+         public client ID provisioned by your platform admin"
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1151,6 +1181,73 @@ mod tests {
         assert!(err.to_string().contains("access_denied"), "err: {err}");
     }
 
+    #[tokio::test]
+    async fn test_poll_device_token_treats_server_error_as_pending() {
+        // WORKAROUND coverage for upstream COE-2026-004: the gateway masks
+        // authorization_pending as server_error; polling must continue.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "server_error"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "access_after_mask",
+                "refresh_token": "refresh",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+
+        let token = poll_device_token(
+            &format!("{}/oauth2/token", server.uri()),
+            "sunbeam-cli",
+            "dev_123",
+            1,
+            30,
+        )
+        .await
+        .unwrap();
+        assert_eq!(token.access_token, "access_after_mask");
+    }
+
+    // ---------------------------------------------------------------------
+    // Client ID resolution
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_client_id_from_env() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(SSO_CLIENT_ID_ENV, "client-from-env");
+        }
+        assert_eq!(resolve_client_id().unwrap(), "client-from-env");
+    }
+
+    #[test]
+    fn test_resolve_client_id_unset_errors_without_build_time_value() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::remove_var(SSO_CLIENT_ID_ENV);
+        }
+        // Dev builds don't bake a value in; release builds do (option_env!).
+        if option_env!("SUNBEAM_SSO_CLIENT_ID").is_none() {
+            let err = resolve_client_id().unwrap_err();
+            assert!(
+                err.to_string().contains("SUNBEAM_SSO_CLIENT_ID"),
+                "err: {err}"
+            );
+        }
+    }
+
     // ---------------------------------------------------------------------
     // sso-gateway base URL derivation
     // ---------------------------------------------------------------------
@@ -1163,7 +1260,7 @@ mod tests {
         }
         assert_eq!(
             sso_base_url_for("sunbeam.pt").unwrap(),
-            "https://sso.sunbeam.pt"
+            "https://auth.sunbeam.pt"
         );
     }
 

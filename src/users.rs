@@ -1,7 +1,7 @@
 //! User management — sso-gateway identity operations via ConnectRPC.
 //!
 //! All identity CRUD runs against `iam.v1.IdentityService` on the sso-gateway
-//! (`https://sso.{domain}`) with the logged-in SSO token; the tenant is
+//! (`https://auth.{domain}`) with the logged-in SSO token; the tenant is
 //! resolved server-side from the token subject. The Kratos admin HTTP API and
 //! the port-forward-to-kratos pattern are gone: the gateway owns the identity
 //! trait model and exposes it over ConnectRPC.
@@ -371,7 +371,7 @@ This link expires in 24 hours.
 
 Once signed in you will be prompted to set up 2FA (mandatory).
 
-After that, head to https://sso.{domain}/identity/settings to set up your
+After that, head to https://auth.{domain}/identity/settings to set up your
 profile -- add your name, profile picture, and any other details.
 
 Your services:

@@ -410,7 +410,7 @@ async fn check_seaweedfs(domain: &str, client: &reqwest::Client) -> CheckResult 
 
 /// GET /.well-known/openid-configuration -> 200 with issuer field.
 async fn check_sso_gateway_oidc(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://sso.{domain}/.well-known/openid-configuration");
+    let url = format!("https://auth.{domain}/.well-known/openid-configuration");
     match http_get(client, &url, None).await {
         Ok((200, body)) => {
             let issuer = serde_json::from_slice::<serde_json::Value>(&body)
@@ -436,7 +436,7 @@ async fn check_sso_gateway_oidc(domain: &str, client: &reqwest::Client) -> Check
 
 /// GET /scim/v2/ServiceProviderConfig -> 200 (public SCIM metadata probe).
 async fn check_sso_gateway_scim(domain: &str, client: &reqwest::Client) -> CheckResult {
-    let url = format!("https://sso.{domain}/scim/v2/ServiceProviderConfig");
+    let url = format!("https://auth.{domain}/scim/v2/ServiceProviderConfig");
     match http_get(client, &url, None).await {
         Ok((status, body)) => {
             let ok_flag = status == 200;

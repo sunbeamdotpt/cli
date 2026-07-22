@@ -21,7 +21,7 @@ timestamp: 2026-07-21T00:00:00Z
   `auth` + `user` + subject↔email resolution migrated off Hydra/Kratos;
   `user disable|enable|set-password` removed. Up-workflow Ory seeding
   deliberately untouched until sbbb drops Ory (see Blocked).
-- Build/clippy/fmt/nextest green (674 tests, 82.7% line coverage — ceiling
+- Build/clippy/fmt/nextest green (680 tests, ~82.7% line coverage — ceiling
   analysis in known-issues).
 - **Logger migration still mid-flight**: `main.rs` keeps a tracing subscriber
   as fallback (`logger-design.md`).
@@ -30,23 +30,25 @@ timestamp: 2026-07-21T00:00:00Z
 
 - **sso-gateway mail #32** — six API gaps (public device RPCs, broken device
   poll `server_error`, identity-by-email lookup, disable/enable RPC, admin
-  set-password, directory-read scope). CLI workarounds in place; device-poll
+  set-password, directory-read scope). CLI workarounds in place (poll treats
+  `server_error` as pending — COE-2026-004, confirmed by sbbb); device-poll
   integration test is `#[ignore]`d until the poll bug is fixed.
 - **sdk mail #33** — testing::SsoGateway recovery courier + `sso_url`/
   `sso_client_id` Context fields.
 - ~~sdk mail #25~~ — resolved in sdk **v3.1.1** (adopted + validated with a
   real orchestrator boot; local kanban replica deleted).
-- **sbbb mail #34** — seed the "Sunbeam CLI" public OAuth2 client on
-  sso-gateway; `DEFAULT_CLIENT_ID` in `src/auth.rs` is still the old Hydra
-  UUID until then. **#28** heads-up: when sbbb drops Ory from the manifests,
-  migrate the up-workflow seeding (kratos_admin step, Ory DBs, credentials).
-- **CHANGELOG.md** still stops at v1.1.2 — now three versions behind (v3.0.0).
-  Human decision whether to backfill or restart fresh.
+- ~~sbbb mail #34~~ — resolved: public client provisioned on the gateway;
+  **base URL is `https://auth.{domain}`** (not `sso.{domain}`); the client
+  ID is baked at compile time via `SUNBEAM_SSO_CLIENT_ID` (option_env!),
+  never committed — the dist/release pipeline must set it (human owns dist).
+  **#37**: sso-gateway fronts Ory in prod; up-workflow Ory seeding stays
+  until sbbb's human-level call to drop Ory from the manifests.
+- ~~CHANGELOG.md~~ — restarted at 3.0.0 in the release-prep commit.
 - ~~sdk mail #18/#19/#20~~ — resolved in sdk v3.1.0 (adopted: workarounds
   deleted, 7 direct deps dropped, kanban testing builder delivered).
 
 ## Pick up first
 
-- Check for open mail: `agent-mail inbox` (sdk may reply about #18/#19/#20).
+- Check for open mail: `agent-mail inbox` (replies may land on #32/#33).
 - Docs are current again (AGENTS.md + README rewritten for v3) — keep them
   that way when the sdk tag bumps.

@@ -28,6 +28,9 @@ fn main() {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     println!("cargo:rustc-env=SUNBEAM_BUILD_DATE={date}");
 
+    // Rebuild if the baked-in SSO client ID changes (option_env! in auth.rs)
+    println!("cargo:rerun-if-env-changed=SUNBEAM_SSO_CLIENT_ID");
+
     // Rebuild if git HEAD changes
     println!("cargo:rerun-if-changed=.git/HEAD");
 }
