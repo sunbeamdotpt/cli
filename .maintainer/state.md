@@ -29,15 +29,18 @@ timestamp: 2026-07-21T00:00:00Z
   `auth` + `user` + subject↔email resolution migrated off Hydra/Kratos;
   `user disable|enable|set-password` removed. Up-workflow Ory seeding
   deliberately untouched until sbbb drops Ory (see Blocked).
-- Build/clippy/fmt/nextest green (680 tests, ~82.7% line coverage — ceiling
+- Build/clippy/fmt/nextest green (694 tests, 83.3% line coverage — ceiling
   analysis in known-issues).
-- **Homebrew tap** (`../tap`, UNCOMMITTED): `Formula/sunbeam.rb` written —
-  buf+rust build deps, `SUNBEAM_SSO_CLIENT_ID` baked at build time when set
-  (caveats otherwise), shell completions + 168 man pages installed.
-  **sha256 is a placeholder** until v3.0.0 is tagged; then `brew audit`/
-  `brew test` and commit. Tap README lists the formula.
-- **Logger migration still mid-flight**: `main.rs` keeps a tracing subscriber
-  as fallback (`logger-design.md`).
+- **v3.0.1 candidate on mainline (unreleased)**: sbbb prod-feedback package —
+  kanban cold-start retry, positional entity IDs, name/key-prefix (TRI)
+  resolution everywhere, sole-column default, actionable errors; logging is
+  now opt-in (default Warn) on a single stderr pipeline
+  (`Logger::new(TracingSink)`), data moved off info-level logs to stdout.
+  Ship by bumping Cargo.toml to 3.0.1 and merging (human's call).
+- **Homebrew tap**: live since 3.0.0 (`sunbeamdotpt/tap`).
+- **Logger migration**: unified pipeline done (see log.md 2026-07-22);
+  intentional tracing:: remainder in users/auth/secrets_cli/workflows (no
+  logger in scope / wfe ctx) — acceptable end state, not debt.
 
 ## Blocked / waiting
 
@@ -54,6 +57,9 @@ timestamp: 2026-07-21T00:00:00Z
   crashes, incl. `sunbeam service apply` on a fresh machine). Workaround:
   tests pre-warm `~/.sunbeam/bin` synchronously (tests/common). When a fix
   tag lands: bump, drop the prewarm.
+- **sdk mail #44** — `From<ConnectError>` collapses the structured
+  ConnectRPC code into a string; cli string-matches `"unavailable:"` for
+  its retry decision until a structured variant lands.
 - ~~sdk mail #25~~ — resolved in sdk **v3.1.1** (adopted + validated with a
   real orchestrator boot; local kanban replica deleted).
 - ~~sbbb mail #34~~ — resolved: public client provisioned on the gateway;

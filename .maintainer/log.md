@@ -111,3 +111,24 @@ Intel runners queue forever (x86_64-apple now cross-builds on macos-14 +
 Rosetta). Homebrew: the brew wrapper filters env to an allowlist +
 HOMEBREW_*, so build-time baking uses HOMEBREW_SSO_CLIENT_ID; formula
 takes protobuf+buf as build deps (superenv hides system tools).
+
+
+## 2026-07-22 (later) — Opt-in logging; sbbb prod feedback shipped
+
+Human directive after sbbb's kanban field report: logging must be opt-in
+("otherwise exhausting to script around"). Decision: default level is Warn
+(data output only), -v/-vv/-vvv opt into info/debug/trace — the unix
+convention and what makes `cmd | jq` trustworthy. Unified the pipeline at
+the same time: `Logger::new(TracingSink)` over the sdk tracing subscriber
+(one stderr pipeline for Logger macros AND tracing:: calls) instead of the
+dual sink-selection in main.rs. Deliberately did NOT chase full
+tracing→Logger call-site migration: users/auth/secrets_cli have no logger
+in scope and workflows has no logger in the wfe ctx — post-unification the
+behavior is identical, so the remaining tracing:: calls are an accepted
+end state, not debt.
+
+sbbb's whoami "expired:false" bug did not reproduce — likely a stale
+pre-v3 binary (we found a June cargo-install shadowing brew on our own
+machine and told sbbb to check theirs). Locked correct behavior with a
+regression test anyway. The rest of their feedback shipped as two commits
+on mainline (3.0.1 candidate, unreleased — version bump is the human's).
