@@ -47,6 +47,8 @@ sunbeam service status
 - Rust (2024 edition)
 - [`buf`](https://buf.build) on `PATH` (the `sdk` dependency generates its
   ConnectRPC stubs at build time)
+- `protoc` (protobuf compiler — required by transitive build scripts;
+  `brew install protobuf` / `apt install protobuf-compiler`)
 - Docker + Lima (for `sunbeam up`)
 - A Kubernetes context for service operations
 

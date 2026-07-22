@@ -92,8 +92,12 @@ If a `sunbeam-memory` MCP server is available in your environment, use it for co
 
 ## Build & Test
 
-**Prerequisite:** `buf` must be on `PATH` — the `sdk` dependency generates its
+**Prerequisites:** `buf` must be on `PATH` — the `sdk` dependency generates its
 ConnectRPC stubs at build time (network access to buf.build required).
+`protoc` is also required by transitive build scripts. `.cargo/config.toml`
+enables AES/SSE2 target features on x86_64 for the gxhash transitive
+dependency — do not override it with a blanket `RUSTFLAGS` (the env var
+replaces, not extends, config rustflags).
 
 ```bash
 # Build

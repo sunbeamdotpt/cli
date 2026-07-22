@@ -1,0 +1,12 @@
+# Cargo configuration for all builders (local dev, CI, release).
+#
+# gxhash (a transitive dependency) hard-fails on x86_64 unless AES/SSE2
+# intrinsics are enabled at compile time. These per-target rustflags apply
+# to any x86_64 build of this crate without affecting aarch64. Note:
+# RUSTFLAGS env, if set, overrides these entirely.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+aes,+sse2"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-feature=+aes,+sse2"]

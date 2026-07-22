@@ -36,20 +36,12 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-14
-            rustflags: ""
           - target: x86_64-apple-darwin
             os: macos-13
-            rustflags: "-C target-feature=+aes,+sse2"
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-            rustflags: "-C target-feature=+aes,+sse2"
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            rustflags: ""
-
-    env:
-      # gxhash (transitive dep) requires AES/SSE2 intrinsics on x86_64.
-      RUSTFLAGS: ${{ matrix.rustflags }}
 
     steps:
       - uses: actions/checkout@v4

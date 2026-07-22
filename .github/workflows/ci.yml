@@ -19,10 +19,6 @@ permissions:
   contents: write # tag job pushes version tags
   actions: write # tag job dispatches release.yml
 
-env:
-  # gxhash (transitive dep) requires AES/SSE2 intrinsics on x86_64.
-  RUSTFLAGS: "-C target-feature=+aes,+sse2"
-
 jobs:
   lint:
     name: fmt + clippy
