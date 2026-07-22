@@ -1,47 +1,50 @@
 ---
 type: Runbook
 title: Verifying a change
-description: Build, test, lint commands and the WFE CI pipeline.
+description: Build, test, lint commands and the GitHub Actions CI setup.
 tags: [testing, ci, runbook]
-timestamp: 2026-07-20T00:00:00Z
+timestamp: 2026-07-22T00:00:00Z
 ---
 
 # Verifying a change
 
 ```bash
 cargo build --release
-cargo nextest run                    # or -p sunbeam --lib / -p sunbeam-sdk --lib
+cargo nextest run                    # nextest, NOT cargo test (env-redirect
+                                     # tests conflict under the threaded runner)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
-cargo doc --no-deps
+cargo llvm-cov nextest               # coverage; needs LLVM_COV/LLVM_PROFDATA
+                                     # env pointing at the nightly llvm-tools
 ```
 
-Note: the repo is **no longer a cargo workspace** on `refactor/remove-sdk` —
-root and `sunbeam-sdk/` are independent packages with separate lockfiles
-(`sunbeam-sdk/Cargo.lock` is gitignored). Run cargo commands in each crate
-dir as needed; `--workspace` invocations in older docs are stale.
+Single bin crate `sunbeam` (no workspace). The external `sdk` crate is a
+git-tag dependency — builds require `buf` on PATH and network access to
+buf.build (sdk ConnectRPC codegen).
 
 ## Test conventions
 
-nextest + wiremock + mockall + pretty_assertions. The kanban module targets
->90% line coverage (`cargo llvm-cov`). Both crates deny
-`unwrap_used`/`expect_used` outside tests and undocumented unsafe;
-`sunbeam-sdk` warns on missing docs. Generated gRPC stubs
-(`sunbeam-sdk/src/kanban/client/generated.rs`) are gitignored and regenerated
-by build.rs — never patch them by hand.
+nextest + wiremock + tempfile. Docker-gated integration suites under `tests/`
+(sdk `testing` feature / testcontainers: OpenBao, SsoGateway, Headscale,
+kanban full stack) skip cleanly without docker. Coverage target >90% lines
+(current ~82%, ceiling analysis in known-issues.md); `cargo llvm-cov nextest`.
 
 ## CI reality
 
-No GitHub Actions. `workflows.yaml` is a WFE pipeline run by wfe-server on
-push: checkout → lint (fmt + clippy) → test-unit (lib tests only, both
-crates) → on mainline: tag from root `Cargo.toml` version → publish
-`sunbeam-sdk` to the `sunbeam` registry → Gitea release via `tea`.
-Integration tests that need real services are **not run in CI**; binary
-tarball distribution is out-of-band (no cross-compile in CI). Local
-verification is the only gate before mainline.
+GitHub Actions only (the WFE pipeline `workflows.yaml` was removed in the v3
+release train; Gitea is gone):
+
+- `.github/workflows/ci.yml` — on push/PR: fmt + clippy + nextest. On
+  mainline: tags `vX.Y.Z` from `Cargo.toml` (if absent) and dispatches the
+  release workflow (GITHUB_TOKEN-pushed tags don't cascade, hence the
+  explicit dispatch).
+- `.github/workflows/release.yml` — tag-triggered (or workflow_dispatch):
+  native matrix builds (aarch64/x86_64 × macOS/Linux) with
+  `SUNBEAM_SSO_CLIENT_ID` baked from a repo secret, tarballs + raw binaries
+  + checksums → GitHub release. Job summary prints the Homebrew tap sha256.
 
 ## Releasing
 
-Both crates version together (currently 2.0.0-rc5). Bump root `Cargo.toml`,
-push to mainline, CI tags and publishes. Releases are the human's call —
+See `docs/release.md` (the release train). Bump `Cargo.toml`, merge to
+mainline, everything else is automated. Releases are the human's call —
 see [charter.md](charter.md).

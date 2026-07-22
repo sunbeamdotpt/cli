@@ -85,7 +85,8 @@ If a `sunbeam-memory` MCP server is available in your environment, use it for co
 ├── tests/                  # Integration tests (testcontainers via sdk `testing`
 │                           #   feature + wiremock; skip cleanly without docker)
 ├── sunbeam.yaml            # This repo's own project config
-├── workflows.yaml          # WFE CI pipeline definition
+├── .github/workflows/      # CI (ci.yml: lint/test/tag) and release builds
+│                           #   (release.yml: matrix binaries → GH release)
 └── lima-sunbeam.yaml       # Lima VM spec for local k3s + Cilium + BuildKit
 ```
 
@@ -252,22 +253,21 @@ exits with the error's exit code.
 
 ## CI / CD
 
-Two systems, documented fully in `docs/release.md`:
+GitHub Actions only (the WFE/Gitea pipeline was removed). Full process:
+`docs/release.md`.
 
-- **WFE pipeline** (`workflows.yaml`) — CI on every push: checkout → lint
-  (`cargo fmt --check` + clippy) → tests (nextest) → tag `vX.Y.Z` from
-  `Cargo.toml` on mainline. CI steps that compile install a pinned `buf`
-  (if the pin needs a bump, change it in every compiling step there).
-- **GitHub Actions** (`.github/workflows/release.yml`) — triggered by the
-  tag: builds `--release --locked` binaries natively on four targets
-  (aarch64/x86_64 × macOS/Linux) with `SUNBEAM_SSO_CLIENT_ID` baked in
-  from a repo secret, packages tarballs with man pages + completions, and
-  publishes the GitHub release with checksums.
+- **CI** (`.github/workflows/ci.yml`) — on push/PR: fmt + clippy + nextest
+  (compiling steps install pinned buf; docker-gated suites skip cleanly).
+  On mainline: tags `vX.Y.Z` from `Cargo.toml` and dispatches the release
+  workflow.
+- **Release** (`.github/workflows/release.yml`) — tag-triggered (or manual
+  dispatch): native matrix builds (aarch64/x86_64 × macOS/Linux) with
+  `SUNBEAM_SSO_CLIENT_ID` baked in from a repo secret, tarballs + raw
+  binaries + checksums → GitHub release. Job summary prints the Homebrew
+  tap sha256.
 - **Homebrew tap** (`sunbeamdotpt/tap`) — formula builds from the source
-  archive; its sha256 is printed into the release workflow's job summary.
-
-Integration tests requiring real services or a cluster are not run in CI
-(the docker-gated suites skip cleanly).
+  archive; `sunbeam update` self-updates from the GH release's raw binary
+  assets.
 
 ## Security Considerations
 

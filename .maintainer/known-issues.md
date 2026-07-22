@@ -21,8 +21,11 @@ note it in [log.md](log.md). Verify against the repo before trusting an entry.
 
 ## Drift risks (standing, not one-off)
 
-- Self-update pulls artifacts from Gitea CI; changes to release workflow
-  shape affect every installed binary's update path.
+- **Release asset names** — `sunbeam update` selects the
+  `sunbeam-raw-<target>` asset by exact name from the latest GH release;
+  renaming assets in `release.yml` breaks self-update for every installed
+  binary. Keep the names in `release.yml`, `update.rs`, and
+  `docs/release.md` in sync.
 - **Test runner** — env-redirect tests conflict under plain `cargo test`
   (threaded); nextest is the supported runner. If that ever changes, those
   suites need a serialization mutex or relocation to integration binaries.

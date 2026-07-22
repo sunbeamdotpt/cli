@@ -76,3 +76,21 @@ Consequences worth remembering:
   provisions the CLI's public client (#34).
 - Mails sent: #32 (sso-gateway: 6 API gaps), #33 (sdk: testing recovery
   courier + sso_url/client-id config fields), #34 (sbbb: seed request).
+
+
+## 2026-07-22 — WFE/Gitea CI removed; release train is GitHub Actions only
+
+Human decision: "remove wfe ci integration for now, esp gitea as that's long
+gone." workflows.yaml deleted; `.github/workflows/ci.yml` (fmt/clippy/nextest
++ auto-tag from Cargo.toml on mainline + explicit release dispatch) and
+`release.yml` (native matrix builds → GH release) replace it. Why the
+explicit dispatch: GITHUB_TOKEN-pushed tags don't cascade to on:push
+workflows — a first-pass workaround that avoids needing a PAT.
+
+Self-update moved from Gitea CI artifacts (per-commit bleeding edge) to GH
+tagged releases (`sunbeam-raw-<target>` asset + checksums.txt). Considered
+the `self_update` crate and rejected it: it duplicates reqwest and pulls
+tar/zip/indicatif for an archive-extraction model we don't need once raw
+binary assets exist — the existing tested atomic_replace/checksum machinery
+was kept and only the fetch layer swapped. Dead `check_update_background`
+cache removed with the Gitea code.

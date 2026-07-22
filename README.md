@@ -38,7 +38,7 @@ sunbeam service status
 - **VPN**: Headscale/WireGuard tunnel (`sunbeam vpn connect|status|disconnect`).
 - **Workflows**: local + remote WFE instance control (`sunbeam workflow ...`).
 - **Auth**: OAuth2 device-code SSO login (`sunbeam auth login`).
-- **Self-update**: `sunbeam update` pulls the latest CI artifact from Gitea.
+- **Self-update**: `sunbeam update` pulls the latest tagged release from GitHub.
 
 ## Installation
 

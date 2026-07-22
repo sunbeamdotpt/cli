@@ -12,7 +12,7 @@ repo's `AGENTS.md` is authoritative for code conventions; this charter governs
   ported command-layer logic: auth, users, services, checks, registry,
   workflows, wfectl, kanban)
 - `tests/` — integration suites (testcontainers + wiremock)
-- `build.rs`, `lima-sunbeam.yaml`, `workflows.yaml` (WFE CI), `docs/`, `sunbeam.yaml`
+- `build.rs`, `lima-sunbeam.yaml`, `.github/workflows/` (CI + release), `docs/`, `sunbeam.yaml`
 - `AGENTS.md`, `README.md`, `CHANGELOG.md`, and this `.maintainer/` bundle
 
 ## What you do NOT own

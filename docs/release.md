@@ -1,59 +1,60 @@
 # Release train — Sunbeam Compute Platform CLI
 
-How a `sunbeam` release goes from merged code to installed binary. Two CI
-systems are involved, on purpose:
+How a `sunbeam` release goes from merged code to installed binary.
+Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
 
-| System | File | Job |
+| Piece | File | Job |
 |---|---|---|
-| WFE pipeline | `workflows.yaml` | lint, tests, **cut the version tag** on mainline |
-| GitHub Actions | `.github/workflows/release.yml` | build binaries, publish the **GitHub release** |
+| CI | `.github/workflows/ci.yml` | fmt, clippy, nextest; **cut the version tag** on mainline |
+| Release builds | `.github/workflows/release.yml` | build binaries, publish the **GitHub release** |
 | Homebrew tap | `sunbeamdotpt/tap` repo | deliver to users (`brew install sunbeam`) |
 
 ## The train, step by step
 
 1. **Develop on branches.** All gates run locally before merge:
    `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`,
-   `cargo nextest run`. Merges land on `mainline`.
+   `cargo nextest run`. CI runs the same on every PR.
 
 2. **Bump the version when you're ready to ship.** `Cargo.toml` `version`
    is the single source of truth. Semver: breaking CLI changes → major,
    new verbs/features → minor, fixes → patch. The bump is a normal commit
    on the release branch before merge.
 
-3. **WFE CI runs on the merge.** Lint + full test suite (including
-   integration suites; they skip without docker). On `mainline` only, the
-   pipeline reads the version from `Cargo.toml` and pushes tag
-   `vX.Y.Z` to GitHub. If the tag already exists it does not re-tag —
-   forget the version bump and the release simply doesn't happen.
+3. **Merge to `mainline`.** After lint + tests pass, the `tag` job in
+   `ci.yml` reads the version from `Cargo.toml`; if tag `vX.Y.Z` doesn't
+   exist it creates and pushes it, then dispatches the release workflow
+   (GITHUB_TOKEN-pushed tags don't cascade to `on: push` workflows, hence
+   the explicit dispatch). No version bump → tag exists → nothing happens.
 
-4. **The tag triggers `.github/workflows/release.yml`.** It builds
-   `--release --locked` binaries natively on four targets
+4. **`release.yml` builds and publishes.** Native builds on four targets
    (`aarch64`/`x86_64` × macOS/Linux), each with:
    - the platform's public SSO client ID baked in at compile time via the
      `SUNBEAM_SSO_CLIENT_ID` repo secret (option_env! — never in git),
    - `buf` for the sdk's ConnectRPC codegen,
    - man pages (`sunbeam __man`, gzipped) and shell completions,
-   packaged as `sunbeam_X.Y.Z_<target>.tar.gz`, then creates the GitHub
-   release with all tarballs, a `checksums.txt`, and auto-generated notes.
+   packaged as `sunbeam_X.Y.Z_<target>.tar.gz` **plus** raw
+   `sunbeam-raw-<target>` binaries (what `sunbeam update` downloads), then
+   creates the GitHub release with everything plus `checksums.txt` and
+   auto-generated notes.
 
 5. **Update the Homebrew tap.** The release workflow prints the source
    archive's sha256 into its job summary. In the tap repo
    (`../tap`, github.com/sunbeamdotpt/tap):
-   - set `Formula/sunbeam.rb` `sha256` to that value (and `url` version on
-     future releases),
+   - set `Formula/sunbeam.rb` `sha256` to that value (and bump the `url`
+     version on future releases),
    - `brew audit --new Formula/sunbeam.rb`,
      `brew install --build-from-source Formula/sunbeam.rb`,
      `brew test Formula/sunbeam.rb`,
    - commit and push. Users get the release via `brew upgrade sunbeam`.
 
-6. **Announce / close out.** Verify the GH release page shows all four
-   artifacts + checksums, and `brew info sunbeam` resolves the new version
-   after the tap push.
+6. **Verify.** The GH release page shows all four tarballs + four raw
+   binaries + checksums; `sunbeam update` on the previous release moves to
+   the new version; `brew info sunbeam` resolves it after the tap push.
 
 ## Rebuilding and fixing
 
 - **Rebuild artifacts for an existing tag**: Actions → release →
-  Run workflow → enter the tag. Same artifacts, same tag — never move a
+  Run workflow → enter the tag. Same tag, fresh artifacts — never move a
   tag.
 - **Broken release**: do not re-tag or edit published artifacts. Cut a
   patch release (bump patch, back to step 2) and optionally mark the
@@ -66,18 +67,15 @@ systems are involved, on purpose:
 - `SUNBEAM_SSO_CLIENT_ID` (GitHub repo secret) — the provisioned public
   OAuth2 client ID, baked into release binaries. If unset, binaries build
   fine but `sunbeam auth login` requires the runtime env var.
-- WFE CI prerequisites are documented in `workflows.yaml` (wfe-server,
-  credentials secret, CI image); compiling steps install pinned buf.
+- Builds need network access (crates.io + buf.build for the sdk codegen).
 
-## Update channels (note)
+## Self-update channel
 
-`sunbeam update` (self-update) currently pulls the latest **mainline CI
-artifact** from the Gitea Actions API (`src.{domain}/api/v1/repos/studio/cli`)
-— a per-commit bleeding-edge channel, independent of this release train.
-Installed v2 binaries depend on that Gitea artifact shape, so don't change
-it casually (see `.maintainer/known-issues.md`). Whether v3 self-update
-should switch to tagged GH releases is an open human decision; the GH
-release artifacts published by this train are the natural target.
+`sunbeam update` tracks this train: it queries the GitHub API for the
+latest release, compares the tag to its own `CARGO_PKG_VERSION`, downloads
+the `sunbeam-raw-<target>` asset for its platform, verifies it against
+`checksums.txt`, and atomically replaces itself. (The old Gitea
+CI-artifact channel was removed with the WFE pipeline.)
 
 ## Version numbering notes
 

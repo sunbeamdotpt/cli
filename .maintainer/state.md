@@ -10,13 +10,17 @@ timestamp: 2026-07-21T00:00:00Z
 
 ## In flight
 
-- **v3 migration COMMITTED on `refactor/remove-sdk`** (4 commits: feat!
-  migration, test suites, docs, maintainer bundle; human owns merge/tag).
-  The cli depends on the sibling `sdk` repo via git tag **v3.1.1**; the
-  in-tree `sunbeam-sdk/` is deleted. Verbs cut: `project` (+shortcuts),
-  `operations`/`wt`, `vcs`. kanban rewritten on ConnectRPC. Man pages via
-  hidden `sunbeam __man <dir>` (clap_mangen, 168 pages). Release train:
-  CHANGELOG restarted at 3.0.0; CI tags from Cargo.toml on mainline.
+- **v3 migration COMMITTED on `refactor/remove-sdk`** (human owns
+  merge/tag). The cli depends on the sibling `sdk` repo via git tag
+  **v3.1.1**; the in-tree `sunbeam-sdk/` is deleted. Verbs cut: `project`
+  (+shortcuts), `operations`/`wt`, `vcs`. kanban rewritten on ConnectRPC.
+  Man pages via hidden `sunbeam __man <dir>` (clap_mangen, 168 pages).
+- **Release train = GitHub Actions only** (WFE/Gitea pipeline REMOVED
+  2026-07-22): `ci.yml` (fmt/clippy/nextest + auto-tag from Cargo.toml on
+  mainline + dispatch) and `release.yml` (native matrix builds, tarballs +
+  raw binaries + checksums → GH release, tap sha256 in job summary).
+  `sunbeam update` now self-updates from GH release raw-binary assets.
+  Process: `docs/release.md`. Needs repo secret `SUNBEAM_SSO_CLIENT_ID`.
 - **Runtime auth is sso-gateway-only** (2026-07-21, second entry in log.md):
   `auth` + `user` + subject↔email resolution migrated off Hydra/Kratos;
   `user disable|enable|set-password` removed. Up-workflow Ory seeding
