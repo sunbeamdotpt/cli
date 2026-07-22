@@ -4,7 +4,7 @@ version = "3.0.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/sunbeamdotpt/cli"
-description = "Sunbeam Studios CLI"
+description = "Sunbeam Compute Platform CLI"
 
 [[bin]]
 name = "sunbeam"

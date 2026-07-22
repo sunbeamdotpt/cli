@@ -7,7 +7,7 @@ use wfe_core::models::WorkflowStatus;
 
 /// Sunbeam local dev stack manager.
 #[derive(Parser, Debug)]
-#[command(name = "sunbeam", about = "Sunbeam local dev stack manager")]
+#[command(name = "sunbeam", about = "Sunbeam Compute Platform CLI", version)]
 pub struct Cli {
     /// Named context to use (overrides current-context from config).
     #[arg(long)]
