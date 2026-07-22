@@ -252,15 +252,22 @@ exits with the error's exit code.
 
 ## CI / CD
 
-Continuous integration is defined in `workflows.yaml` and executed by the WFE
-workflow engine (not GitHub Actions). Pipeline: checkout → lint (`cargo fmt
---check` + clippy) → unit tests (nextest) → tag (from `Cargo.toml` version) →
-publish → Gitea release.
+Two systems, documented fully in `docs/release.md`:
 
-CI steps that compile install a pinned `buf` (see `workflows.yaml`); if the
-pin needs a bump, change it in every compiling step there.
+- **WFE pipeline** (`workflows.yaml`) — CI on every push: checkout → lint
+  (`cargo fmt --check` + clippy) → tests (nextest) → tag `vX.Y.Z` from
+  `Cargo.toml` on mainline. CI steps that compile install a pinned `buf`
+  (if the pin needs a bump, change it in every compiling step there).
+- **GitHub Actions** (`.github/workflows/release.yml`) — triggered by the
+  tag: builds `--release --locked` binaries natively on four targets
+  (aarch64/x86_64 × macOS/Linux) with `SUNBEAM_SSO_CLIENT_ID` baked in
+  from a repo secret, packages tarballs with man pages + completions, and
+  publishes the GitHub release with checksums.
+- **Homebrew tap** (`sunbeamdotpt/tap`) — formula builds from the source
+  archive; its sha256 is printed into the release workflow's job summary.
 
-Integration tests requiring real services or a cluster are not run in CI.
+Integration tests requiring real services or a cluster are not run in CI
+(the docker-gated suites skip cleanly).
 
 ## Security Considerations
 
