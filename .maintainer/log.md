@@ -94,3 +94,20 @@ tar/zip/indicatif for an archive-extraction model we don't need once raw
 binary assets exist — the existing tested atomic_replace/checksum machinery
 was kept and only the fetch layer swapped. Dead `check_update_background`
 cache removed with the Gitea code.
+
+
+## 2026-07-22 — v3.0.0 released; train proven end-to-end
+
+First release through the new train. Merge to mainline → ci.yml tagged
+v3.0.0 → release.yml published the GH release; tap updated and pushed.
+CI hardening learned the hard way (each a real commit): runners need
+protoc (wfe-buildkit-protos), gxhash needs per-target AES flags in
+.cargo/config.toml (x86_64 +aes,+sse2; aarch64-linux +aes,+neon — only
+apple-aarch64 gets AES by default), sdk's reqwest::blocking tool download
+panics in async contexts on cold caches (sdk mail #39; test-side prewarm
+workaround), a test distractor asset must never equal the host's asset
+name, buf-setup-action needs github_token (rate limits), and macos-13
+Intel runners queue forever (x86_64-apple now cross-builds on macos-14 +
+Rosetta). Homebrew: the brew wrapper filters env to an allowlist +
+HOMEBREW_*, so build-time baking uses HOMEBREW_SSO_CLIENT_ID; formula
+takes protobuf+buf as build deps (superenv hides system tools).

@@ -10,11 +10,15 @@ timestamp: 2026-07-21T00:00:00Z
 
 ## In flight
 
-- **v3 migration COMMITTED on `refactor/remove-sdk`** (human owns
-  merge/tag). The cli depends on the sibling `sdk` repo via git tag
-  **v3.1.1**; the in-tree `sunbeam-sdk/` is deleted. Verbs cut: `project`
-  (+shortcuts), `operations`/`wt`, `vcs`. kanban rewritten on ConnectRPC.
-  Man pages via hidden `sunbeam __man <dir>` (clap_mangen, 168 pages).
+- **v3.0.0 RELEASED 2026-07-22.** `refactor/remove-sdk` merged to mainline;
+  CI tags from Cargo.toml; `release.yml` built all four targets (x86_64-apple
+  cross-compiled on arm via Rosetta — Intel runners are capacity-starved) and
+  published the GitHub release (tarballs + `sunbeam-raw-*` + checksums;
+  raw-binary checksum verified end-to-end, client ID baked from the repo
+  secret). Homebrew formula live in `sunbeamdotpt/tap` (install/test/audit
+  verified locally; bake channel is `HOMEBREW_SSO_CLIENT_ID`).
+  Nothing in flight — the train is operational; next release is just a
+  Cargo.toml bump + merge.
 - **Release train = GitHub Actions only** (WFE/Gitea pipeline REMOVED
   2026-07-22): `ci.yml` (fmt/clippy/nextest + auto-tag from Cargo.toml on
   mainline + dispatch) and `release.yml` (native matrix builds, tarballs +
