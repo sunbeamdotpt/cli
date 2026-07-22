@@ -10,15 +10,11 @@ timestamp: 2026-07-21T00:00:00Z
 
 ## In flight
 
-- **v3.0.0 RELEASED 2026-07-22.** `refactor/remove-sdk` merged to mainline;
-  CI tags from Cargo.toml; `release.yml` built all four targets (x86_64-apple
-  cross-compiled on arm via Rosetta — Intel runners are capacity-starved) and
-  published the GitHub release (tarballs + `sunbeam-raw-*` + checksums;
-  raw-binary checksum verified end-to-end, client ID baked from the repo
-  secret). Homebrew formula live in `sunbeamdotpt/tap` (install/test/audit
-  verified locally; bake channel is `HOMEBREW_SSO_CLIENT_ID`).
-  Nothing in flight — the train is operational; next release is just a
-  Cargo.toml bump + merge.
+- **v3.1.0 RELEASED 2026-07-22** (v3.0.0 earlier same day). Train fully
+  operational: merge → ci.yml tags → release.yml builds/publishes → tap
+  formula installs the PREBUILT tarballs (hard requirement: no build
+  toolchain for brew users). Nothing in flight — next release is a
+  Cargo.toml bump + merge + 4 sha256s in the tap.
 - **Release train = GitHub Actions only** (WFE/Gitea pipeline REMOVED
   2026-07-22): `ci.yml` (fmt/clippy/nextest + auto-tag from Cargo.toml on
   mainline + dispatch) and `release.yml` (native matrix builds, tarballs +

@@ -132,3 +132,17 @@ pre-v3 binary (we found a June cargo-install shadowing brew on our own
 machine and told sbbb to check theirs). Locked correct behavior with a
 regression test anyway. The rest of their feedback shipped as two commits
 on mainline (3.0.1 candidate, unreleased — version bump is the human's).
+
+
+## 2026-07-22 (even later) — v3.1.0 released; tap ships binaries, not source
+
+Human hard requirement mid-upgrade: Homebrew must not require a build
+toolchain (buf/protoc/rust + network + 10-min compile is unacceptable for
+end users). The tap formula now installs the prebuilt release tarballs
+(binary + man pages + completions per platform) instead of building from
+the source archive. Consequences: no build deps in the formula, installs
+are instant, and the SSO client ID reaches brew users pre-baked from the
+release workflow's repo secret — the HOMEBREW_SSO_CLIENT_ID bake channel
+from earlier today is now moot (kept in the formula's history only).
+release.yml's job summary now prints the four tarball sha256s for the
+formula update step.
