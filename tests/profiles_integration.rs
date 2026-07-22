@@ -2,24 +2,31 @@
 //! `sdk::manifests` pipeline, driven by a real `kustomize build` over a
 //! temporary fixture tree.
 //!
-//! No containers required — but a `kustomize` binary must be on PATH (the
-//! fixture discovery path shells out to it, exactly like the CLI does).
-//! The container-dependent suites skip without Docker; this one skips
-//! without kustomize.
+//! No containers required. The sdk lazily downloads its managed
+//! kustomize/helm into `~/.sunbeam/bin` via `reqwest::blocking`, which
+//! panics when dropped inside an async context (sdk mail #39) — so each
+//! test isolates `$HOME` into a tempdir and pre-warms the tool cache
+//! synchronously (`common::prewarm_tool_cache`) before any async call.
 
 mod common;
 
 use std::collections::HashMap;
-use std::process::Command;
 
-fn kustomize_available() -> bool {
-    Command::new("kustomize")
-        .arg("version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// Isolate $HOME and synchronously pre-warm the sdk's managed tool cache.
+/// Returns the tempdir guard, or None (caller skips) if tools can't be
+/// provisioned.
+fn isolated_home_with_tools() -> Option<tempfile::TempDir> {
+    let home = tempfile::tempdir().unwrap();
+    // SAFETY: nextest runs each test in its own process.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
+    if common::prewarm_tool_cache(home.path()) {
+        Some(home)
+    } else {
+        eprintln!("skipping profiles: cannot provision kustomize/helm");
+        None
+    }
 }
 
 /// Write a two-namespace kustomize fixture: gitea (devtools) with a `scale`
@@ -108,10 +115,9 @@ rules:
 /// Discovery + validation + resolution over the kustomize-built fixture.
 #[tokio::test]
 async fn profile_pipeline_over_kustomize_fixture() {
-    if !kustomize_available() {
-        eprintln!("skipping profiles: no kustomize binary on PATH");
+    let Some(_home) = isolated_home_with_tools() else {
         return;
-    }
+    };
 
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("base");
@@ -181,10 +187,9 @@ async fn profile_pipeline_over_kustomize_fixture() {
 /// A profile that references an undeclared shortcut must fail validation.
 #[tokio::test]
 async fn profile_with_undeclared_shortcut_fails_validation() {
-    if !kustomize_available() {
-        eprintln!("skipping profiles: no kustomize binary on PATH");
+    let Some(_home) = isolated_home_with_tools() else {
         return;
-    }
+    };
 
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("base");
