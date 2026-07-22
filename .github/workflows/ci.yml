@@ -1,0 +1,112 @@
+# ci.yml — lint, test, and cut version tags on mainline.
+#
+# Replaces the old WFE pipeline (workflows.yaml, removed). On every push to
+# mainline and every PR: fmt + clippy + nextest. On mainline pushes only, the
+# `tag` job reads the version from Cargo.toml and, if the tag doesn't exist,
+# creates it and dispatches release.yml to build and publish artifacts.
+#
+# Docs: docs/release.md (the release train process).
+
+name: ci
+
+on:
+  push:
+    branches:
+      - mainline
+  pull_request:
+
+permissions:
+  contents: write # tag job pushes version tags
+  actions: write # tag job dispatches release.yml
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.71.0"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: nextest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.71.0"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      # Integration suites skip cleanly without docker; the unit suites are
+      # the real gate here.
+      - name: nextest
+        run: cargo nextest run
+
+  tag:
+    name: tag vX.Y.Z from Cargo.toml
+    needs: [lint, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/mainline'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag_created: ${{ steps.tag.outputs.created }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          TAG="v$VERSION"
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists — nothing to do."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+      # GITHUB_TOKEN-pushed tags don't cascade to on:push workflows, so
+      # dispatch the release build explicitly.
+      - name: Dispatch release build
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml -f "tag=v${{ steps.tag.outputs.version }}"

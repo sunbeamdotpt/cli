@@ -94,13 +94,18 @@ jobs:
           done
 
           tar -czf "${STAGE}.tar.gz" "$STAGE"
-          mv "${STAGE}.tar.gz" artifact.tar.gz
+
+          # Raw binary asset: what `sunbeam update` downloads (no archive
+          # extraction needed for self-replacement).
+          cp "$BIN" "sunbeam-raw-${TARGET}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: sunbeam-${{ matrix.target }}
-          path: artifact.tar.gz
+          path: |
+            sunbeam_*_*.tar.gz
+            sunbeam-raw-${{ matrix.target }}
           if-no-files-found: error
 
   release:
@@ -121,7 +126,7 @@ jobs:
       - name: Checksums
         run: |
           set -euo pipefail
-          sha256sum sunbeam_*.tar.gz > checksums.txt
+          sha256sum sunbeam_*.tar.gz sunbeam-raw-* > checksums.txt
           cat checksums.txt
 
       - name: Source archive sha256 for the Homebrew tap
@@ -147,5 +152,6 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             sunbeam_*.tar.gz
+            sunbeam-raw-*
             checksums.txt
           generate_release_notes: true
