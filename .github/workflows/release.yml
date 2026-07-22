@@ -137,20 +137,14 @@ jobs:
           sha256sum sunbeam_*.tar.gz sunbeam-raw-* > checksums.txt
           cat checksums.txt
 
-      - name: Source archive sha256 for the Homebrew tap
+      - name: Homebrew tap formula shas
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.tag }}"
-            VERSION="${VERSION#v}"
-          fi
-          SHA=$(curl -sL "https://github.com/sunbeamdotpt/cli/archive/refs/tags/v${VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
           {
-            echo "### Homebrew tap update"
+            echo "### Homebrew tap update — paste into the four sha256 lines of Formula/sunbeam.rb"
             echo ""
-            echo "\`\`\`ruby"
-            echo "sha256 \"${SHA}\""
+            echo "\`\`\`"
+            grep '\.tar\.gz$' checksums.txt
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

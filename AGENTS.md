@@ -269,9 +269,10 @@ GitHub Actions only (the WFE/Gitea pipeline was removed). Full process:
   `SUNBEAM_SSO_CLIENT_ID` baked in from a repo secret, tarballs + raw
   binaries + checksums → GitHub release. Job summary prints the Homebrew
   tap sha256.
-- **Homebrew tap** (`sunbeamdotpt/tap`) — formula builds from the source
-  archive; `sunbeam update` self-updates from the GH release's raw binary
-  assets.
+- **Homebrew tap** (`sunbeamdotpt/tap`) — formula installs the prebuilt
+  release tarballs (binary + man pages + completions; no build toolchain
+  for users); `sunbeam update` self-updates from the GH release's raw
+  binary assets.
 
 ## Security Considerations
 

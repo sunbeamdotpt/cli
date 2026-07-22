@@ -39,14 +39,14 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
    creates the GitHub release with everything plus `checksums.txt` and
    auto-generated notes.
 
-5. **Update the Homebrew tap.** The release workflow prints the source
-   archive's sha256 into its job summary. In the tap repo
+5. **Update the Homebrew tap.** The formula installs the prebuilt release
+   tarballs (no build toolchain for users). The release workflow prints the
+   four tarball sha256s into its job summary. In the tap repo
    (`../tap`, github.com/sunbeamdotpt/tap):
-   - set `Formula/sunbeam.rb` `sha256` to that value (and bump the `url`
-     version on future releases),
-   - `brew audit --new Formula/sunbeam.rb`,
-     `brew install --build-from-source Formula/sunbeam.rb`,
-     `brew test Formula/sunbeam.rb`,
+   - bump the four `url`s to the new version and set the four `sha256`s,
+   - `brew audit sunbeamdotpt/tap/sunbeam`,
+     `brew install sunbeamdotpt/tap/sunbeam`,
+     `brew test sunbeamdotpt/tap/sunbeam`,
    - commit and push. Users get the release via `brew upgrade sunbeam`.
 
 6. **Verify.** The GH release page shows all four tarballs + four raw
@@ -70,10 +70,9 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
   OAuth2 client ID, baked into release binaries. If unset, binaries build
   fine but `sunbeam auth login` requires the runtime env var.
 - Builds need network access (crates.io + buf.build for the sdk codegen).
-- Homebrew note: `brew install` filters the environment down to an
-  allowlist plus `HOMEBREW_*` — to bake the client ID into a source build,
-  pass it as `HOMEBREW_SSO_CLIENT_ID` (the formula re-exports it; runtime
-  `SUNBEAM_SSO_CLIENT_ID` remains the fallback).
+- The tap formula installs the pre-baked release binaries, so the client
+  ID reaches brew users automatically; `SUNBEAM_SSO_CLIENT_ID` at runtime
+  remains the override for non-release builds.
 
 ## Self-update channel
 
