@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
-use sunbeam_sdk::error::{Result, SunbeamError};
-use sunbeam_sdk::{debug, info};
+use sdk::error::{Result, SunbeamError};
+use sdk::{debug, info};
 use wfe::run_workflow_sync;
 use wfe_core::models::WorkflowStatus;
 
@@ -27,8 +27,8 @@ pub struct Cli {
     ///
     /// The `RUST_LOG` environment variable overrides the default level filter
     /// (e.g. `RUST_LOG=sunbeam=debug` or `RUST_LOG=trace`).
-    #[arg(long, value_enum, default_value_t = sunbeam_sdk::logging::LogMode::Line, global = true)]
-    pub log_mode: sunbeam_sdk::logging::LogMode,
+    #[arg(long, value_enum, default_value_t = sdk::logging::LogMode::Line, global = true)]
+    pub log_mode: sdk::logging::LogMode,
 
     /// Increase logging verbosity. Use once for debug, twice for trace.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -49,7 +49,7 @@ pub enum Verb {
     /// Authenticate with Sunbeam (OAuth2 device login).
     #[command(long_about = r#"Authenticate with Sunbeam services.
 
-SSO (Hydra OIDC) is used by Planka, Kratos admin UI, Grafana, and other
+SSO is provided by the sso-gateway and used by Kanban, Grafana, and other
 services behind the ingress. The CLI uses the OAuth2 Device Authorization
 Grant (RFC 8628): it prints a user code and URL, opens a browser to the URL,
 and polls for tokens once authorized. Tokens are stored in
@@ -184,7 +184,7 @@ EXAMPLES:
         /// Also delete infrastructure namespaces (cert-manager, longhorn-system).
         #[arg(long)]
         infra: bool,
-        /// Preserve data namespace (postgres, opensearch).
+        /// Preserve data namespace (postgres, openbao, opensearch, valkey).
         #[arg(long)]
         keep_data: bool,
         /// Use Lima VM for local k3s (shorthand for --profile lima).
@@ -198,7 +198,7 @@ EXAMPLES:
     /// Kanban board management.
     #[command(long_about = r#"Manage Kanban projects, boards, and cards.
 
-Connects to the Sunbeam Kanban backend over gRPC. Most commands require an
+Connects to the Sunbeam Kanban backend over ConnectRPC. Most commands require an
 active SSO session (`sunbeam auth login`). Public board commands are
 unauthenticated.
 
@@ -215,106 +215,19 @@ EXAMPLES:
   # Search cards
   sunbeam kanban search "frontend crash"
 
-  # Subscribe to realtime board events
-  sunbeam kanban subscribe board board_xxx
+  # Show the current SSO identity
+  sunbeam kanban auth whoami
 "#)]
     Kanban {
         /// Output format.
-        #[arg(short, long, value_enum, default_value_t = sunbeam_sdk::output::OutputFormat::Table, global = true)]
-        output: sunbeam_sdk::output::OutputFormat,
+        #[arg(short, long, value_enum, default_value_t = crate::output::OutputFormat::Table, global = true)]
+        output: crate::output::OutputFormat,
         /// Kanban server URL override (default: https://kanban.<domain>).
         #[arg(short, long)]
         url: Option<String>,
+        /// Kanban subcommand to run.
         #[command(subcommand)]
         action: crate::kanban::KanbanCommand,
-    },
-
-    /// Workspace-level operations (alias: ops).
-    #[command(
-        alias = "ops",
-        long_about = r#"Workspace-level orchestration commands.
-
-Operate across the entire workspace rather than a single project.
-
-Subcommands:
-  - compose  — Docker Compose operations for shared local dependencies
-               (render, up, down, ps, logs)
-  - info     — print resolved workspace configuration
-  - repos    — list all repositories in the workspace by bucket
-  - stack    — snapshot and restore repo SHAs across the workspace
-               (list, pin, apply, diff)
-
-The stack system is useful for pinning a known-good combination of project
-versions and later restoring it exactly.
-
-EXAMPLES:
-  # Bring up shared local services (Postgres, Redis, etc.)
-  sunbeam ops compose up
-
-  # Pin current HEADs as "release-2026-01"
-  sunbeam ops stack pin release-2026-01
-
-  # Restore a pinned stack
-  sunbeam ops stack apply release-2026-01
-
-  # Diff two stacks
-  sunbeam ops stack diff release-2026-01 release-2026-02
-
-  # List all repos
-  sunbeam ops repos
-"#
-    )]
-    Operations {
-        #[command(subcommand)]
-        action: OperationsAction,
-    },
-
-    /// Per-project build verbs (alias: proj).
-    #[command(
-        alias = "proj",
-        long_about = r#"Build, test, and package projects in the workspace.
-
-Sunbeam discovers projects from `sunbeam.workspace.yaml` and `sunbeam.yaml`
-files. Each project defines targets (build, test, lint, fmt, package, deploy,
-dev, clean, doc) and optional dependencies on other projects.
-
-Commands can run for:
-  - The current project only (default)
-  - All projects in the workspace (--all), topologically sorted
-  - Specific projects (--project foo), optionally including transitive deps
-    (--with-deps)
-
-The `package` target builds container images and pushes them to the registry
-at `oci.<domain>` or `src.<domain>`.
-
-The `preseed-image` subcommand is a special helper for breaking the Pingora
-image pull deadlock on fresh clusters. After `sunbeam project package -p proxy`,
-run `sunbeam project preseed-image <ref>` to pull the image on the cluster node,
-then `sunbeam service apply ingress` to roll it out.
-
-EXAMPLES:
-  # Build the current project
-  sunbeam project build
-
-  # Test all projects in dependency order
-  sunbeam project test --all
-
-  # Package a specific project
-  sunbeam project package -p proxy
-
-  # Run a custom target defined in sunbeam.yaml
-  sunbeam project run migrate
-
-  # Show the resolved config for the current project
-  sunbeam project info
-
-  # Validate all workspace configs
-  sunbeam project check --all
-"#
-    )]
-    Project {
-        #[command(subcommand)]
-        action: ProjectAction,
     },
 
     /// OpenBao secrets engine interaction (KV, transit, generic read/write).
@@ -411,7 +324,7 @@ EXAMPLES:
   # Apply a single namespace
   sunbeam service apply ory
 
-  # Apply all namespaces (with confirmation unless --all is used)
+  # Apply all namespaces without a confirmation prompt
   sunbeam service apply --all
 
   # Dry-run to inspect rendered YAML
@@ -428,7 +341,7 @@ EXAMPLES:
 
   # View secrets stored in OpenBao for a service
   sunbeam service secrets hydra
-""#
+"#
     )]
     Service {
         #[command(subcommand)]
@@ -518,16 +431,21 @@ EXAMPLE:
     Update,
 
     /// User/identity management.
-    #[command(long_about = r#"Manage identities via Kratos.
+    #[command(long_about = r#"Manage identities via the sso-gateway.
 
-Provides CRUD operations for users in the Ory Kratos identity system, plus
-onboarding and offboarding workflows.
+Provides CRUD operations for identities in the sso-gateway IAM, plus
+onboarding and offboarding workflows. All operations use the logged-in SSO
+token (`sunbeam auth login`) and require identity admin/read scopes.
 
-Onboarding creates an identity, sets a random password, and optionally sends
-a welcome email with login instructions. Offboarding disables the identity,
-revokes all sessions, and marks the user as terminated.
+Onboarding creates an identity, generates a recovery link, and optionally
+sends a welcome email with login instructions. Offboarding revokes all
+sessions and deletes the identity (the sso-gateway has no disable/state API).
 
-Most commands accept either an email address or a Kratos identity UUID as
+Password resets go through `recover`, which prints a recovery link and token.
+The v2 `disable`, `enable`, and `set-password` subcommands were removed:
+the sso-gateway IAM exposes no identity-state or admin credential-set RPC.
+
+Most commands accept either an email address or an identity ID (ULID) as
 the target argument.
 
 EXAMPLES:
@@ -543,45 +461,15 @@ EXAMPLES:
   # Full onboarding with welcome email
   sunbeam user onboard alice@sunbeam.pt --name "Alice Smith" --department Engineering
 
-  # Offboard (disable + revoke)
-  sunbeam user offboard alice@sunbeam.pt
+  # Generate a recovery link (password reset)
+  sunbeam user recover alice@sunbeam.pt
 
-  # Set password interactively
-  sunbeam user set-password alice@sunbeam.pt
+  # Offboard (revoke sessions + delete)
+  sunbeam user offboard alice@sunbeam.pt
 "#)]
     User {
         #[command(subcommand)]
         action: Option<UserAction>,
-    },
-
-    /// Version control — repo tool operations.
-    #[command(long_about = r#"Android repo-style multi-repository operations.
-
-Wraps the repo-rs engine for managing multiple Git repositories via a
-manifest. All standard repo subcommands are available:
-  init, sync, upload, start, status, diff, rebase, cherry-pick, abandon,
-  checkout, branches, forall, grep, manifest, info, list, prune, gc,
-  diffmanifests, wipe, selfupdate, smartsync, version, help, overview
-
-EXAMPLES:
-  # Initialize a repo checkout
-  sunbeam vcs init --manifest-url https://git.sunbeam.pt/manifest.git
-
-  # Sync all projects
-  sunbeam vcs sync
-
-  # Show status
-  sunbeam vcs status
-
-  # Start a topic branch
-  sunbeam vcs start feature-x
-
-  # Upload for review
-  sunbeam vcs upload
-"#)]
-    Vcs {
-        #[command(subcommand)]
-        action: VcsAction,
     },
 
     /// Print version info.
@@ -639,6 +527,13 @@ EXAMPLES:
     #[command(name = "__vpn-daemon", hide = true)]
     VpnDaemon,
 
+    /// Internal: generate man pages for the full command tree.
+    #[command(name = "__man", hide = true)]
+    ManGen {
+        /// Directory to write the man pages into (created if missing).
+        output_dir: std::path::PathBuf,
+    },
+
     /// Workflow management — local WFE host, remote wfe-server, and target management.
     #[command(long_about = r#"Manage WFE (Workflow Engine) instances.
 
@@ -681,8 +576,8 @@ EXAMPLES:
         #[arg(short, long, default_value = "local", global = true)]
         target: String,
         /// Output format.
-        #[arg(short, long, value_enum, default_value_t = sunbeam_sdk::wfectl::output::OutputFormat::Table, global = true)]
-        output: sunbeam_sdk::wfectl::output::OutputFormat,
+        #[arg(short, long, value_enum, default_value_t = crate::wfectl::output::OutputFormat::Table, global = true)]
+        output: crate::wfectl::output::OutputFormat,
         #[command(subcommand)]
         action: crate::workflows_cmd::WorkflowAction,
     },
@@ -698,17 +593,15 @@ impl Verb {
             Verb::Doctor => "doctor",
             Verb::Down { .. } => "down",
             Verb::Kanban { .. } => "kanban",
-            Verb::Operations { .. } => "operations",
-            Verb::Project { .. } => "project",
             Verb::Secrets { .. } => "secrets",
             Verb::Service { .. } => "service",
             Verb::Up { .. } => "up",
             Verb::Update => "update",
             Verb::User { .. } => "user",
-            Verb::Vcs { .. } => "vcs",
             Verb::Version => "version",
             Verb::Vpn { .. } => "vpn",
             Verb::VpnDaemon => "vpn-daemon",
+            Verb::ManGen { .. } => "man-gen",
             Verb::Workflow { .. } => "workflow",
         }
     }
@@ -808,8 +701,7 @@ per-context config. Set it with:
   sunbeam config set --context-name <name> --infra-dir <path>
 
 Use --dry-run to inspect the rendered YAML without applying.
-Use --all to apply every namespace (with confirmation unless --all is used
-in non-interactive contexts).
+Use --all to apply every namespace without a confirmation prompt.
 
 EXAMPLES:
   sunbeam service apply ory
@@ -980,7 +872,7 @@ enabled or disabled by profile rules.
 EXAMPLE:
   sunbeam service list
   sunbeam service list -o json
-""#
+"#
     )]
     List {
         /// Output format.
@@ -1047,7 +939,7 @@ EXAMPLES:
 
 EXAMPLE:
   sunbeam service scale hydra 3
-""#
+"#
     )]
     Scale {
         /// Service name.
@@ -1151,7 +1043,7 @@ pub enum SecretsAction {
 
 EXAMPLE:
   sunbeam service secrets hydra get secretsSystem
-""#
+"#
     )]
     Get {
         /// Field name within the service's KV path.
@@ -1163,7 +1055,7 @@ EXAMPLE:
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via OAuth2 Device Authorization Grant.
-    #[command(long_about = r#"Log in to Sunbeam via Hydra OIDC.
+    #[command(long_about = r#"Log in to Sunbeam via the sso-gateway.
 
 Prints a user code and URL, opens a browser to the verification URL, and polls
 for tokens once authorized. Tokens are stored in ~/.sunbeam/config.json under
@@ -1309,7 +1201,8 @@ EXAMPLE:
     /// Delete identity.
     #[command(long_about = r#"Permanently delete an identity.
 
-This is irreversible. Consider `offboard` for a reversible lockout.
+This is irreversible. Consider `offboard` for the full offboarding workflow
+(session revocation + deletion).
 
 EXAMPLE:
   sunbeam user delete alice@sunbeam.pt
@@ -1318,49 +1211,25 @@ EXAMPLE:
         /// Email or identity ID.
         target: String,
     },
-    /// Disable identity + revoke sessions (lockout).
-    #[command(long_about = r#"Disable an identity and revoke all active sessions.
-
-The identity data is preserved. Use `enable` to reactivate.
-
-EXAMPLE:
-  sunbeam user disable alice@sunbeam.pt
-"#)]
-    Disable {
-        /// Email or identity ID.
-        target: String,
-    },
-    /// Re-enable a disabled identity.
-    #[command(long_about = r#"Re-enable a previously disabled identity.
-
-Does not reset the password or send any notification.
-
-EXAMPLE:
-  sunbeam user enable alice@sunbeam.pt
-"#)]
-    Enable {
-        /// Email or identity ID.
-        target: String,
-    },
     /// Get identity by email or ID.
     #[command(long_about = r#"Show full identity details.
 
-Accepts either an email address or a Kratos identity UUID. Resolves email to
+Accepts either an email address or an identity ID (ULID). Resolves email to
 ID internally when needed.
 
 EXAMPLE:
   sunbeam user get admin@sunbeam.pt
-  sunbeam user get 7c8f3e2a-...
+  sunbeam user get 01HZY9JTKKHK3Y6XJJYHZ9Q5TV
 "#)]
     Get {
         /// Email or identity ID.
         target: String,
     },
     /// List identities.
-    #[command(long_about = r#"List all Kratos identities.
+    #[command(long_about = r#"List all identities in the tenant.
 
-Output is paginated by the Kratos admin API. Use --search to filter by email
-substring.
+The directory is paged from the sso-gateway; --search filters by email
+substring client-side.
 
 EXAMPLES:
   sunbeam user list
@@ -1371,11 +1240,12 @@ EXAMPLES:
         #[arg(long, default_value = "")]
         search: String,
     },
-    /// Offboard user (disable + revoke all).
+    /// Offboard user (revoke sessions + delete).
     #[command(long_about = r#"Offboard a user immediately.
 
-Disables the identity, revokes all sessions, and marks the user as terminated.
-This is the recommended offboarding command. It is reversible with `enable`.
+Revokes all active sessions and permanently deletes the identity. This is the
+recommended offboarding command. It is NOT reversible (the sso-gateway has no
+disable/state API).
 
 EXAMPLE:
   sunbeam user offboard alice@sunbeam.pt
@@ -1441,7 +1311,8 @@ EXAMPLES:
     /// Generate recovery link.
     #[command(long_about = r#"Generate a recovery link for an identity.
 
-The link can be sent to the user to regain account access.
+Prints a gateway-hosted recovery link and token (valid 24h). This is the
+password-reset path: the user opens the link and sets a new password.
 
 EXAMPLE:
   sunbeam user recover alice@sunbeam.pt
@@ -1449,476 +1320,6 @@ EXAMPLE:
     Recover {
         /// Email or identity ID.
         target: String,
-    },
-    /// Set password for an identity.
-    #[command(long_about = r#"Set or reset a user's password.
-
-If the password argument is omitted, it is read interactively from stdin
-(without echo). Useful for automation when piped:
-
-  echo 'newpass' | sunbeam user set-password alice@sunbeam.pt
-
-EXAMPLE:
-  sunbeam user set-password alice@sunbeam.pt hunter2
-"#)]
-    SetPassword {
-        /// Email or identity ID.
-        target: String,
-        /// New password. If omitted, reads from stdin.
-        password: Option<String>,
-    },
-}
-
-/// Per-project build and lifecycle subcommands.
-#[derive(Subcommand, Debug)]
-pub enum ProjectAction {
-    /// Build the project.
-    #[command(long_about = r#"Build the current project or selected projects.
-
-Runs the `build` target defined in `sunbeam.yaml`. Respects the dependency
-graph — if --with-deps is used, dependencies are built first.
-
-EXAMPLES:
-  sunbeam project build
-  sunbeam project build --all
-  sunbeam project build -p proxy --with-deps
-"#)]
-    Build(ProjectRunArgs),
-    /// Validate sunbeam.yaml — checks workspace refs, dep cycles, and reports issues.
-    #[command(long_about = r#"Validate sunbeam.yaml files.
-
-Checks for:
-  - Missing workspace references
-  - Dependency cycles
-  - Invalid target definitions
-  - Missing required fields
-
-With --all, validates every owned project. Otherwise validates only the
-current project.
-
-EXAMPLES:
-  sunbeam project check
-  sunbeam project check --all
-"#)]
-    Check {
-        /// Validate every owned project (otherwise just the current project).
-        #[arg(long)]
-        all: bool,
-    },
-    /// Clean build artifacts.
-    #[command(long_about = r#"Remove build artifacts for the current project.
-
-Runs the `clean` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project clean
-  sunbeam project clean --all
-"#)]
-    Clean(ProjectRunArgs),
-    /// Deploy.
-    #[command(long_about = r#"Deploy the current project.
-
-Runs the `deploy` target defined in `sunbeam.yaml`. This usually applies
-manifests and triggers a rolling restart.
-
-EXAMPLES:
-  sunbeam project deploy
-  sunbeam project deploy -p proxy
-"#)]
-    Deploy(ProjectRunArgs),
-    /// Run dev server.
-    #[command(long_about = r#"Run the development server for the current project.
-
-Runs the `dev` target defined in `sunbeam.yaml`. This typically starts a
-hot-reload server with local dependencies.
-
-EXAMPLE:
-  sunbeam project dev
-"#)]
-    Dev(ProjectRunArgs),
-    /// Generate docs.
-    #[command(long_about = r#"Generate documentation for the current project.
-
-Runs the `doc` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project doc
-  sunbeam project doc --all
-"#)]
-    Doc(ProjectRunArgs),
-    /// Format.
-    #[command(
-        long_about = r#"Format source code for the current project or selected projects.
-
-Runs the `fmt` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project fmt
-  sunbeam project fmt --all
-""#
-    )]
-    Fmt(ProjectRunArgs),
-    /// Print the dependency DAG as a tree.
-    #[command(long_about = r#"Render the project dependency graph.
-
-Prints a tree showing which projects depend on which. With --all, renders
-the tree for every owned project in the workspace.
-
-EXAMPLES:
-  sunbeam project graph
-  sunbeam project graph --all
-"#)]
-    Graph {
-        /// Render every owned project's tree (otherwise just the current project).
-        #[arg(long)]
-        all: bool,
-    },
-    /// Print resolved project config.
-    #[command(long_about = r#"Print the resolved sunbeam.yaml configuration.
-
-Shows merged config, inherited workspace values, computed fields, and the
-final target definitions for the current project.
-
-EXAMPLE:
-  sunbeam project info
-"#)]
-    Info,
-    /// Lint.
-    #[command(
-        long_about = r#"Run the linter for the current project or selected projects.
-
-Runs the `lint` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project lint
-  sunbeam project lint --all
-""#
-    )]
-    Lint(ProjectRunArgs),
-    /// Print topologically-sorted build order for a verb.
-    #[command(long_about = r#"Show the build order for a verb across the workspace.
-
-Respects project dependencies (`deps.projects` in sunbeam.yaml) and prints
-the topological groups. Useful for understanding parallelism limits.
-
-EXAMPLE:
-  sunbeam project order build
-  sunbeam project order package
-""#)]
-    Order {
-        #[arg(default_value = "build")]
-        verb: String,
-    },
-    /// Package (container image, tarball, etc.).
-    #[command(long_about = r#"Package the project into a distributable artifact.
-
-For most services this builds a container image and pushes it to the registry
-at `oci.<domain>` or `src.<domain>`. The image tag is derived from the Git
-commit SHA.
-
-EXAMPLES:
-  sunbeam project package
-  sunbeam project package -p proxy
-  sunbeam project package --all
-"#)]
-    Package(ProjectRunArgs),
-    /// Pre-pull the proxy image on the cluster node to break the
-    /// Pingora IfNotPresent + Recreate deadlock, then bump the
-    /// kustomization newTag.
-    #[command(long_about = r#"Pre-pull a container image on the cluster node.
-
-On fresh clusters, the Pingora ingress controller can deadlock because its
-image pull policy is IfNotPresent and the registry is behind the ingress
-itself. This command pulls the image directly onto the node via a Job, then
-patches the kustomization newTag so the deployment can roll out.
-
-Workflow:
-  1. sunbeam project package -p proxy
-  2. sunbeam project preseed-image src.sunbeam.pt/studio/proxy:abc1234
-  3. sunbeam service apply ingress
-
-EXAMPLE:
-  sunbeam project preseed-image src.sunbeam.pt/studio/proxy:abc1234
-"#)]
-    PreseedImage {
-        /// Full image reference to pull (e.g. src.sunbeam.pt/studio/proxy:abc1234).
-        image_ref: String,
-        /// Seconds to wait for the puller Job to complete.
-        #[arg(long, default_value_t = 300)]
-        timeout: u64,
-    },
-    /// Run a custom verb defined in this project's `targets`.
-    #[command(long_about = r#"Run a custom target defined in sunbeam.yaml.
-
-The verb must exist in the `targets:` section of the project's config.
-Custom targets are useful for project-specific operations like database
-migrations, code generation, or integration tests.
-
-EXAMPLE:
-  sunbeam project run migrate
-  sunbeam project run integration-tests
-"#)]
-    Run {
-        /// Verb name (must exist in `targets:` of the autodiscovered sunbeam.yaml).
-        verb: String,
-        #[command(flatten)]
-        args: ProjectRunArgs,
-    },
-    /// Run tests.
-    #[command(
-        long_about = r#"Run tests for the current project or selected projects.
-
-Runs the `test` target defined in `sunbeam.yaml`.
-
-EXAMPLES:
-  sunbeam project test
-  sunbeam project test --all
-""#
-    )]
-    Test(ProjectRunArgs),
-}
-
-#[derive(clap::Args, Debug, Clone, Default)]
-/// Projectrunargs.
-pub struct ProjectRunArgs {
-    /// Run for all projects in the workspace (topo-ordered). If omitted, runs
-    /// for the current project only.
-    #[arg(long)]
-    pub all: bool,
-    /// Run only for the named project(s). Implies workspace mode.
-    #[arg(long = "project", short = 'p')]
-    pub projects: Vec<String>,
-    /// When `--project foo` is used, also run foo's transitive deps first.
-    #[arg(long)]
-    pub with_deps: bool,
-    /// Cap parallelism within each topo group (default: unbounded).
-    #[arg(long)]
-    pub jobs: Option<usize>,
-    /// Print commands before running.
-    #[arg(long)]
-    pub echo: bool,
-    /// Print what would run, don't execute.
-    #[arg(long)]
-    pub dry_run: bool,
-}
-
-/// Workspace operations subcommands.
-#[derive(Subcommand, Debug)]
-pub enum OperationsAction {
-    /// Docker compose operations.
-    Compose {
-        #[command(subcommand)]
-        action: ComposeAction,
-    },
-    /// Print resolved workspace config.
-    #[command(long_about = r#"Print the resolved workspace configuration.
-
-Shows the merged sunbeam.workspace.yaml with all inherited values,
-project discovery results, and bucket assignments.
-
-EXAMPLE:
-  sunbeam ops info
-"#)]
-    Info,
-    /// List all repos in the workspace (by bucket).
-    #[command(long_about = r#"List all repositories in the workspace.
-
-Shows each repo's URL, local path, bucket (owned / fork / upstream), and
-current branch.
-
-EXAMPLE:
-  sunbeam ops repos
-"#)]
-    Repos,
-    /// Stack snapshot operations.
-    Stack {
-        #[command(subcommand)]
-        action: StackAction,
-    },
-}
-
-/// Repo tool subcommands.
-#[derive(Subcommand, Debug)]
-#[command(disable_help_subcommand = true)]
-pub enum VcsAction {
-    /// Abandon a topic branch.
-    Abandon(repo_rs_cmd::abandon::AbandonArgs),
-    /// List, create, or delete branches.
-    Branches(repo_rs_cmd::branches::BranchesArgs),
-    /// Checkout a branch.
-    Checkout(repo_rs_cmd::checkout::CheckoutArgs),
-    /// Cherry-pick a change.
-    CherryPick(repo_rs_cmd::cherry_pick::CherryPickArgs),
-    /// Show changes between commits, commit and working tree, etc.
-    Diff(repo_rs_cmd::diff::DiffArgs),
-    /// Diff manifests.
-    Diffmanifests(repo_rs_cmd::diffmanifests::DiffManifestsArgs),
-    /// Download changes from the server.
-    Download(repo_rs_cmd::download::DownloadArgs),
-    /// Run a shell command in each project.
-    Forall(repo_rs_cmd::forall::ForallArgs),
-    /// Garbage collection.
-    Gc(repo_rs_cmd::gc::GcArgs),
-    /// Search across projects.
-    Grep(repo_rs_cmd::grep::GrepArgs),
-    /// Display detailed help.
-    Help(repo_rs_cmd::help::HelpArgs),
-    /// Display info about a project.
-    Info(repo_rs_cmd::info::InfoArgs),
-    /// Initialize a repo client checkout.
-    Init(repo_rs_cmd::init::InitArgs),
-    /// List projects.
-    List(repo_rs_cmd::list::ListArgs),
-    /// Manifest inspection and comparison.
-    Manifest(repo_rs_cmd::manifest::ManifestArgs),
-    /// Show project overview.
-    Overview(repo_rs_cmd::overview::OverviewArgs),
-    /// Prune branches.
-    Prune(repo_rs_cmd::prune::PruneArgs),
-    /// Rebase local branches.
-    Rebase(repo_rs_cmd::rebase::RebaseArgs),
-    /// Update the repo tool itself.
-    Selfupdate(repo_rs_cmd::selfupdate::SelfUpdateArgs),
-    /// Smart sync.
-    Smartsync(repo_rs_cmd::smartsync::SmartsyncArgs),
-    /// Stage files for upload.
-    Stage(repo_rs_cmd::stage::StageArgs),
-    /// Start a new branch for development.
-    Start(repo_rs_cmd::start::StartArgs),
-    /// Show the working tree status.
-    Status(repo_rs_cmd::status::StatusArgs),
-    /// Update working tree to the latest revision.
-    Sync(repo_rs_cmd::sync::SyncArgs),
-    /// Upload changes for code review.
-    Upload(repo_rs_cmd::upload::UploadArgs),
-    /// Display the version of repo.
-    Version(repo_rs_cmd::version::VersionArgs),
-    /// Wipe a project.
-    Wipe(repo_rs_cmd::wipe::WipeArgs),
-}
-/// Docker Compose subcommands.
-#[derive(Subcommand, Debug)]
-pub enum ComposeAction {
-    /// Tear down shared services.
-    #[command(long_about = r#"Stop shared local services.
-
-Stops and removes containers created by `sunbeam ops compose up`.
-Use --volumes to also remove named volumes (destructive).
-
-EXAMPLES:
-  sunbeam ops compose down
-  sunbeam ops compose down --volumes
-"#)]
-    Down {
-        /// Also remove volumes.
-        #[arg(long)]
-        volumes: bool,
-    },
-    /// Tail logs for a service.
-    #[command(long_about = r#"Stream or fetch logs for a compose service.
-
-EXAMPLES:
-  sunbeam ops compose logs postgres
-  sunbeam ops compose logs postgres -f
-"#)]
-    Logs {
-        service: String,
-        #[arg(short, long)]
-        follow: bool,
-    },
-    /// List running services.
-    #[command(long_about = r#"List running compose services.
-
-Shows container names, ports, and health status.
-
-EXAMPLE:
-  sunbeam ops compose ps
-"#)]
-    Ps,
-    /// Generate and materialize docker-compose.yaml under .sunbeam/compose/.
-    #[command(long_about = r#"Render docker-compose.yaml from templates.
-
-Generates a docker-compose file under .sunbeam/compose/ based on the
-workspace configuration. Does not start any containers.
-
-EXAMPLE:
-  sunbeam ops compose render
-"#)]
-    Render,
-    /// Bring up shared services.
-    #[command(long_about = r#"Start shared local services with Docker Compose.
-
-Brings up Postgres, Redis, and any other shared dependencies defined in the
-workspace compose configuration. These are used for local development when
-you don't want to target the full cluster.
-
-EXAMPLES:
-  sunbeam ops compose up
-  sunbeam ops compose up postgres redis
-  sunbeam ops compose up --no-wait
-"#)]
-    Up {
-        /// Only bring up the named services (default: all).
-        services: Vec<String>,
-        /// Wait for healthy.
-        #[arg(long, default_value_t = true)]
-        wait: bool,
-    },
-}
-
-/// Stack snapshot subcommands.
-#[derive(Subcommand, Debug)]
-pub enum StackAction {
-    /// Checkout the SHAs recorded in a stack.
-    #[command(long_about = r#"Restore a pinned stack.
-
-Checks out the recorded SHAs in every project. Fails if a repo has uncommitted
-changes that would be overwritten.
-
-EXAMPLE:
-  sunbeam ops stack apply release-2026-01
-"#)]
-    Apply { name: String },
-    /// Diff two stacks (or a stack vs current HEAD).
-    #[command(long_about = r#"Compare two stack snapshots.
-
-Shows which projects differ between the two stacks. If right is omitted,
-compares the left stack against the current HEAD.
-
-EXAMPLES:
-  sunbeam ops stack diff release-2026-01 release-2026-02
-  sunbeam ops stack diff release-2026-01
-"#)]
-    Diff { left: String, right: Option<String> },
-    /// List pinned stacks.
-    #[command(long_about = r#"List all pinned stack snapshots.
-
-Shows name, creation date, description, and number of projects.
-
-EXAMPLE:
-  sunbeam ops stack list
-"#)]
-    List,
-    /// Pin current HEAD SHAs into a named stack.
-    #[command(long_about = r#"Save the current workspace state as a named stack.
-
-Records the current Git HEAD SHA for every owned project. Later, you can
-restore exactly this combination with `apply`.
-
-Use --description to add a human-readable note. Use positional projects
-to pin only specific repos.
-
-EXAMPLES:
-  sunbeam ops stack pin release-2026-01
-  sunbeam ops stack pin hotfix --description "Emergency security patches"
-  sunbeam ops stack pin partial proxy api
-"#)]
-    Pin {
-        name: String,
-        /// Only pin the named projects (default: all owned).
-        projects: Vec<String>,
-        #[arg(long)]
-        description: Option<String>,
     },
 }
 
@@ -1931,9 +1332,100 @@ fn validate_date(s: &str) -> std::result::Result<String, String> {
         .map_err(|_| format!("Invalid date: '{s}' (expected YYYY-MM-DD)"))
 }
 
+/// Print the VPN daemon status returned by `sdk::vpn::cmds::cmd_vpn_status`.
+fn print_vpn_status(status: sdk::vpn::cmds::VpnStatus) {
+    use sdk::vpn::cmds::VpnStatus;
+    match status {
+        VpnStatus::NotRunning => println!("VPN: not running"),
+        VpnStatus::Running(s) => {
+            println!("VPN: running");
+            println!("  addresses: {}", s.addresses.join(", "));
+            println!("  peers: {}", s.peer_count);
+            if let Some(region) = s.derp_home {
+                println!("  derp home: region {region}");
+            }
+            if let Some(port) = s.socks_proxy_port {
+                println!("  socks proxy: 127.0.0.1:{port}");
+            }
+            if let Some(ts) = s.last_handshake_fail {
+                println!("  last handshake failure: {}", format_unix_ts(ts));
+            }
+            match &s.routes_error {
+                Some(e) => println!("  routes: (query failed: {e})"),
+                None if s.routes.is_empty() => println!("  routes: (none)"),
+                None => {
+                    println!("  routes:");
+                    for r in &s.routes {
+                        println!("    {:<20}  via {}", r.cidr, short_node_key(&r.node_key));
+                    }
+                }
+            }
+            match &s.recent_connections_error {
+                Some(e) => println!("  recent connections: (query failed: {e})"),
+                None if s.recent_connections.is_empty() => {
+                    println!("  recent connections: (none)");
+                }
+                None => {
+                    println!("  recent connections (newest first):");
+                    for e in &s.recent_connections {
+                        println!(
+                            "    {:>5}  {:<20}  {}",
+                            e.protocol,
+                            e.outcome.label(),
+                            e.destination,
+                        );
+                    }
+                }
+            }
+        }
+        VpnStatus::Transitioning(state) => println!("VPN: {state}"),
+        VpnStatus::StaleSocket { socket, error } => {
+            println!("VPN: stale socket at {} ({error})", socket.display());
+        }
+    }
+}
+
+/// Format a Unix timestamp (seconds) as a minimal RFC3339 UTC string.
+/// No external date crate needed — pure integer arithmetic.
+fn format_unix_ts(secs: u64) -> String {
+    // Days since Unix epoch → calendar date via the algorithm from
+    // https://howardhinnant.github.io/date_algorithms.html (civil_from_days).
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    let z = days as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// Collapse a full `nodekey:...` string to a short display form so the
+/// routes table stays readable. We keep the first 12 hex characters,
+/// which is unique enough for operator-level identification.
+fn short_node_key(key: &str) -> String {
+    let body = key.strip_prefix("nodekey:").unwrap_or(key);
+    let cut = body
+        .char_indices()
+        .nth(12)
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    format!("nodekey:{}…", &body[..cut])
+}
+
 /// Main dispatch function — parse CLI args and route to subcommands.
 #[tracing::instrument(skip(logger, cli), fields(verb = tracing::field::Empty))]
-pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<()> {
+pub async fn dispatch(logger: &sdk::logger::Logger, cli: Cli) -> Result<()> {
     let verb_name = cli.verb.as_ref().map(|v| v.as_ref_str());
     tracing::Span::current().record("verb", verb_name.unwrap_or("none"));
     debug!(logger, "cli dispatch", verb = format!("{:?}", cli.verb));
@@ -1944,8 +1436,8 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
     // could still look "present" to sloppy call sites and was load-bearing
     // for note #3's bug report — keeping an Option here makes the intent
     // explicit.
-    let config = sunbeam_sdk::config::load_config();
-    let mut active = sunbeam_sdk::config::resolve_context(
+    let config = sdk::config::load_config();
+    let mut active = sdk::config::resolve_context(
         &config,
         "",
         cli.context.as_deref(),
@@ -1955,7 +1447,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
     // Resolve domain once at the CLI boundary. If the context has no domain,
     // discover it from cluster state (gitea-inline-config secret or Lima IP).
     if active.domain.is_empty() {
-        match sunbeam_sdk::kube::get_domain().await {
+        match sdk::kube::get_domain().await {
             Ok(d) if !d.is_empty() => active.domain = d,
             _ => {}
         }
@@ -1973,10 +1465,10 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
     // `sunbeam config set --kube-context <kctx>`. The previous behaviour
     // silently fell back to "sunbeam", which routed applies at a wrong
     // cluster (see notes/sunbeam-cli-context-gotchas.md).
-    sunbeam_sdk::kube::set_context(&active.kube_context);
+    sdk::kube::set_context(&active.kube_context);
 
     // Store active context globally for other modules to read
-    sunbeam_sdk::config::set_active_context(active);
+    sdk::config::set_active_context(active);
 
     match cli.verb {
         None => {
@@ -1988,13 +1480,13 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
         }
 
         Some(Verb::Auth { action }) => match action {
-            None => sunbeam_sdk::auth::cmd_auth_status().await,
+            None => crate::auth::cmd_auth_status().await,
             Some(AuthAction::Login { domain }) => {
-                sunbeam_sdk::auth::cmd_auth_login(domain.as_deref()).await
+                crate::auth::cmd_auth_login(domain.as_deref()).await
             }
-            Some(AuthAction::Logout) => sunbeam_sdk::auth::cmd_auth_logout().await,
-            Some(AuthAction::Status) => sunbeam_sdk::auth::cmd_auth_status().await,
-            Some(AuthAction::Token) => sunbeam_sdk::auth::cmd_auth_token().await,
+            Some(AuthAction::Logout) => crate::auth::cmd_auth_logout().await,
+            Some(AuthAction::Status) => crate::auth::cmd_auth_status().await,
+            Some(AuthAction::Token) => crate::auth::cmd_auth_token().await,
         },
 
         Some(Verb::Completions { shell }) => {
@@ -2025,9 +1517,9 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 println!();
                 Ok(())
             }
-            Some(ConfigAction::Clear) => sunbeam_sdk::config::clear_config(),
+            Some(ConfigAction::Clear) => sdk::config::clear_config(),
             Some(ConfigAction::Get) => {
-                let config = sunbeam_sdk::config::load_config();
+                let config = sdk::config::load_config();
                 let current = if config.current_context.is_empty() {
                     "(none)"
                 } else {
@@ -2061,7 +1553,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 kube_context,
                 context_name,
             }) => {
-                let mut config = sunbeam_sdk::config::load_config();
+                let mut config = sdk::config::load_config();
                 // Determine which context to modify
                 let ctx_name = if context_name.is_empty() {
                     if !config.current_context.is_empty() {
@@ -2089,10 +1581,10 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 if config.current_context.is_empty() {
                     config.current_context = ctx_name;
                 }
-                sunbeam_sdk::config::save_config(&config)
+                sdk::config::save_config(&config)
             }
             Some(ConfigAction::UseContext { name }) => {
-                let mut config = sunbeam_sdk::config::load_config();
+                let mut config = sdk::config::load_config();
                 if !config.contexts.contains_key(&name) {
                     info!(
                         logger,
@@ -2101,16 +1593,16 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                     );
                     config
                         .contexts
-                        .insert(name.clone(), sunbeam_sdk::config::Context::default());
+                        .insert(name.clone(), sdk::config::Context::default());
                 }
                 config.current_context = name.clone();
-                sunbeam_sdk::config::save_config(&config)?;
+                sdk::config::save_config(&config)?;
                 info!(logger, "Switched to context", name = name);
                 Ok(())
             }
         },
 
-        Some(Verb::Doctor) => sunbeam_sdk::doctor::cmd_doctor(logger).await,
+        Some(Verb::Doctor) => crate::doctor::cmd_doctor(logger).await,
 
         Some(Verb::Down {
             yes,
@@ -2122,9 +1614,9 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             // Confirmation prompt (kept outside the workflow so the workflow
             // itself is non-interactive and fully automatable).
             if !yes {
-                let mut to_delete: Vec<&str> = sunbeam_sdk::down::APP_NAMESPACES.to_vec();
+                let mut to_delete: Vec<&str> = crate::down::APP_NAMESPACES.to_vec();
                 if infra {
-                    to_delete.extend(sunbeam_sdk::down::INFRA_NAMESPACES);
+                    to_delete.extend(crate::down::INFRA_NAMESPACES);
                 }
                 if keep_data {
                     to_delete.retain(|&ns| ns != "data");
@@ -2145,7 +1637,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             info!(logger, "Tearing down cluster (workflow engine)...");
 
             let ctx_name = {
-                let cfg = sunbeam_sdk::config::load_config();
+                let cfg = sdk::config::load_config();
                 if cfg.current_context.is_empty() {
                     "default".to_string()
                 } else {
@@ -2153,10 +1645,10 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 }
             };
 
-            let host = sunbeam_sdk::workflows::host::create_host(&ctx_name).await?;
-            sunbeam_sdk::workflows::down::register(&host).await;
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::down::register(&host).await;
 
-            let step_ctx = sunbeam_sdk::workflows::StepContext::from_active();
+            let step_ctx = crate::workflows::StepContext::from_active();
             let effective_profile = profile.or_else(|| {
                 if use_lima {
                     Some("lima".to_string())
@@ -2184,8 +1676,8 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             .await
             .map_err(|e| SunbeamError::Other(format!("down workflow failed: {e}")))?;
 
-            sunbeam_sdk::workflows::down::print_summary(logger, &instance);
-            sunbeam_sdk::workflows::host::shutdown_host(host).await;
+            crate::workflows::down::print_summary(logger, &instance);
+            crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != WorkflowStatus::Complete {
                 return Err(SunbeamError::Other(format!(
@@ -2202,10 +1694,6 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             url,
             action,
         }) => crate::kanban::dispatch(logger, action, output, url.as_deref()).await,
-
-        Some(Verb::Operations { action }) => crate::operations_cli::dispatch(logger, action).await,
-
-        Some(Verb::Project { action }) => crate::project_cli::dispatch(logger, action).await,
 
         Some(Verb::Secrets {
             addr,
@@ -2227,15 +1715,14 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             serial,
         }) => {
             if graph {
-                let def = sunbeam_sdk::workflows::up::definition::build();
+                let def = crate::workflows::up::definition::build();
                 println!("{}", def.to_dot());
                 return Ok(());
             }
 
-            let mut overrides =
-                sunbeam_sdk::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
+            let mut overrides = sdk::manifest_params::Overrides::from_cli(&set, &disable, &enable)?;
 
-            let config = sunbeam_sdk::config::load_config();
+            let config = sdk::config::load_config();
 
             // --use-lima implies --profile lima
             let effective_profile = profile.or_else(|| {
@@ -2254,20 +1741,20 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             let profile_to_load = effective_profile.clone().or_else(|| {
                 let active_ctx = config.contexts.get(&config.current_context)?;
                 match &active_ctx.profile {
-                    sunbeam_sdk::config::ProfileRef::Name(name) => Some(name.clone()),
+                    sdk::config::ProfileRef::Name(name) => Some(name.clone()),
                     _ => None,
                 }
             });
 
             if let Some(profile_name) = profile_to_load {
-                let profile_path = sunbeam_sdk::config::get_infra_dir()
+                let profile_path = sdk::config::get_infra_dir()
                     .join("profiles")
                     .join(format!("{profile_name}.yaml"));
 
                 let profile_obj = if profile_path.exists() {
-                    sunbeam_sdk::profiles::load_profile(&profile_path)?
-                } else if let Some(p) = config
-                    .resolve_profile(&sunbeam_sdk::config::ProfileRef::Name(profile_name.clone()))
+                    sdk::profiles::load_profile(&profile_path)?
+                } else if let Some(p) =
+                    config.resolve_profile(&sdk::config::ProfileRef::Name(profile_name.clone()))
                 {
                     p
                 } else {
@@ -2284,10 +1771,10 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 serial_mode = profile_obj.serial_mode || serial;
 
                 // Resolve manifest overrides via tunables/shortcuts
-                let base_dir = sunbeam_sdk::config::get_infra_dir().join("base");
-                match sunbeam_sdk::profiles::discover_manifests(&base_dir).await {
+                let base_dir = sdk::config::get_infra_dir().join("base");
+                match sdk::profiles::discover_manifests(&base_dir).await {
                     Ok(resources) => {
-                        match sunbeam_sdk::profiles::resolve_profile_overrides(
+                        match sdk::profiles::resolve_profile_overrides(
                             &profile_obj,
                             &config.presets,
                             &resources,
@@ -2322,10 +1809,10 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 config.current_context.clone()
             };
 
-            let host = sunbeam_sdk::workflows::host::create_host(&ctx_name).await?;
-            sunbeam_sdk::workflows::up::register(&host).await;
+            let host = crate::workflows::host::create_host(&ctx_name).await?;
+            crate::workflows::up::register(&host).await;
 
-            let step_ctx = sunbeam_sdk::workflows::StepContext::from_active();
+            let step_ctx = crate::workflows::StepContext::from_active();
             let mut initial_data = serde_json::json!({
                 "__ctx": step_ctx,
                 "skip_cilium": skip_cilium,
@@ -2351,8 +1838,8 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             .await
             .map_err(|e| SunbeamError::Other(format!("up workflow failed: {e}")))?;
 
-            sunbeam_sdk::workflows::up::print_summary(logger, &instance);
-            sunbeam_sdk::workflows::host::shutdown_host(host).await;
+            crate::workflows::up::print_summary(logger, &instance);
+            crate::workflows::host::shutdown_host(host).await;
 
             if instance.status != WorkflowStatus::Complete {
                 return Err(SunbeamError::Other(format!(
@@ -2364,7 +1851,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
             Ok(())
         }
 
-        Some(Verb::Update) => sunbeam_sdk::update::cmd_update(logger).await,
+        Some(Verb::Update) => crate::update::cmd_update(logger).await,
 
         Some(Verb::User { action }) => match action {
             None => {
@@ -2386,21 +1873,11 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 email,
                 name,
                 schema,
-            }) => sunbeam_sdk::users::cmd_user_create(&email, &name, &schema).await,
-            Some(UserAction::Delete { target }) => {
-                sunbeam_sdk::users::cmd_user_delete(&target).await
-            }
-            Some(UserAction::Disable { target }) => {
-                sunbeam_sdk::users::cmd_user_disable(&target).await
-            }
-            Some(UserAction::Enable { target }) => {
-                sunbeam_sdk::users::cmd_user_enable(&target).await
-            }
-            Some(UserAction::Get { target }) => sunbeam_sdk::users::cmd_user_get(&target).await,
-            Some(UserAction::List { search }) => sunbeam_sdk::users::cmd_user_list(&search).await,
-            Some(UserAction::Offboard { target }) => {
-                sunbeam_sdk::users::cmd_user_offboard(&target).await
-            }
+            }) => crate::users::cmd_user_create(&email, &name, &schema).await,
+            Some(UserAction::Delete { target }) => crate::users::cmd_user_delete(&target).await,
+            Some(UserAction::Get { target }) => crate::users::cmd_user_get(&target).await,
+            Some(UserAction::List { search }) => crate::users::cmd_user_list(&search).await,
+            Some(UserAction::Offboard { target }) => crate::users::cmd_user_offboard(&target).await,
             Some(UserAction::Onboard {
                 email,
                 name,
@@ -2413,7 +1890,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 hire_date,
                 manager,
             }) => {
-                sunbeam_sdk::users::cmd_user_onboard(
+                crate::users::cmd_user_onboard(
                     &email,
                     &name,
                     &schema,
@@ -2427,37 +1904,16 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 )
                 .await
             }
-            Some(UserAction::Recover { target }) => {
-                sunbeam_sdk::users::cmd_user_recover(&target).await
-            }
-            Some(UserAction::SetPassword { target, password }) => {
-                let pw = match password {
-                    Some(p) => p,
-                    None => {
-                        eprint!("Password: ");
-                        let mut pw = String::new();
-                        std::io::stdin().read_line(&mut pw)?;
-                        pw.trim().to_string()
-                    }
-                };
-                sunbeam_sdk::users::cmd_user_set_password(&target, &pw).await
-            }
+            Some(UserAction::Recover { target }) => crate::users::cmd_user_recover(&target).await,
         },
 
-        Some(Verb::Vcs { action }) => {
-            let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
-            crate::vcs::dispatch(&logger, action).await
-        }
-
         Some(Verb::Version) => {
-            sunbeam_sdk::update::cmd_version();
+            crate::update::cmd_version();
             Ok(())
         }
 
         Some(Verb::Vpn { action }) => match action {
-            VpnAction::Connect { foreground } => {
-                sunbeam_sdk::vpn_cmds::cmd_connect(foreground).await
-            }
+            VpnAction::Connect { foreground } => sdk::vpn::cmds::cmd_connect(foreground).await,
             VpnAction::CreateKey {
                 user,
                 user_id,
@@ -2465,20 +1921,38 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, cli: Cli) -> Result<
                 ephemeral,
                 expiration,
             } => {
-                sunbeam_sdk::vpn_cmds::cmd_vpn_create_key(
+                let key = sdk::vpn::cmds::cmd_vpn_create_key(
                     &user,
                     user_id,
                     reusable,
                     ephemeral,
                     &expiration,
                 )
-                .await
+                .await?;
+                println!("{key}");
+                Ok(())
             }
-            VpnAction::Disconnect => sunbeam_sdk::vpn_cmds::cmd_disconnect().await,
-            VpnAction::Status => sunbeam_sdk::vpn_cmds::cmd_vpn_status().await,
+            VpnAction::Disconnect => sdk::vpn::cmds::cmd_disconnect().await,
+            VpnAction::Status => {
+                let status = sdk::vpn::cmds::cmd_vpn_status().await?;
+                print_vpn_status(status);
+                Ok(())
+            }
         },
 
-        Some(Verb::VpnDaemon) => sunbeam_sdk::vpn_cmds::cmd_vpn_daemon().await,
+        Some(Verb::VpnDaemon) => sdk::vpn::cmds::cmd_vpn_daemon().await,
+
+        Some(Verb::ManGen { output_dir }) => {
+            use clap::CommandFactory;
+            std::fs::create_dir_all(&output_dir)?;
+            clap_mangen::generate_to(Cli::command(), &output_dir)?;
+            info!(
+                logger,
+                "Man pages written",
+                dir = output_dir.display().to_string()
+            );
+            Ok(())
+        }
 
         Some(Verb::Workflow {
             target,
@@ -2596,38 +2070,17 @@ mod tests {
         }
     }
 
-    // 9. test_user_set_password
+    // 9. test_user_recover
     #[test]
-    fn test_user_set_password() {
-        let cli = parse(&[
-            "sunbeam",
-            "user",
-            "set-password",
-            "admin@example.com",
-            "hunter2",
-        ]);
+    fn test_user_recover() {
+        let cli = parse(&["sunbeam", "user", "recover", "admin@example.com"]);
         match cli.verb {
             Some(Verb::User {
-                action: Some(UserAction::SetPassword { target, password }),
+                action: Some(UserAction::Recover { target }),
             }) => {
                 assert_eq!(target, "admin@example.com");
-                assert_eq!(password, Some("hunter2".to_string()));
             }
-            _ => panic!("expected User SetPassword"),
-        }
-    }
-
-    #[test]
-    fn test_user_set_password_no_password() {
-        let cli = parse(&["sunbeam", "user", "set-password", "admin@example.com"]);
-        match cli.verb {
-            Some(Verb::User {
-                action: Some(UserAction::SetPassword { target, password }),
-            }) => {
-                assert_eq!(target, "admin@example.com");
-                assert!(password.is_none());
-            }
-            _ => panic!("expected User SetPassword"),
+            _ => panic!("expected User Recover"),
         }
     }
 
@@ -3154,152 +2607,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_project_build_parses() {
-        let cli = parse(&["sunbeam", "project", "build"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Build(args),
-            }) => {
-                assert!(!args.all);
-                assert!(args.projects.is_empty());
-            }
-            _ => panic!("expected Project Build"),
-        }
-    }
-
-    #[test]
-    fn test_project_build_all() {
-        let cli = parse(&["sunbeam", "project", "build", "--all"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Build(args),
-            }) => {
-                assert!(args.all);
-            }
-            _ => panic!("expected Project Build --all"),
-        }
-    }
-
-    #[test]
-    fn test_project_build_with_p_flag() {
-        let cli = parse(&["sunbeam", "project", "build", "-p", "cli", "-p", "sol"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Build(args),
-            }) => {
-                assert_eq!(args.projects, vec!["cli", "sol"]);
-            }
-            _ => panic!("expected Project Build -p"),
-        }
-    }
-
-    #[test]
-    fn test_ops_compose_up_parses() {
-        let cli = parse(&["sunbeam", "operations", "compose", "up"]);
-        match cli.verb {
-            Some(Verb::Operations {
-                action:
-                    OperationsAction::Compose {
-                        action: ComposeAction::Up { services, wait },
-                    },
-            }) => {
-                assert!(services.is_empty());
-                assert!(wait);
-            }
-            _ => panic!("expected Operations Compose Up"),
-        }
-    }
-
-    #[test]
-    fn test_ops_compose_down_volumes() {
-        let cli = parse(&["sunbeam", "ops", "compose", "down", "--volumes"]);
-        match cli.verb {
-            Some(Verb::Operations {
-                action:
-                    OperationsAction::Compose {
-                        action: ComposeAction::Down { volumes },
-                    },
-            }) => {
-                assert!(volumes);
-            }
-            _ => panic!("expected Operations Compose Down --volumes"),
-        }
-    }
-
-    #[test]
-    fn test_ops_stack_pin() {
-        let cli = parse(&[
-            "sunbeam",
-            "ops",
-            "stack",
-            "pin",
-            "release-1.0",
-            "cli",
-            "sol",
-            "--description",
-            "initial release",
-        ]);
-        match cli.verb {
-            Some(Verb::Operations {
-                action:
-                    OperationsAction::Stack {
-                        action:
-                            StackAction::Pin {
-                                name,
-                                projects,
-                                description,
-                            },
-                    },
-            }) => {
-                assert_eq!(name, "release-1.0");
-                assert_eq!(projects, vec!["cli", "sol"]);
-                assert_eq!(description.as_deref(), Some("initial release"));
-            }
-            _ => panic!("expected Operations Stack Pin"),
-        }
-    }
-
-    #[test]
-    fn test_project_run_custom_verb() {
-        let cli = parse(&["sunbeam", "project", "run", "seed"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Run { verb, args },
-            }) => {
-                assert_eq!(verb, "seed");
-                assert!(!args.all);
-            }
-            _ => panic!("expected Project Run"),
-        }
-    }
-
-    #[test]
-    fn test_project_graph_all() {
-        let cli = parse(&["sunbeam", "project", "graph", "--all"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Graph { all },
-            }) => {
-                assert!(all);
-            }
-            _ => panic!("expected Project Graph"),
-        }
-    }
-
-    #[test]
-    fn test_project_check() {
-        let cli = parse(&["sunbeam", "project", "check"]);
-        match cli.verb {
-            Some(Verb::Project {
-                action: ProjectAction::Check { all },
-            }) => {
-                assert!(!all);
-            }
-            _ => panic!("expected Project Check"),
-        }
-    }
-
     // -- Secrets subcommand tests --
 
     #[test]
@@ -3400,5 +2707,50 @@ mod tests {
             }
             _ => panic!("expected Secrets with addr+token"),
         }
+    }
+
+    // -- Man page generation tests --
+
+    #[test]
+    fn test_man_gen_parses() {
+        let cli = parse(&["sunbeam", "__man", "/tmp/man-out"]);
+        match cli.verb {
+            Some(Verb::ManGen { output_dir }) => {
+                assert_eq!(output_dir, std::path::PathBuf::from("/tmp/man-out"));
+            }
+            _ => panic!("expected ManGen"),
+        }
+    }
+
+    #[test]
+    fn test_man_gen_hidden_from_help() {
+        use clap::CommandFactory;
+        let mut buf = Vec::new();
+        Cli::command().write_long_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+        assert!(!help.contains("__man"));
+    }
+
+    #[test]
+    fn test_man_pages_render_to_dir() {
+        use clap::CommandFactory;
+        let dir = tempfile::tempdir().unwrap();
+        clap_mangen::generate_to(Cli::command(), dir.path()).unwrap();
+
+        let root = std::fs::read_to_string(dir.path().join("sunbeam.1")).unwrap();
+        assert!(root.contains(".TH"));
+        assert!(root.contains("sunbeam"));
+
+        let up = std::fs::read_to_string(dir.path().join("sunbeam-up.1")).unwrap();
+        assert!(up.contains(".TH"));
+        assert!(up.contains("sunbeam-up"));
+
+        let apply = std::fs::read_to_string(dir.path().join("sunbeam-service-apply.1")).unwrap();
+        assert!(apply.contains(".TH"));
+        assert!(apply.contains("sunbeam-service-apply"));
+
+        // Hidden internal commands must not get pages.
+        assert!(!dir.path().join("sunbeam-__vpn-daemon.1").exists());
+        assert!(!dir.path().join("sunbeam-__man.1").exists());
     }
 }

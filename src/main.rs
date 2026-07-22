@@ -8,15 +8,30 @@
 
 use std::io::IsTerminal;
 
+mod auth;
+mod checks;
 mod cli;
+mod cluster;
+mod describe;
+mod discovery;
+mod doctor;
+mod down;
+mod exec;
 mod kanban;
-mod operations_cli;
+mod operations;
 mod output;
+mod port_forward;
 mod profiles_cli;
-mod project_cli;
+mod project;
+mod registry;
 mod secrets_cli;
 mod service_cmds;
-mod vcs;
+mod services;
+mod topo;
+mod update;
+mod users;
+mod wfectl;
+mod workflows;
 mod workflows_cmd;
 
 #[tokio::main]
@@ -49,37 +64,33 @@ async fn main() {
             )),
         }
     };
-    if let Err(e) = sunbeam_sdk::logging::init_subscriber(cli.log_mode, level_override.as_deref()) {
+    if let Err(e) = sdk::logging::init_subscriber(cli.log_mode, level_override.as_deref()) {
         eprintln!("Failed to initialize fallback logger: {e}");
         std::process::exit(1);
     }
 
     let min_level = if cli.quiet {
-        sunbeam_sdk::logger::Level::Warn
+        sdk::logger::Level::Warn
     } else {
         match cli.verbose {
-            0 => sunbeam_sdk::logger::Level::Info,
-            1 => sunbeam_sdk::logger::Level::Debug,
-            _ => sunbeam_sdk::logger::Level::Trace,
+            0 => sdk::logger::Level::Info,
+            1 => sdk::logger::Level::Debug,
+            _ => sdk::logger::Level::Trace,
         }
     };
 
     let logger = match cli.log_mode {
-        sunbeam_sdk::logging::LogMode::Line => sunbeam_sdk::logger::Logger::new(
-            sunbeam_sdk::logger::LineSink::new().with_level(min_level),
-        ),
-        sunbeam_sdk::logging::LogMode::Json => sunbeam_sdk::logger::Logger::new(
-            sunbeam_sdk::logger::JsonSink::new().with_level(min_level),
-        ),
-        sunbeam_sdk::logging::LogMode::Threaded => {
+        sdk::logging::LogMode::Line => {
+            sdk::logger::Logger::new(sdk::logger::LineSink::new().with_level(min_level))
+        }
+        sdk::logging::LogMode::Json => {
+            sdk::logger::Logger::new(sdk::logger::JsonSink::new().with_level(min_level))
+        }
+        sdk::logging::LogMode::Threaded => {
             if std::io::stderr().is_terminal() {
-                sunbeam_sdk::logger::Logger::new(
-                    sunbeam_sdk::logger::ThreadedSink::new().with_level(min_level),
-                )
+                sdk::logger::Logger::new(sdk::logger::ThreadedSink::new().with_level(min_level))
             } else {
-                sunbeam_sdk::logger::Logger::new(
-                    sunbeam_sdk::logger::LineSink::new().with_level(min_level),
-                )
+                sdk::logger::Logger::new(sdk::logger::LineSink::new().with_level(min_level))
             }
         }
     };
@@ -88,7 +99,7 @@ async fn main() {
         eprintln!("panic: {info}");
     }));
 
-    sunbeam_sdk::debug!(
+    sdk::debug!(
         logger,
         "sunbeam starting",
         log_mode = format!("{:?}", cli.log_mode)
@@ -98,11 +109,11 @@ async fn main() {
         Ok(()) => {}
         Err(e) => {
             let code = e.exit_code();
-            sunbeam_sdk::error!(logger, "command failed", err = format!("{e}"));
+            sdk::error!(logger, "command failed", err = format!("{e}"));
 
             let mut source = std::error::Error::source(&e);
             while let Some(cause) = source {
-                sunbeam_sdk::debug!(logger, "caused by", err = format!("{cause}"));
+                sdk::debug!(logger, "caused by", err = format!("{cause}"));
                 source = std::error::Error::source(cause);
             }
 

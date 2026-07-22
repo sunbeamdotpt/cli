@@ -3,10 +3,10 @@
 use clap::Subcommand;
 
 use crate::output;
-use sunbeam_sdk::error::{Result, SunbeamError};
-use sunbeam_sdk::{error, info};
+use sdk::error::{Result, SunbeamError};
+use sdk::{error, info};
 
-use sunbeam_sdk::workflows::host;
+use crate::workflows::host;
 
 #[derive(Subcommand, Debug)]
 /// Workflow action.
@@ -33,7 +33,7 @@ and step counts.
 EXAMPLE:
   sunbeam workflow -t builds definitions list
 "#)]
-    Definitions(sunbeam_sdk::wfectl::definitions::DefinitionsArgs),
+    Definitions(crate::wfectl::definitions::DefinitionsArgs),
     /// Get a workflow instance by ID or name.
     #[command(long_about = r#"Get workflow instance details from the remote server.
 
@@ -42,7 +42,7 @@ Similar to `status` but queries the server-side state rather than local SQLite.
 EXAMPLE:
   sunbeam workflow -t builds get <instance-id>
 "#)]
-    Get(sunbeam_sdk::wfectl::get::GetArgs),
+    Get(crate::wfectl::get::GetArgs),
     /// List workflow instances.
     #[command(long_about = r#"List workflow instances.
 
@@ -108,7 +108,7 @@ Useful for debugging long-running workflows.
 EXAMPLE:
   sunbeam workflow -t builds logs <instance-id>
 "#)]
-    Logs(sunbeam_sdk::wfectl::logs::LogsArgs),
+    Logs(crate::wfectl::logs::LogsArgs),
     /// Publish an event to waiting workflows.
     #[command(long_about = r#"Publish an event to waiting workflows.
 
@@ -118,7 +118,7 @@ and continue.
 EXAMPLE:
   sunbeam workflow -t builds publish --event deploy-complete --key prod
 "#)]
-    Publish(sunbeam_sdk::wfectl::publish::PublishArgs),
+    Publish(crate::wfectl::publish::PublishArgs),
     /// Register a workflow definition from a YAML file.
     #[command(long_about = r#"Register a workflow definition on a remote server.
 
@@ -128,7 +128,7 @@ by name and version later.
 EXAMPLE:
   sunbeam workflow -t builds register ./deploy.yaml
 "#)]
-    Register(sunbeam_sdk::wfectl::register::RegisterArgs),
+    Register(crate::wfectl::register::RegisterArgs),
     /// Resume a suspended workflow.
     #[command(long_about = r#"Resume a suspended workflow instance.
 
@@ -137,7 +137,7 @@ Continues execution from the last checkpoint.
 EXAMPLE:
   sunbeam workflow -t builds resume <instance-id>
 "#)]
-    Resume(sunbeam_sdk::wfectl::resume::ResumeArgs),
+    Resume(crate::wfectl::resume::ResumeArgs),
     /// Retry a failed workflow from its last checkpoint.
     #[command(long_about = r#"Resume a failed or suspended workflow.
 
@@ -174,7 +174,7 @@ Performs full-text search across stored step logs on the remote server.
 EXAMPLE:
   sunbeam workflow -t builds search-logs <instance-id> --query "error"
 "#)]
-    SearchLogs(sunbeam_sdk::wfectl::search_logs::SearchLogsArgs),
+    SearchLogs(crate::wfectl::search_logs::SearchLogsArgs),
     /// Start a registered workflow instance on the server.
     #[command(
         name = "start",
@@ -187,7 +187,7 @@ EXAMPLE:
   sunbeam workflow -t builds start --definition deploy --version 1
 "#
     )]
-    Start(sunbeam_sdk::wfectl::run::RunArgs),
+    Start(crate::wfectl::run::RunArgs),
     /// Show status of a workflow instance.
     #[command(long_about = r#"Show detailed status of a workflow instance.
 
@@ -209,7 +209,7 @@ Pauses execution at the next checkpoint. Can be resumed with `resume`.
 EXAMPLE:
   sunbeam workflow -t builds suspend <instance-id>
 "#)]
-    Suspend(sunbeam_sdk::wfectl::suspend::SuspendArgs),
+    Suspend(crate::wfectl::suspend::SuspendArgs),
     /// List saved workflow targets.
     #[command(long_about = r#"List all saved workflow targets.
 
@@ -229,7 +229,7 @@ Useful in CI before registering.
 EXAMPLE:
   sunbeam workflow validate ./deploy.yaml
 "#)]
-    Validate(sunbeam_sdk::wfectl::validate::ValidateArgs),
+    Validate(crate::wfectl::validate::ValidateArgs),
     /// Stream lifecycle events.
     #[command(long_about = r#"Stream workflow lifecycle events.
 
@@ -239,14 +239,12 @@ step transition, and failure events in real time.
 EXAMPLE:
   sunbeam workflow -t builds watch
 "#)]
-    Watch(sunbeam_sdk::wfectl::watch::WatchArgs),
+    Watch(crate::wfectl::watch::WatchArgs),
 }
 
 /// Resolve the effective target name and optional config.
-fn resolve_target(
-    target: Option<&str>,
-) -> Result<(String, Option<sunbeam_sdk::config::WorkflowTarget>)> {
-    let cfg = sunbeam_sdk::config::load_config();
+fn resolve_target(target: Option<&str>) -> Result<(String, Option<sdk::config::WorkflowTarget>)> {
+    let cfg = sdk::config::load_config();
 
     let name = target
         .filter(|t| !t.is_empty())
@@ -277,9 +275,9 @@ fn resolve_target(
 pub async fn dispatch(
     target: Option<&str>,
     action: WorkflowAction,
-    output: sunbeam_sdk::wfectl::output::OutputFormat,
+    output: crate::wfectl::output::OutputFormat,
 ) -> Result<()> {
-    let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+    let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
     let (target_name, target_cfg) = resolve_target(target)?;
     tracing::Span::current().record("target", &target_name);
 
@@ -313,14 +311,11 @@ pub async fn dispatch(
 // Local dispatch
 // ---------------------------------------------------------------------------
 
-async fn dispatch_local(
-    logger: &sunbeam_sdk::logger::Logger,
-    action: WorkflowAction,
-) -> Result<()> {
+async fn dispatch_local(logger: &sdk::logger::Logger, action: WorkflowAction) -> Result<()> {
     match action {
         WorkflowAction::Cancel { id } => {
             let ctx_name = {
-                let cfg = sunbeam_sdk::config::load_config();
+                let cfg = sdk::config::load_config();
                 if cfg.current_context.is_empty() {
                     "default".to_string()
                 } else {
@@ -334,7 +329,7 @@ async fn dispatch_local(
         }
         WorkflowAction::List { status, .. } => {
             let ctx_name = {
-                let cfg = sunbeam_sdk::config::load_config();
+                let cfg = sdk::config::load_config();
                 if cfg.current_context.is_empty() {
                     "default".to_string()
                 } else {
@@ -348,7 +343,7 @@ async fn dispatch_local(
         }
         WorkflowAction::Retry { id } => {
             let ctx_name = {
-                let cfg = sunbeam_sdk::config::load_config();
+                let cfg = sdk::config::load_config();
                 if cfg.current_context.is_empty() {
                     "default".to_string()
                 } else {
@@ -363,7 +358,7 @@ async fn dispatch_local(
         WorkflowAction::Run { file } => run_workflow(&file).await,
         WorkflowAction::Status { id } => {
             let ctx_name = {
-                let cfg = sunbeam_sdk::config::load_config();
+                let cfg = sdk::config::load_config();
                 if cfg.current_context.is_empty() {
                     "default".to_string()
                 } else {
@@ -385,7 +380,7 @@ async fn dispatch_local(
 #[cfg(test)]
 #[tracing::instrument(skip(h, logger))]
 pub async fn dispatch_with_host(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     h: &wfe::WorkflowHost,
     action: WorkflowAction,
 ) -> Result<()> {
@@ -406,73 +401,61 @@ pub async fn dispatch_with_host(
 // ---------------------------------------------------------------------------
 
 async fn dispatch_remote(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     action: WorkflowAction,
-    output: sunbeam_sdk::wfectl::output::OutputFormat,
-    target: &sunbeam_sdk::config::WorkflowTarget,
+    output: crate::wfectl::output::OutputFormat,
+    target: &sdk::config::WorkflowTarget,
 ) -> Result<()> {
     // Derive domain from URL for token resolution.
     let domain = extract_domain(&target.url)?;
 
     // Validate is the only command that doesn't need a server connection.
     if let WorkflowAction::Validate(args) = action {
-        return sunbeam_sdk::wfectl::validate::run(args, output)
+        return crate::wfectl::validate::run(args, output)
             .await
             .map_err(|e| SunbeamError::Other(format!("{e:#}")));
     }
 
-    let token = sunbeam_sdk::wfectl::resolve_token(&domain)
-        .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
-    let client = sunbeam_sdk::wfectl::client::build(logger, &target.url, &token)
+    let token =
+        sdk::wfectl::resolve_token(&domain).map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
+    let client = sdk::wfectl::client::build(logger, &target.url, &token)
         .await
         .map_err(|e| SunbeamError::Other(format!("{e:#}")))?;
 
     let result = match action {
         WorkflowAction::Cancel { id } => {
-            let args = sunbeam_sdk::wfectl::cancel::CancelArgs { workflow_id: id };
-            sunbeam_sdk::wfectl::cancel::run(logger, args, client).await
+            let args = crate::wfectl::cancel::CancelArgs { workflow_id: id };
+            crate::wfectl::cancel::run(logger, args, client).await
         }
         WorkflowAction::Definitions(args) => {
-            sunbeam_sdk::wfectl::definitions::run(args, client, output).await
+            crate::wfectl::definitions::run(args, client, output).await
         }
-        WorkflowAction::Get(args) => {
-            sunbeam_sdk::wfectl::get::run(logger, args, client, output).await
-        }
+        WorkflowAction::Get(args) => crate::wfectl::get::run(logger, args, client, output).await,
         WorkflowAction::List {
             query,
             status,
             limit,
             skip,
         } => {
-            let args = sunbeam_sdk::wfectl::list::ListArgs {
+            let args = crate::wfectl::list::ListArgs {
                 query,
                 status: parse_status_filter(&status),
                 limit,
                 skip,
             };
-            sunbeam_sdk::wfectl::list::run(logger, args, client, output).await
+            crate::wfectl::list::run(logger, args, client, output).await
         }
-        WorkflowAction::Logs(args) => sunbeam_sdk::wfectl::logs::run(logger, args, client).await,
-        WorkflowAction::Publish(args) => {
-            sunbeam_sdk::wfectl::publish::run(args, client, output).await
-        }
-        WorkflowAction::Register(args) => {
-            sunbeam_sdk::wfectl::register::run(args, client, output).await
-        }
-        WorkflowAction::Resume(args) => {
-            sunbeam_sdk::wfectl::resume::run(logger, args, client).await
-        }
+        WorkflowAction::Logs(args) => crate::wfectl::logs::run(logger, args, client).await,
+        WorkflowAction::Publish(args) => crate::wfectl::publish::run(args, client, output).await,
+        WorkflowAction::Register(args) => crate::wfectl::register::run(args, client, output).await,
+        WorkflowAction::Resume(args) => crate::wfectl::resume::run(logger, args, client).await,
         WorkflowAction::SearchLogs(args) => {
-            sunbeam_sdk::wfectl::search_logs::run(args, client, output).await
+            crate::wfectl::search_logs::run(args, client, output).await
         }
-        WorkflowAction::Start(args) => {
-            sunbeam_sdk::wfectl::run::run(logger, args, client, output).await
-        }
-        WorkflowAction::Suspend(args) => {
-            sunbeam_sdk::wfectl::suspend::run(logger, args, client).await
-        }
+        WorkflowAction::Start(args) => crate::wfectl::run::run(logger, args, client, output).await,
+        WorkflowAction::Suspend(args) => crate::wfectl::suspend::run(logger, args, client).await,
         WorkflowAction::Validate(_) => unreachable!(),
-        WorkflowAction::Watch(args) => sunbeam_sdk::wfectl::watch::run(args, client).await,
+        WorkflowAction::Watch(args) => crate::wfectl::watch::run(args, client).await,
         _ => {
             return Err(SunbeamError::Other(format!(
                 "command '{action:?}' is not supported for remote target — use `-t local`"
@@ -494,12 +477,12 @@ fn extract_domain(url: &str) -> Result<String> {
     Ok(host.to_string())
 }
 
-fn parse_status_filter(status: &str) -> Option<sunbeam_sdk::wfectl::list::StatusFilter> {
+fn parse_status_filter(status: &str) -> Option<crate::wfectl::list::StatusFilter> {
     match status.to_lowercase().as_str() {
-        "runnable" => Some(sunbeam_sdk::wfectl::list::StatusFilter::Runnable),
-        "suspended" => Some(sunbeam_sdk::wfectl::list::StatusFilter::Suspended),
-        "complete" => Some(sunbeam_sdk::wfectl::list::StatusFilter::Complete),
-        "terminated" => Some(sunbeam_sdk::wfectl::list::StatusFilter::Terminated),
+        "runnable" => Some(crate::wfectl::list::StatusFilter::Runnable),
+        "suspended" => Some(crate::wfectl::list::StatusFilter::Suspended),
+        "complete" => Some(crate::wfectl::list::StatusFilter::Complete),
+        "terminated" => Some(crate::wfectl::list::StatusFilter::Terminated),
         _ => None,
     }
 }
@@ -508,23 +491,23 @@ fn parse_status_filter(status: &str) -> Option<sunbeam_sdk::wfectl::list::Status
 // Target management
 // ---------------------------------------------------------------------------
 
-fn login_target(logger: &sunbeam_sdk::logger::Logger, name: &str, url: &str) -> Result<()> {
-    let mut cfg = sunbeam_sdk::config::load_config();
+fn login_target(logger: &sdk::logger::Logger, name: &str, url: &str) -> Result<()> {
+    let mut cfg = sdk::config::load_config();
     cfg.workflow_targets.insert(
         name.to_string(),
-        sunbeam_sdk::config::WorkflowTarget {
+        sdk::config::WorkflowTarget {
             url: url.to_string(),
         },
     );
-    sunbeam_sdk::config::save_config(&cfg)?;
+    sdk::config::save_config(&cfg)?;
     info!(logger, "saved workflow target", name = name, url = url);
     Ok(())
 }
 
-fn logout_target(logger: &sunbeam_sdk::logger::Logger, name: &str) -> Result<()> {
-    let mut cfg = sunbeam_sdk::config::load_config();
+fn logout_target(logger: &sdk::logger::Logger, name: &str) -> Result<()> {
+    let mut cfg = sdk::config::load_config();
     if cfg.workflow_targets.remove(name).is_some() {
-        sunbeam_sdk::config::save_config(&cfg)?;
+        sdk::config::save_config(&cfg)?;
         info!(logger, "removed workflow target", name = name);
     } else {
         info!(logger, "workflow target not found", name = name);
@@ -543,7 +526,7 @@ struct TargetRow {
 }
 
 fn list_targets() -> Result<()> {
-    let cfg = sunbeam_sdk::config::load_config();
+    let cfg = sdk::config::load_config();
 
     let mut rows = vec![TargetRow {
         name: "local".to_string(),
@@ -572,7 +555,7 @@ fn list_targets() -> Result<()> {
 /// List workflow instances.
 #[tracing::instrument(skip(h, logger))]
 pub async fn list_workflows(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     h: &wfe::WorkflowHost,
     _status_filter: &str,
 ) -> Result<()> {
@@ -612,7 +595,7 @@ pub async fn list_workflows(
 /// Show status of a single workflow instance.
 #[tracing::instrument(skip(h, logger))]
 pub async fn show_workflow_status(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     h: &wfe::WorkflowHost,
     id: &str,
 ) -> Result<()> {
@@ -663,7 +646,7 @@ pub async fn show_workflow_status(
 /// Resume a suspended/failed workflow.
 #[tracing::instrument(skip(h, logger))]
 pub async fn retry_workflow(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     h: &wfe::WorkflowHost,
     id: &str,
 ) -> Result<()> {
@@ -677,7 +660,7 @@ pub async fn retry_workflow(
 /// Terminate a running workflow.
 #[tracing::instrument(skip(h, logger))]
 pub async fn cancel_workflow(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     h: &wfe::WorkflowHost,
     id: &str,
 ) -> Result<()> {
@@ -742,7 +725,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_workflows_empty() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = list_workflows(&logger, &h, "").await;
         assert!(result.is_ok());
@@ -751,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_workflow_status_not_found() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = show_workflow_status(&logger, &h, "nonexistent-id").await;
         assert!(result.is_ok());
@@ -760,7 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_workflow_status_found() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
         let result = show_workflow_status(&logger, &h, &id).await;
         assert!(result.is_ok());
@@ -769,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_status_with_step_details() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -800,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_workflow_completed() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
         let result = cancel_workflow(&logger, &h, &id).await;
         drop(result);
@@ -809,7 +792,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_workflow_nonexistent() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = retry_workflow(&logger, &h, "does-not-exist").await;
         assert!(result.is_err());
@@ -818,7 +801,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_workflow_nonexistent() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = cancel_workflow(&logger, &h, "does-not-exist").await;
         assert!(result.is_err());
@@ -839,7 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_list() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
             &logger,
@@ -858,7 +841,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_status() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
         let result = dispatch_with_host(&logger, &h, WorkflowAction::Status { id }).await;
         assert!(result.is_ok());
@@ -867,7 +850,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_retry_nonexistent() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         let result = dispatch_with_host(
             &logger,
@@ -883,7 +866,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_suspended_workflow() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -911,7 +894,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_running_workflow() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
         h.register_step::<NoOp>().await;
 
@@ -937,7 +920,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_with_host_cancel() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let (h, id) = setup_host_with_workflow().await;
         let result = dispatch_with_host(&logger, &h, WorkflowAction::Cancel { id }).await;
         drop(result);
@@ -946,7 +929,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_workflows_with_runnable_instance() {
-        let logger = sunbeam_sdk::logger::Logger::new(sunbeam_sdk::logger::TracingSink);
+        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
         let h = host::create_test_host().await.unwrap();
 
         // Manually persist a Runnable workflow so get_runnable_instances finds it
@@ -961,5 +944,219 @@ mod tests {
         let result = list_workflows(&logger, &h, "").await;
         assert!(result.is_ok());
         h.stop().await;
+    }
+
+    // ---------------------------------------------------------------------
+    // Dispatch tests with HOME redirected to a tempdir
+    // ---------------------------------------------------------------------
+
+    fn temp_home() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        dir
+    }
+
+    #[tokio::test]
+    async fn dispatch_login_targets_logout() {
+        let _home = temp_home();
+
+        dispatch(
+            None,
+            WorkflowAction::Login {
+                name: "builds".into(),
+                url: "https://wfe.example.com".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        let cfg = sdk::config::load_config();
+        assert_eq!(
+            cfg.workflow_targets["builds"].url,
+            "https://wfe.example.com"
+        );
+
+        dispatch(
+            None,
+            WorkflowAction::Targets,
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        dispatch(
+            None,
+            WorkflowAction::Logout {
+                name: "builds".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+        let cfg = sdk::config::load_config();
+        assert!(cfg.workflow_targets.is_empty());
+
+        // Logging out a missing target still succeeds.
+        dispatch(
+            None,
+            WorkflowAction::Logout {
+                name: "builds".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_target_errors() {
+        let _home = temp_home();
+        let err = dispatch(
+            Some("nope"),
+            WorkflowAction::Targets,
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("nope"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_local_list_and_status_and_cancel() {
+        let _home = temp_home();
+
+        // Local target: spins up a throwaway wfe host in the temp HOME.
+        dispatch(
+            None,
+            WorkflowAction::List {
+                status: String::new(),
+                query: None,
+                limit: 50,
+                skip: 0,
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        // Status on a missing id prints a not-found notice but succeeds.
+        dispatch(
+            None,
+            WorkflowAction::Status {
+                id: "no-such-id".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        let err = dispatch(
+            None,
+            WorkflowAction::Cancel {
+                id: "no-such-id".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await;
+        assert!(err.is_err());
+
+        let err = dispatch(
+            None,
+            WorkflowAction::Retry {
+                id: "no-such-id".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_local_run_not_implemented() {
+        let _home = temp_home();
+        let err = dispatch(
+            None,
+            WorkflowAction::Run {
+                file: "workflow.yaml".into(),
+            },
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("not yet implemented"),
+            "err: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_local_rejects_remote_only_commands() {
+        let _home = temp_home();
+        let err = dispatch(
+            None,
+            WorkflowAction::Definitions(crate::wfectl::definitions::DefinitionsArgs {
+                cmd: crate::wfectl::definitions::DefinitionsCmd::List,
+            }),
+            crate::wfectl::output::OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not supported"), "err: {err}");
+    }
+
+    #[test]
+    fn test_extract_domain_strips_scheme_and_path() {
+        assert_eq!(
+            extract_domain("https://wfe.example.com").unwrap(),
+            "wfe.example.com"
+        );
+        assert_eq!(
+            extract_domain("http://wfe.example.com:8080/status").unwrap(),
+            "wfe.example.com:8080"
+        );
+        assert_eq!(
+            extract_domain("wfe.example.com").unwrap(),
+            "wfe.example.com"
+        );
+        assert_eq!(
+            extract_domain("https://example.com/").unwrap(),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn test_parse_status_filter_known_values() {
+        use crate::wfectl::list::StatusFilter;
+        assert!(matches!(
+            parse_status_filter("runnable"),
+            Some(StatusFilter::Runnable)
+        ));
+        assert!(matches!(
+            parse_status_filter("SUSPENDED"),
+            Some(StatusFilter::Suspended)
+        ));
+        assert!(matches!(
+            parse_status_filter("complete"),
+            Some(StatusFilter::Complete)
+        ));
+        assert!(matches!(
+            parse_status_filter("terminated"),
+            Some(StatusFilter::Terminated)
+        ));
+        assert!(parse_status_filter("bogus").is_none());
+        assert!(parse_status_filter("").is_none());
+    }
+
+    #[test]
+    fn test_target_row_renders_cells() {
+        let row = TargetRow {
+            name: "builds".to_string(),
+            url: "https://wfe.example.com".to_string(),
+        };
+        assert_eq!(target_row(&row), vec!["builds", "https://wfe.example.com"]);
     }
 }

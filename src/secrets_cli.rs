@@ -6,8 +6,8 @@
 
 use clap::Subcommand;
 
-use sunbeam_sdk::error::{Result, SunbeamError};
-use sunbeam_sdk::openbao::BaoClient;
+use sdk::error::{Result, SunbeamError};
+use sdk::openbao::BaoClient;
 
 // ---------------------------------------------------------------------------
 // CLI enums
@@ -314,7 +314,7 @@ pub async fn dispatch(
         (Some(_), None) => Err(SunbeamError::Config("--addr requires --token".into())),
         (None, token_override) => {
             let ob_pod = find_openbao_pod().await?;
-            let pf = sunbeam_sdk::secrets::port_forward("openbao", &ob_pod, 8200).await?;
+            let pf = sdk::secrets::port_forward("openbao", &ob_pod, 8200).await?;
             let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
 
             let tok = match token_override {
@@ -337,7 +337,7 @@ pub async fn dispatch_with_client(
 ) -> Result<()> {
     match action {
         SecretsAction::Delete { path } => cmd_delete(client, &path).await,
-        SecretsAction::Exec { args } => sunbeam_sdk::kube::cmd_bao(&args).await,
+        SecretsAction::Exec { args } => sdk::kube::cmd_bao(&args).await,
         SecretsAction::Init => cmd_init(client).await,
         SecretsAction::Kv(action) => dispatch_kv(client, output, action).await,
         SecretsAction::List { path } => cmd_list(client, output, &path).await,
@@ -392,7 +392,6 @@ async fn dispatch_kv(
             Ok(())
         }
         KvAction::List { path, mount } => {
-            // TODO: implement kv_list in BaoClient or use generic list
             let list_path = format!("{mount}/metadata/{path}");
             match client.list(&list_path).await? {
                 Some(data) => {
@@ -593,31 +592,23 @@ async fn cmd_unseal(client: &BaoClient, key: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn find_openbao_pod() -> Result<String> {
-    sunbeam_sdk::kube::find_pod_by_label(
-        "openbao",
-        "app.kubernetes.io/name=openbao,component=server",
-    )
-    .await
-    .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))
+    sdk::kube::find_pod_by_label("openbao", "app.kubernetes.io/name=openbao,component=server")
+        .await
+        .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))
 }
 
 async fn read_token() -> Result<String> {
     // 1. Try K8s secret
-    match sunbeam_sdk::kube::kube_get_secret_field(
-        "openbao",
-        "openbao-bootstrap-token",
-        "root-token",
-    )
-    .await
+    match sdk::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token").await
     {
         Ok(token) if !token.is_empty() => return Ok(token),
         _ => {}
     }
 
     // 2. Try local keystore
-    let domain = sunbeam_sdk::config::domain();
+    let domain = sdk::config::domain();
     if !domain.is_empty()
-        && let Ok(ks) = sunbeam_sdk::vault_keystore::load_keystore(domain)
+        && let Ok(ks) = sdk::vault_keystore::load_keystore(domain)
         && !ks.root_token.is_empty()
     {
         return Ok(ks.root_token);
@@ -672,5 +663,463 @@ mod tests {
     fn parse_kv_pairs_empty_ok() {
         let result = parse_kv_pairs(&[]).unwrap();
         assert!(result.is_empty());
+    }
+
+    // ---------------------------------------------------------------------
+    // HTTP-layer tests (wiremock + BaoClient)
+    // ---------------------------------------------------------------------
+
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn kv_metadata() -> serde_json::Value {
+        serde_json::json!({
+            "created_time": "2024-01-01T00:00:00Z",
+            "deletion_time": "",
+            "custom_metadata": null,
+            "destroyed": false,
+            "version": 1
+        })
+    }
+
+    fn client_for(server: &MockServer) -> BaoClient {
+        BaoClient::with_token(&server.uri(), "test-token")
+    }
+
+    /// vaultrs wraps most API responses in an envelope with lease/request
+    /// metadata; the wrapper fields are non-optional on its deserialize path.
+    fn wrapped(data: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "request_id": "req-1",
+            "lease_id": "",
+            "lease_duration": 0,
+            "renewable": false,
+            "data": data,
+        })
+    }
+
+    fn health_body(sealed: bool) -> serde_json::Value {
+        serde_json::json!({
+            "initialized": true,
+            "sealed": sealed,
+            "standby": false,
+            "performance_standby": false,
+            "replication_performance_mode": "disabled",
+            "replication_dr_mode": "disabled",
+            "server_time_utc": 1700000000,
+            "version": "2.5.1"
+        })
+    }
+
+    #[tokio::test]
+    async fn dispatch_requires_token_with_addr() {
+        let err = dispatch(
+            Some("http://127.0.0.1:1"),
+            None,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Status,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--token"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn cmd_status_reports_initialized_unsealed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sys/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(health_body(false)))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Status,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cmd_status_reports_sealed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sys/health"))
+            .respond_with(ResponseTemplate::new(503).set_body_json(health_body(true)))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        // Sealed (503) maps to initialized+sealed; the command still succeeds.
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Status,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cmd_init_prints_root_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/init"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "keys": ["deadbeef"],
+                "keys_base64": ["ZGVhZGJlZWY="],
+                "root_token": "root-token-123"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Init,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cmd_unseal_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/sys/unseal"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sealed": false, "t": 1, "n": 1, "progress": 0, "version": "2.5.1"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Unseal {
+                key: "deadbeef".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn kv_put_get_patch_delete_cycle() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/secret/data/app"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(wrapped(kv_metadata())))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/v1/secret/data/app"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(wrapped(kv_metadata())))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/data/app"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(wrapped(serde_json::json!({
+                    "data": {"user": "alice"},
+                    "metadata": kv_metadata()
+                }))),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/secret/data/app"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let pairs = vec!["user=alice".to_string()];
+
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Json,
+            KvAction::Put {
+                path: "app".into(),
+                mount: "secret".into(),
+                pairs: pairs.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Json,
+            KvAction::Patch {
+                path: "app".into(),
+                mount: "secret".into(),
+                pairs,
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Table,
+            KvAction::Get {
+                path: "app".into(),
+                mount: "secret".into(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Json,
+            KvAction::Delete {
+                path: "app".into(),
+                mount: "secret".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn kv_get_missing_is_not_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/data/nope"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(serde_json::json!({"errors": []})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Json,
+            KvAction::Get {
+                path: "nope".into(),
+                mount: "secret".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn kv_list_renders_keys() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/metadata/"))
+            .and(query_param("list", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"keys": ["app", "other"]}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_kv(
+            &client,
+            crate::output::OutputFormat::Json,
+            KvAction::List {
+                path: String::new(),
+                mount: "secret".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn generic_read_write_list_delete() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sys/mounts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"secret/": {"type": "kv"}}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/database/config/pg"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/metadata"))
+            .and(query_param("list", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"keys": ["app"]}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Read {
+                path: "sys/mounts".into(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Write {
+                path: "database/config/pg".into(),
+                pairs: vec!["plugin_name=postgresql".into()],
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::List {
+                path: "secret/metadata".into(),
+            },
+        )
+        .await
+        .unwrap();
+        // Delete uses the generic write with an empty body.
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Delete {
+                path: "database/config/pg".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn generic_read_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/nope"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_with_client(
+            &client,
+            crate::output::OutputFormat::Json,
+            SecretsAction::Read {
+                path: "nope".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn transit_enable_create_read_list_delete() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sys/mounts/transit"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/transit/keys/mykey"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        // First read: key does not exist yet (create path), second read: exists.
+        Mock::given(method("GET"))
+            .and(path("/v1/transit/keys/mykey"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/transit/keys"))
+            .and(query_param("list", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"keys": ["mykey"]}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        dispatch_transit(
+            &client,
+            TransitAction::Enable {
+                mount: "transit".into(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_transit(
+            &client,
+            TransitAction::CreateKey {
+                mount: "transit".into(),
+                name: "mykey".into(),
+                key_type: "aes256-gcm96".into(),
+            },
+        )
+        .await
+        .unwrap();
+        dispatch_transit(
+            &client,
+            TransitAction::ListKeys {
+                mount: "transit".into(),
+            },
+        )
+        .await
+        .unwrap();
+        // ReadKey against the 404 mock exercises the not-found branch.
+        dispatch_transit(
+            &client,
+            TransitAction::ReadKey {
+                mount: "transit".into(),
+                name: "mykey".into(),
+            },
+        )
+        .await
+        .unwrap();
+        // DeleteKey writes an empty body.
+        dispatch_transit(
+            &client,
+            TransitAction::DeleteKey {
+                mount: "transit".into(),
+                name: "mykey".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn transit_create_key_existing_is_left_alone() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/transit/keys/existing"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"type": "ed25519"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        // Key exists with a different type — must return Ok without writing.
+        dispatch_transit(
+            &client,
+            TransitAction::CreateKey {
+                mount: "transit".into(),
+                name: "existing".into(),
+                key_type: "aes256-gcm96".into(),
+            },
+        )
+        .await
+        .unwrap();
     }
 }

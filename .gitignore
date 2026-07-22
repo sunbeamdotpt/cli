@@ -8,10 +8,7 @@ build/
 
 # Rust
 /target/
-/sunbeam-sdk/target/
 /libstate.rlib
-sunbeam-sdk/src/kanban/client/generated.rs
-sunbeam-sdk/Cargo.lock
 
 # Environment
 .envrc

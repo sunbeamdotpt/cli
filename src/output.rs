@@ -1,7 +1,7 @@
 //! CLI output formatting (table, JSON, YAML).
 
+use sdk::error::Result;
 use serde::Serialize;
-use sunbeam_sdk::error::Result;
 
 // ---------------------------------------------------------------------------
 // OutputFormat
@@ -73,7 +73,7 @@ pub fn read_json_input(flag: Option<&str>) -> Result<serde_json::Value> {
         Some(v) => v.to_string(),
     };
     serde_json::from_str(&raw)
-        .map_err(|e| sunbeam_sdk::error::SunbeamError::Other(format!("invalid JSON input: {e}")))
+        .map_err(|e| sdk::error::SunbeamError::Other(format!("invalid JSON input: {e}")))
 }
 
 /// Return an aligned text table. Columns padded to max width.

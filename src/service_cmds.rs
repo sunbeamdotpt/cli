@@ -4,27 +4,26 @@
 //! kubectl for interactive operations.
 
 use crate::cli::{SecretsAction, ServiceAction};
-use sunbeam_sdk::error::{Result, SunbeamError};
-use sunbeam_sdk::logger::Logger;
-use sunbeam_sdk::registry::{self, ServiceRegistry};
-use sunbeam_sdk::{bail, debug, info};
+use crate::registry::{self, ServiceRegistry};
+use sdk::error::{Result, SunbeamError};
+use sdk::k8s_openapi;
+use sdk::kube_rs as kube;
+use sdk::logger::Logger;
+use sdk::{bail, debug, info};
 use tracing::Instrument;
 use wfe::run_workflow_sync;
 use wfe_core::models::{WorkflowInstance, WorkflowStatus};
 
 /// Discover the service registry from the cluster.
-async fn get_registry(logger: &sunbeam_sdk::logger::Logger) -> Result<ServiceRegistry> {
-    let client = sunbeam_sdk::kube::get_client().await?;
+async fn get_registry(logger: &sdk::logger::Logger) -> Result<ServiceRegistry> {
+    let client = sdk::kube::get_client().await?;
     registry::discover(logger, &client)
         .await
         .map_err(|e| SunbeamError::Other(format!("service discovery failed: {e}")))
 }
 
 /// Resolve a service by name, returning (namespace, first deployment name).
-async fn resolve_service(
-    logger: &sunbeam_sdk::logger::Logger,
-    name: &str,
-) -> Result<(String, String)> {
+async fn resolve_service(logger: &sdk::logger::Logger, name: &str) -> Result<(String, String)> {
     let reg = get_registry(logger).await?;
     let svc = reg
         .get(name)
@@ -43,13 +42,13 @@ async fn resolve_service(
 /// can be unit-tested without touching the filesystem or global config.
 fn resolve_service_profile_inner(
     profile_flag: Option<String>,
-    config: &sunbeam_sdk::config::SunbeamConfig,
+    config: &sdk::config::SunbeamConfig,
     infra_dir: &std::path::Path,
-) -> Result<Option<(String, sunbeam_sdk::config::Profile)>> {
+) -> Result<Option<(String, sdk::config::Profile)>> {
     let profile_to_load = profile_flag.or_else(|| {
         let active_ctx = config.contexts.get(&config.current_context)?;
         match &active_ctx.profile {
-            sunbeam_sdk::config::ProfileRef::Name(name) => Some(name.clone()),
+            sdk::config::ProfileRef::Name(name) => Some(name.clone()),
             _ => None,
         }
     });
@@ -57,16 +56,12 @@ fn resolve_service_profile_inner(
     if let Some(name) = profile_to_load {
         let path = infra_dir.join("profiles").join(format!("{name}.yaml"));
         if path.exists() {
-            Ok(Some((
-                name.clone(),
-                sunbeam_sdk::profiles::load_profile(&path)?,
-            )))
-        } else if let Some(p) =
-            config.resolve_profile(&sunbeam_sdk::config::ProfileRef::Name(name.clone()))
+            Ok(Some((name.clone(), sdk::profiles::load_profile(&path)?)))
+        } else if let Some(p) = config.resolve_profile(&sdk::config::ProfileRef::Name(name.clone()))
         {
             Ok(Some((name, p)))
         } else {
-            Err(sunbeam_sdk::error::SunbeamError::Config(format!(
+            Err(sdk::error::SunbeamError::Config(format!(
                 "Profile not found: {name} (looked at {} and config.json)",
                 path.display()
             )))
@@ -79,18 +74,18 @@ fn resolve_service_profile_inner(
 /// Async wrapper that reads the live config and infra_dir.
 async fn resolve_service_profile(
     profile_flag: Option<String>,
-) -> Result<Option<(String, sunbeam_sdk::config::Profile)>> {
-    let config = sunbeam_sdk::config::load_config();
-    let infra_dir = sunbeam_sdk::config::get_infra_dir();
+) -> Result<Option<(String, sdk::config::Profile)>> {
+    let config = sdk::config::load_config();
+    let infra_dir = sdk::config::get_infra_dir();
     resolve_service_profile_inner(profile_flag, &config, &infra_dir)
 }
 
 /// Merge profile overrides with CLI overrides. CLI overrides are appended
 /// last so they win when `apply_overrides` processes items in order.
 fn merge_overrides(
-    profile_overrides: sunbeam_sdk::manifest_params::Overrides,
-    cli_overrides: sunbeam_sdk::manifest_params::Overrides,
-) -> sunbeam_sdk::manifest_params::Overrides {
+    profile_overrides: sdk::manifest_params::Overrides,
+    cli_overrides: sdk::manifest_params::Overrides,
+) -> sdk::manifest_params::Overrides {
     let mut combined = profile_overrides;
     combined.items.extend(cli_overrides.items);
     combined
@@ -107,12 +102,12 @@ async fn build_profile_context(
     disable: &[String],
     enable: &[String],
 ) -> Result<(
-    Option<(String, sunbeam_sdk::config::Profile)>,
-    sunbeam_sdk::manifest_params::Overrides,
+    Option<(String, sdk::config::Profile)>,
+    sdk::manifest_params::Overrides,
     Vec<String>,
 )> {
     let profile = resolve_service_profile(profile_flag).await?;
-    let cli_overrides = sunbeam_sdk::manifest_params::Overrides::from_cli(set, disable, enable)?;
+    let cli_overrides = sdk::manifest_params::Overrides::from_cli(set, disable, enable)?;
     let mut skip_namespaces = Vec::new();
 
     if let Some((_, ref p)) = profile {
@@ -121,15 +116,11 @@ async fn build_profile_context(
             skip_namespaces.push("ory".to_string());
         }
 
-        let base_dir = sunbeam_sdk::config::get_infra_dir().join("base");
-        let config = sunbeam_sdk::config::load_config();
-        match sunbeam_sdk::profiles::discover_manifests(&base_dir).await {
+        let base_dir = sdk::config::get_infra_dir().join("base");
+        let config = sdk::config::load_config();
+        match sdk::profiles::discover_manifests(&base_dir).await {
             Ok(resources) => {
-                match sunbeam_sdk::profiles::resolve_profile_overrides(
-                    p,
-                    &config.presets,
-                    &resources,
-                ) {
+                match sdk::profiles::resolve_profile_overrides(p, &config.presets, &resources) {
                     Ok(profile_overrides) => {
                         let overrides = merge_overrides(profile_overrides, cli_overrides);
                         return Ok((profile, overrides, skip_namespaces));
@@ -157,23 +148,23 @@ async fn build_profile_context(
 }
 
 /// Top-level dispatcher for `sunbeam service <action>`.
-pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ServiceAction) -> Result<()> {
+pub async fn dispatch(logger: &sdk::logger::Logger, action: ServiceAction) -> Result<()> {
     debug!(logger, "service dispatch", action = format!("{:?}", action));
     match action {
         ServiceAction::Status { target } => {
-            sunbeam_sdk::services::cmd_status(logger, target.as_deref()).await
+            crate::services::cmd_status(logger, target.as_deref()).await
         }
         ServiceAction::Logs { target, follow } => {
-            sunbeam_sdk::services::cmd_logs(logger, &target, follow).await
+            crate::services::cmd_logs(logger, &target, follow).await
         }
         ServiceAction::Get { target, output } => {
-            sunbeam_sdk::services::cmd_get(logger, &target, &output).await
+            crate::services::cmd_get(logger, &target, &output).await
         }
         ServiceAction::Restart { target } => {
-            sunbeam_sdk::services::cmd_restart(logger, target.as_deref()).await
+            crate::services::cmd_restart(logger, target.as_deref()).await
         }
         ServiceAction::Check { target } => {
-            sunbeam_sdk::checks::cmd_check(logger, target.as_deref()).await
+            crate::checks::cmd_check(logger, target.as_deref()).await
         }
         ServiceAction::Deploy {
             target,
@@ -192,12 +183,12 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ServiceActio
                     // No profile loaded but we have skips — impossible path, but be defensive
                 }
 
-                let opts = sunbeam_sdk::manifests::ApplyOptions {
+                let opts = sdk::manifests::ApplyOptions {
                     overrides: Some(overrides),
                     skip_namespaces,
                     ..Default::default()
                 };
-                sunbeam_sdk::manifests::apply_manifests(logger, &opts).await?;
+                sdk::manifests::apply_manifests(logger, &opts).await?;
                 Ok(())
             }
         },
@@ -243,7 +234,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ServiceActio
                 }
             }
 
-            let opts = sunbeam_sdk::manifests::ApplyOptions {
+            let opts = sdk::manifests::ApplyOptions {
                 namespace: ns,
                 dry_run,
                 skip_patterns: Vec::new(),
@@ -251,7 +242,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ServiceActio
                 domain: None,
                 skip_namespaces,
             };
-            let rendered = sunbeam_sdk::manifests::apply_manifests(logger, &opts).await?;
+            let rendered = sdk::manifests::apply_manifests(logger, &opts).await?;
             if dry_run {
                 print!("{rendered}");
             }
@@ -267,7 +258,7 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ServiceActio
         ServiceAction::Verify => {
             info!(logger, "Verifying VSO -> OpenBao integration...");
             run_workflow(logger, "verify", 1, 300, |i| {
-                sunbeam_sdk::workflows::verify::print_summary(logger, i)
+                crate::workflows::verify::print_summary(logger, i)
             })
             .await
         }
@@ -303,7 +294,7 @@ async fn cmd_delete_job(logger: &Logger, target: &str) -> Result<()> {
         Some((n, j)) if !n.is_empty() && !j.is_empty() => (n, j),
         _ => bail!("expected <namespace>/<name>, got {target:?}"),
     };
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
     let jobs: Api<Job> = Api::namespaced(client, ns);
     match jobs.delete(name, &DeleteParams::default()).await {
         Ok(_) => {
@@ -313,7 +304,7 @@ async fn cmd_delete_job(logger: &Logger, target: &str) -> Result<()> {
         Err(kube::Error::Api(e)) if e.code == 404 => {
             bail!("job {ns}/{name} not found")
         }
-        Err(e) => Err(sunbeam_sdk::error::SunbeamError::kube(format!(
+        Err(e) => Err(sdk::error::SunbeamError::kube(format!(
             "delete job {ns}/{name} failed: {e}"
         ))),
     }
@@ -328,7 +319,7 @@ async fn run_workflow(
     print_summary: impl FnOnce(&WorkflowInstance),
 ) -> Result<()> {
     let ctx_name = {
-        let cfg = sunbeam_sdk::config::load_config();
+        let cfg = sdk::config::load_config();
         if cfg.current_context.is_empty() {
             "default".to_string()
         } else {
@@ -336,7 +327,7 @@ async fn run_workflow(
         }
     };
 
-    let host = sunbeam_sdk::workflows::host::create_host(&ctx_name).await?;
+    let host = crate::workflows::host::create_host(&ctx_name).await?;
 
     // Register the workflow definition
     match name {
@@ -346,11 +337,11 @@ async fn run_workflow(
                 "The seed workflow has been merged into up. Use sunbeam up instead."
             );
         }
-        "verify" => sunbeam_sdk::workflows::verify::register(&host).await,
+        "verify" => crate::workflows::verify::register(&host).await,
         _ => {}
     }
 
-    let step_ctx = sunbeam_sdk::workflows::StepContext::from_active();
+    let step_ctx = crate::workflows::StepContext::from_active();
     let initial_data = serde_json::json!({ "__ctx": step_ctx });
 
     let instance = run_workflow_sync(
@@ -364,7 +355,7 @@ async fn run_workflow(
     .map_err(|e| SunbeamError::Other(format!("{name} workflow failed: {e}")))?;
 
     print_summary(&instance);
-    sunbeam_sdk::workflows::host::shutdown_host(host).await;
+    crate::workflows::host::shutdown_host(host).await;
 
     if instance.status != WorkflowStatus::Complete {
         return Err(SunbeamError::Other(format!(
@@ -380,8 +371,8 @@ async fn run_workflow(
 #[tracing::instrument(skip(logger, format))]
 async fn cmd_list(logger: &Logger, format: crate::output::OutputFormat) -> Result<()> {
     info!(logger, "Discovering services...");
-    let infra_dir = sunbeam_sdk::config::get_infra_dir();
-    let services = sunbeam_sdk::manifests::discover_services(&infra_dir)?;
+    let infra_dir = sdk::config::get_infra_dir();
+    let services = sdk::manifests::discover_services(&infra_dir)?;
     info!(logger, "Found services", count = services.len());
 
     if services.is_empty() {
@@ -404,7 +395,7 @@ async fn cmd_list(logger: &Logger, format: crate::output::OutputFormat) -> Resul
 
 /// Deploy service(s) by name, category, or namespace.
 async fn cmd_deploy(
-    logger: &sunbeam_sdk::logger::Logger,
+    logger: &sdk::logger::Logger,
     target: &str,
     profile_flag: Option<String>,
 ) -> Result<()> {
@@ -457,13 +448,13 @@ async fn cmd_deploy(
 
     for ns in &namespaces {
         info!(logger, "Applying manifests for namespace", namespace = ns);
-        let opts = sunbeam_sdk::manifests::ApplyOptions {
+        let opts = sdk::manifests::ApplyOptions {
             namespace: ns.to_string(),
             overrides: Some(overrides.clone()),
             skip_namespaces: skip_namespaces.clone(),
             ..Default::default()
         };
-        sunbeam_sdk::manifests::apply_manifests(logger, &opts).await?;
+        sdk::manifests::apply_manifests(logger, &opts).await?;
     }
 
     for svc in &resolved {
@@ -474,7 +465,7 @@ async fn cmd_deploy(
                 namespace = svc.namespace.as_str(),
                 deployment = deploy.as_str()
             );
-            sunbeam_sdk::kube::kube_rollout_restart(&svc.namespace, deploy).await?;
+            sdk::kube::kube_rollout_restart(&svc.namespace, deploy).await?;
         }
     }
 
@@ -493,25 +484,20 @@ async fn cmd_secrets(logger: &Logger, service: &str, action: Option<SecretsActio
         SunbeamError::Other(format!("Service '{service}' has no secrets in OpenBao"))
     })?;
 
-    let ob_pod = sunbeam_sdk::kube::find_pod_by_label(
-        "openbao",
-        "app.kubernetes.io/name=openbao,component=server",
-    )
-    .await
-    .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
+    let ob_pod =
+        sdk::kube::find_pod_by_label("openbao", "app.kubernetes.io/name=openbao,component=server")
+            .await
+            .ok_or_else(|| SunbeamError::Other("OpenBao pod not found".into()))?;
 
-    let pf = sunbeam_sdk::secrets::port_forward("openbao", &ob_pod, 8200).await?;
+    let pf = sdk::secrets::port_forward("openbao", &ob_pod, 8200).await?;
     let bao_url = format!("http://127.0.0.1:{}", pf.local_port);
 
-    let token = sunbeam_sdk::kube::kube_get_secret_field(
-        "openbao",
-        "openbao-bootstrap-token",
-        "root-token",
-    )
-    .await
-    .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
+    let token =
+        sdk::kube::kube_get_secret_field("openbao", "openbao-bootstrap-token", "root-token")
+            .await
+            .map_err(|_| SunbeamError::Other("Failed to get OpenBao root token".into()))?;
 
-    let bao = sunbeam_sdk::openbao::BaoClient::with_token(&bao_url, &token);
+    let bao = sdk::openbao::BaoClient::with_token(&bao_url, &token);
 
     match action {
         None => match bao.kv_get("secret", kv_path).await? {
@@ -584,7 +570,7 @@ async fn cmd_shell(logger: &Logger, service: &str) -> Result<()> {
             ))
         })?;
 
-    let pod = sunbeam_sdk::kube::find_pod_by_label(&svc.namespace, &selector)
+    let pod = sdk::kube::find_pod_by_label(&svc.namespace, &selector)
         .await
         .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
 
@@ -603,9 +589,9 @@ async fn cmd_shell(logger: &Logger, service: &str) -> Result<()> {
         service = service,
         pod = pod
     );
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &svc.namespace);
-    let code = sunbeam_sdk::exec::pod_exec_interactive(&pods, &pod, None, &argv).await?;
+    let code = crate::exec::pod_exec_interactive(&pods, &pod, None, &argv).await?;
     if code != 0 {
         info!(logger, "shell exited with code", code = code);
     }
@@ -615,8 +601,8 @@ async fn cmd_shell(logger: &Logger, service: &str) -> Result<()> {
 /// Describe a service's deployment.
 async fn cmd_describe(logger: &Logger, service: &str) -> Result<()> {
     let (ns, deploy) = resolve_service(logger, service).await?;
-    let client = sunbeam_sdk::kube::get_client().await?;
-    let text = sunbeam_sdk::describe::describe_deployment(client.clone(), &ns, &deploy).await?;
+    let client = sdk::kube::get_client().await?;
+    let text = crate::describe::describe_deployment(client.clone(), &ns, &deploy).await?;
     println!("{text}");
     Ok(())
 }
@@ -632,7 +618,7 @@ async fn cmd_exec(
     use kube::api::Api;
 
     let (ns, deploy) = resolve_service(logger, service).await?;
-    let pod = sunbeam_sdk::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
+    let pod = sdk::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
         .await
         .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
 
@@ -642,9 +628,9 @@ async fn cmd_exec(
         command.to_vec()
     };
 
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
     let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
-    let code = sunbeam_sdk::exec::pod_exec_interactive(&pods, &pod, container, &argv).await?;
+    let code = crate::exec::pod_exec_interactive(&pods, &pod, container, &argv).await?;
     if code != 0 {
         info!(logger, "exec exited with code", code = code);
     }
@@ -658,7 +644,7 @@ async fn cmd_port_forward(logger: &Logger, service: &str, ports: &[String]) -> R
         bail!("At least one port mapping required (e.g. '8080:80' or '8080')");
     }
     let (ns, deploy) = resolve_service(logger, service).await?;
-    let pod = sunbeam_sdk::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
+    let pod = sdk::kube::find_pod_by_label(&ns, &format!("app={deploy}"))
         .await
         .ok_or_else(|| SunbeamError::Other(format!("No pod found for {service}")))?;
 
@@ -683,7 +669,7 @@ async fn cmd_port_forward(logger: &Logger, service: &str, ports: &[String]) -> R
         service = service,
         pod = pod
     );
-    sunbeam_sdk::port_forward::serve_port_forward(logger, ns, pod, mappings).await
+    crate::port_forward::serve_port_forward(logger, ns, pod, mappings).await
 }
 
 /// Scale a service deployment.
@@ -699,7 +685,7 @@ async fn cmd_scale(logger: &Logger, service: &str, replicas: u32) -> Result<()> 
         replicas = replicas
     );
 
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
     let patch = serde_json::json!({ "spec": { "replicas": replicas } });
     api.patch(&deploy, &PatchParams::default(), &Patch::Merge(&patch))
@@ -721,7 +707,7 @@ async fn cmd_top(logger: &Logger, service: &str) -> Result<()> {
     use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, ListParams};
 
     let (ns, deploy) = resolve_service(logger, service).await?;
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
 
     let gvk = GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", "PodMetrics");
     let ar = ApiResource::from_gvk(&gvk);
@@ -825,7 +811,7 @@ async fn cmd_edit(logger: &Logger, service: &str) -> Result<()> {
     use kube::api::{Api, PostParams};
 
     let (ns, deploy) = resolve_service(logger, service).await?;
-    let client = sunbeam_sdk::kube::get_client().await?;
+    let client = sdk::kube::get_client().await?;
     let api: Api<Deployment> = Api::namespaced(client.clone(), &ns);
 
     let mut current = api
@@ -883,7 +869,7 @@ async fn cmd_edit(logger: &Logger, service: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    use sunbeam_sdk::config::{Context, Profile, ProfileRef, SunbeamConfig};
+    use sdk::config::{Context, Profile, ProfileRef, SunbeamConfig};
 
     // -------------------------------------------------------------------
     // resolve_service_profile_inner
@@ -984,34 +970,34 @@ mod tests {
 
     #[test]
     fn test_filter_services_by_skip_list_keeps_non_skipped() {
-        let svc1 = sunbeam_sdk::registry::ServiceDefinition {
+        let svc1 = crate::registry::ServiceDefinition {
             name: "hydra".to_string(),
             display_name: "Hydra".to_string(),
-            category: sunbeam_sdk::registry::Category::Auth,
+            category: crate::registry::Category::Auth,
             namespace: "ory".to_string(),
             deployments: vec![],
             kv_path: None,
             database: None,
             build_target: None,
             depends_on: vec![],
-            health: sunbeam_sdk::registry::HealthCheck::None,
+            health: crate::registry::HealthCheck::None,
             virtual_service: false,
             resource_kind: "Deployment".to_string(),
             pod_selector: None,
             shell_command: None,
             ports: vec![],
         };
-        let svc2 = sunbeam_sdk::registry::ServiceDefinition {
+        let svc2 = crate::registry::ServiceDefinition {
             name: "gitea".to_string(),
             display_name: "Gitea".to_string(),
-            category: sunbeam_sdk::registry::Category::DevTools,
+            category: crate::registry::Category::DevTools,
             namespace: "devtools".to_string(),
             deployments: vec![],
             kv_path: None,
             database: None,
             build_target: None,
             depends_on: vec![],
-            health: sunbeam_sdk::registry::HealthCheck::None,
+            health: crate::registry::HealthCheck::None,
             virtual_service: false,
             resource_kind: "Deployment".to_string(),
             pod_selector: None,
@@ -1030,34 +1016,34 @@ mod tests {
 
     #[test]
     fn test_filter_services_by_skip_list_removes_all_when_all_match() {
-        let svc1 = sunbeam_sdk::registry::ServiceDefinition {
+        let svc1 = crate::registry::ServiceDefinition {
             name: "hydra".to_string(),
             display_name: "Hydra".to_string(),
-            category: sunbeam_sdk::registry::Category::Auth,
+            category: crate::registry::Category::Auth,
             namespace: "ory".to_string(),
             deployments: vec![],
             kv_path: None,
             database: None,
             build_target: None,
             depends_on: vec![],
-            health: sunbeam_sdk::registry::HealthCheck::None,
+            health: crate::registry::HealthCheck::None,
             virtual_service: false,
             resource_kind: "Deployment".to_string(),
             pod_selector: None,
             shell_command: None,
             ports: vec![],
         };
-        let svc2 = sunbeam_sdk::registry::ServiceDefinition {
+        let svc2 = crate::registry::ServiceDefinition {
             name: "kratos".to_string(),
             display_name: "Kratos".to_string(),
-            category: sunbeam_sdk::registry::Category::Auth,
+            category: crate::registry::Category::Auth,
             namespace: "ory".to_string(),
             deployments: vec![],
             kv_path: None,
             database: None,
             build_target: None,
             depends_on: vec![],
-            health: sunbeam_sdk::registry::HealthCheck::None,
+            health: crate::registry::HealthCheck::None,
             virtual_service: false,
             resource_kind: "Deployment".to_string(),
             pod_selector: None,
@@ -1150,5 +1136,241 @@ mod tests {
         let gi = 1024 * 1024 * 1024;
         assert_eq!(format_bytes(gi), "1.0Gi");
         assert_eq!(format_bytes(2 * gi), "2.0Gi");
+    }
+
+    #[test]
+    fn test_merge_overrides_appends_cli_last() {
+        let profile = sdk::manifest_params::Overrides::from_cli(
+            &["deployment/devtools/gitea/spec/replicas=2".to_string()],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let cli = sdk::manifest_params::Overrides::from_cli(
+            &["deployment/devtools/gitea/spec/replicas=5".to_string()],
+            &["configmap/*".to_string()],
+            &[],
+        )
+        .unwrap();
+
+        let merged = merge_overrides(profile, cli);
+        assert_eq!(merged.items.len(), 3);
+        // CLI items come last so they win during ordered application.
+        let last = &merged.items[2];
+        assert!(matches!(
+            last,
+            sdk::manifest_params::Override::Disable { pattern } if pattern == "configmap/*"
+        ));
+    }
+
+    // ---------------------------------------------------------------------
+    // Command tests against a fake apiserver (wiremock + temp kubeconfig)
+    // ---------------------------------------------------------------------
+
+    mod fake_apiserver {
+        use wiremock::{Request, Respond, ResponseTemplate};
+
+        pub struct FakeApiserver;
+
+        fn deployment_list() -> serde_json::Value {
+            serde_json::json!({
+                "apiVersion": "apps/v1",
+                "kind": "DeploymentList",
+                "metadata": {"resourceVersion": "1"},
+                "items": [{
+                    "metadata": {
+                        "name": "hydra",
+                        "namespace": "ory",
+                        "labels": {
+                            "sunbeam.pt/service": "hydra",
+                            "sunbeam.pt/category": "auth"
+                        }
+                    },
+                    "spec": {}
+                }]
+            })
+        }
+
+        fn deployment() -> serde_json::Value {
+            serde_json::json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": "hydra", "namespace": "ory"},
+                "spec": {
+                    "replicas": 1,
+                    "template": {"spec": {"containers": [{"name": "hydra", "image": "oryd/hydra:v25"}]}}
+                }
+            })
+        }
+
+        fn empty_list(kind: &str) -> serde_json::Value {
+            serde_json::json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {"resourceVersion": "1"},
+                "items": []
+            })
+        }
+
+        fn pod_metrics_list() -> serde_json::Value {
+            serde_json::json!({
+                "apiVersion": "metrics.k8s.io/v1beta1",
+                "kind": "PodMetricsList",
+                "metadata": {},
+                "items": [{
+                    "metadata": {"name": "hydra-abc", "namespace": "ory"},
+                    "containers": [{"name": "hydra", "usage": {"cpu": "25m", "memory": "128Mi"}}]
+                }]
+            })
+        }
+
+        impl Respond for FakeApiserver {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let path = req.url.path().to_string();
+                let method = req.method.as_str();
+
+                let body = match (method, path.as_str()) {
+                    (_, "/apis/apps/v1/deployments") => deployment_list(),
+                    (_, "/apis/apps/v1/statefulsets") => empty_list("StatefulSetList"),
+                    (_, "/apis/apps/v1/daemonsets") => empty_list("DaemonSetList"),
+                    (_, "/api/v1/configmaps") => empty_list("ConfigMapList"),
+                    ("GET", "/apis/apps/v1/namespaces/ory/deployments/hydra") => deployment(),
+                    ("PATCH", "/apis/apps/v1/namespaces/ory/deployments/hydra") => deployment(),
+                    (_, "/apis/apps/v1/namespaces/ory/replicasets") => empty_list("ReplicaSetList"),
+                    (_, "/api/v1/namespaces/ory/pods") => empty_list("PodList"),
+                    (_, "/apis/metrics.k8s.io/v1beta1/namespaces/ory/pods") => pod_metrics_list(),
+                    ("DELETE", "/apis/batch/v1/namespaces/batch/jobs/job-1") => {
+                        serde_json::json!({
+                            "kind": "Status", "apiVersion": "v1", "status": "Success"
+                        })
+                    }
+                    ("DELETE", _) => {
+                        return ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                            "kind": "Status",
+                            "apiVersion": "v1",
+                            "status": "Failure",
+                            "reason": "NotFound",
+                            "code": 404
+                        }));
+                    }
+                    _ if path.starts_with("/apis/") => empty_list("List"),
+                    _ => {
+                        return ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                            "kind": "Status",
+                            "apiVersion": "v1",
+                            "status": "Failure",
+                            "reason": "NotFound",
+                            "code": 404
+                        }));
+                    }
+                };
+                ResponseTemplate::new(200).set_body_json(body)
+            }
+        }
+    }
+
+    use wiremock::{Mock, MockServer};
+
+    async fn setup_fake_cluster() -> tempfile::TempDir {
+        // main.rs installs this at startup; tests need it too (idempotent).
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(fake_apiserver::FakeApiserver)
+            .mount(&server)
+            .await;
+        // Leak the server so it outlives the test (per-process under nextest).
+        let uri = Box::leak(Box::new(server)).uri();
+
+        let dir = tempfile::tempdir().unwrap();
+        let kubeconfig = format!(
+            "apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: {uri}
+  name: test
+contexts:
+- context:
+    cluster: test
+    user: test
+  name: test
+current-context: test
+users:
+- name: test
+  user: {{}}
+"
+        );
+        std::fs::write(dir.path().join("config"), kubeconfig).unwrap();
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var("KUBECONFIG", dir.path().join("config"));
+        }
+        sdk::kube::set_context("test");
+        dir
+    }
+
+    fn test_logger() -> Logger {
+        Logger::new(sdk::logger::TracingSink)
+    }
+
+    #[tokio::test]
+    async fn test_cmd_scale_patches_deployment() {
+        let _dir = setup_fake_cluster().await;
+        cmd_scale(&test_logger(), "hydra", 3).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cmd_top_renders_metrics() {
+        let _dir = setup_fake_cluster().await;
+        cmd_top(&test_logger(), "hydra").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cmd_describe_prints_deployment() {
+        let _dir = setup_fake_cluster().await;
+        cmd_describe(&test_logger(), "hydra").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cmd_delete_job_and_missing() {
+        let _dir = setup_fake_cluster().await;
+        cmd_delete_job(&test_logger(), "batch/job-1").await.unwrap();
+
+        let err = cmd_delete_job(&test_logger(), "batch/nope")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "err: {err}");
+
+        let err = cmd_delete_job(&test_logger(), "no-slash")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("namespace"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_cmd_list_discovers_services_from_infra_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        for svc in ["alpha", "beta"] {
+            let svc_dir = dir.path().join("base").join(svc);
+            std::fs::create_dir_all(&svc_dir).unwrap();
+            std::fs::write(
+                svc_dir.join("kustomization.yaml"),
+                "resources: []
+",
+            )
+            .unwrap();
+        }
+        sdk::config::set_active_context(sdk::config::Context {
+            infra_dir: dir.path().to_string_lossy().to_string(),
+            ..Default::default()
+        });
+
+        cmd_list(&test_logger(), crate::output::OutputFormat::Table)
+            .await
+            .unwrap();
+        cmd_list(&test_logger(), crate::output::OutputFormat::Json)
+            .await
+            .unwrap();
     }
 }

@@ -4,14 +4,14 @@
 
 #![allow(dead_code)]
 
+use sdk::config::{self, Preset, Profile, Rule};
+use sdk::error::{Result, SunbeamError};
+use sdk::info;
 use serde_json::Value;
 use std::collections::HashMap;
-use sunbeam_sdk::config::{self, Preset, Profile, Rule};
-use sunbeam_sdk::error::{Result, SunbeamError};
-use sunbeam_sdk::info;
 
 /// Dispatch a profile subcommand.
-pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ProfileAction) -> Result<()> {
+pub async fn dispatch(logger: &sdk::logger::Logger, action: ProfileAction) -> Result<()> {
     let mut config = config::load_config();
 
     match action {
@@ -144,16 +144,14 @@ pub async fn dispatch(logger: &sunbeam_sdk::logger::Logger, action: ProfileActio
                 .get(&profile)
                 .ok_or_else(|| SunbeamError::Config(format!("Profile '{profile}' not found")))?;
             let resources =
-                sunbeam_sdk::profiles::discover_manifests(&config::get_infra_dir().join("base"))
-                    .await?;
-            sunbeam_sdk::profiles::validate_profile(profile_obj, &config.presets, &resources)?;
+                sdk::profiles::discover_manifests(&config::get_infra_dir().join("base")).await?;
+            sdk::profiles::validate_profile(profile_obj, &config.presets, &resources)?;
             println!("Profile '{profile}' is valid.");
         }
 
         ProfileAction::Discover { output } => {
             let resources =
-                sunbeam_sdk::profiles::discover_manifests(&config::get_infra_dir().join("base"))
-                    .await?;
+                sdk::profiles::discover_manifests(&config::get_infra_dir().join("base")).await?;
             match output {
                 OutputFormat::Yaml => print_discover_yaml(&resources),
                 OutputFormat::Json => print_discover_json(&resources),
@@ -335,7 +333,7 @@ fn print_profile_diff(name_a: &str, a: &Profile, name_b: &str, b: &Profile) {
     }
 }
 
-fn print_discover_yaml(resources: &[sunbeam_sdk::profiles::ManifestResource]) {
+fn print_discover_yaml(resources: &[sdk::profiles::ManifestResource]) {
     for r in resources {
         if r.tunables.is_empty() {
             continue;
@@ -358,7 +356,7 @@ fn print_discover_yaml(resources: &[sunbeam_sdk::profiles::ManifestResource]) {
     }
 }
 
-fn print_discover_json(resources: &[sunbeam_sdk::profiles::ManifestResource]) {
+fn print_discover_json(resources: &[sdk::profiles::ManifestResource]) {
     let mut out = Vec::new();
     for r in resources {
         if r.tunables.is_empty() {
@@ -431,5 +429,420 @@ mod tests {
     fn test_parse_cli_values_invalid() {
         let err = parse_cli_values(&["noseparator".to_string()]).unwrap_err();
         assert!(err.to_string().contains("key=value"));
+    }
+
+    #[test]
+    fn test_parse_value_variants() {
+        assert_eq!(parse_value("FALSE"), Value::Bool(false));
+        assert_eq!(parse_value("null"), Value::Null);
+        assert_eq!(parse_value("1.5"), serde_json::json!(1.5));
+        assert_eq!(parse_value("[1,2]"), serde_json::json!([1, 2]));
+        // Looks like JSON but malformed → falls back to string.
+        assert_eq!(parse_value("{broken"), Value::String("{broken".to_string()));
+        assert_eq!(parse_value(""), Value::String(String::new()));
+    }
+
+    #[test]
+    fn test_build_rule_from_cli_rejects_bad_shortcut() {
+        let err =
+            build_rule_from_cli("gitea", None, None, None, &["nokey".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("key=value"));
+    }
+
+    #[test]
+    fn test_print_profile_diff_all_branches() {
+        use sdk::config::{Preset, Profile, Rule};
+
+        let preset = |v: i64| Preset {
+            values: HashMap::from([("scale".to_string(), Value::Number(v.into()))]),
+        };
+        let rule = |resource: &str, scale: i64| Rule {
+            resource: resource.to_string(),
+            namespace: None,
+            kind: None,
+            preset: None,
+            shortcuts: HashMap::from([("scale".to_string(), Value::Number(scale.into()))]),
+            containers: HashMap::new(),
+            volumes: HashMap::new(),
+            env: HashMap::new(),
+        };
+
+        let a = Profile {
+            presets: HashMap::from([
+                ("changed".to_string(), preset(1)),
+                ("removed".to_string(), preset(1)),
+            ]),
+            rules: vec![rule("changed", 1), rule("removed", 1)],
+            ..Default::default()
+        };
+        let b = Profile {
+            presets: HashMap::from([
+                ("changed".to_string(), preset(2)),
+                ("added".to_string(), preset(1)),
+            ]),
+            rules: vec![rule("changed", 2), rule("added", 1)],
+            ..Default::default()
+        };
+
+        // Changed/removed/added for presets and rules — output goes to stdout.
+        print_profile_diff("a", &a, "b", &b);
+        // Identical profiles hit the no-difference branches.
+        print_profile_diff("a", &a, "a2", &a);
+    }
+
+    // ---------------------------------------------------------------------
+    // Dispatch tests with HOME redirected to a tempdir
+    // ---------------------------------------------------------------------
+
+    /// Redirect $HOME so sdk::config reads/writes a throwaway config.
+    fn temp_home() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+        dir
+    }
+
+    fn test_logger() -> sdk::logger::Logger {
+        sdk::logger::Logger::new(sdk::logger::TracingSink)
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_rule_then_rm_rule() {
+        let _home = temp_home();
+        let logger = test_logger();
+
+        dispatch(
+            &logger,
+            ProfileAction::AddRule {
+                profile: "ci".into(),
+                resource: "gitea".into(),
+                namespace: Some("devtools".into()),
+                kind: None,
+                preset: None,
+                file: None,
+                shortcuts: vec!["scale=2".into()],
+            },
+        )
+        .await
+        .unwrap();
+
+        let cfg = config::load_config();
+        let profile = cfg.profiles.get("ci").expect("profile persisted");
+        assert_eq!(profile.rules.len(), 1);
+        assert_eq!(profile.rules[0].resource, "gitea");
+        assert_eq!(profile.rules[0].shortcuts["scale"], Value::Number(2.into()));
+
+        dispatch(
+            &logger,
+            ProfileAction::RmRule {
+                profile: "ci".into(),
+                resource: "gitea".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let cfg = config::load_config();
+        assert!(cfg.profiles.get("ci").unwrap().rules.is_empty());
+
+        // Removing again hits the not-found branch (still Ok).
+        dispatch(
+            &logger,
+            ProfileAction::RmRule {
+                profile: "ci".into(),
+                resource: "gitea".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_rule_from_file() {
+        let _home = temp_home();
+        let logger = test_logger();
+
+        let rule_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            rule_file.path(),
+            serde_json::to_string(&serde_json::json!({
+                "resource": "postgres",
+                "namespace": "data",
+                "scale": 1
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        dispatch(
+            &logger,
+            ProfileAction::AddRule {
+                profile: "ci".into(),
+                resource: "ignored".into(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                file: Some(rule_file.path().to_path_buf()),
+                shortcuts: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        let cfg = config::load_config();
+        let profile = cfg.profiles.get("ci").unwrap();
+        assert_eq!(profile.rules[0].resource, "postgres");
+    }
+
+    #[tokio::test]
+    async fn dispatch_preset_lifecycle() {
+        let _home = temp_home();
+        let logger = test_logger();
+
+        dispatch(
+            &logger,
+            ProfileAction::AddPreset {
+                profile: "ci".into(),
+                preset: "small".into(),
+                file: None,
+                values: vec!["scale=1".into()],
+            },
+        )
+        .await
+        .unwrap();
+        dispatch(
+            &logger,
+            ProfileAction::SetPreset {
+                profile: "ci".into(),
+                preset: "small".into(),
+                values: vec!["scale=2".into(), "memory=256Mi".into()],
+            },
+        )
+        .await
+        .unwrap();
+
+        let cfg = config::load_config();
+        let preset = &cfg.profiles.get("ci").unwrap().presets["small"];
+        assert_eq!(preset.values["scale"], Value::Number(2.into()));
+        assert_eq!(preset.values["memory"], Value::String("256Mi".into()));
+
+        dispatch(
+            &logger,
+            ProfileAction::RmPreset {
+                profile: "ci".into(),
+                preset: "small".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let cfg = config::load_config();
+        assert!(cfg.profiles.get("ci").unwrap().presets.is_empty());
+
+        // Removing again hits the not-found branch (still Ok).
+        dispatch(
+            &logger,
+            ProfileAction::RmPreset {
+                profile: "ci".into(),
+                preset: "small".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_cp_and_diff() {
+        let _home = temp_home();
+        let logger = test_logger();
+
+        dispatch(
+            &logger,
+            ProfileAction::AddRule {
+                profile: "src-prof".into(),
+                resource: "gitea".into(),
+                namespace: None,
+                kind: None,
+                preset: None,
+                file: None,
+                shortcuts: vec!["scale=2".into()],
+            },
+        )
+        .await
+        .unwrap();
+        dispatch(
+            &logger,
+            ProfileAction::Cp {
+                src: "src-prof".into(),
+                dst: "dst-prof".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let cfg = config::load_config();
+        assert!(cfg.profiles.contains_key("dst-prof"));
+
+        // Diff identical profiles (copies) plus a missing-profile error.
+        dispatch(
+            &logger,
+            ProfileAction::Diff {
+                a: "src-prof".into(),
+                b: "dst-prof".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let err = dispatch(
+            &logger,
+            ProfileAction::Diff {
+                a: "src-prof".into(),
+                b: "nope".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("nope"), "err: {err}");
+
+        let err = dispatch(
+            &logger,
+            ProfileAction::Cp {
+                src: "nope".into(),
+                dst: "x".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not found"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_validate_and_discover() {
+        let _home = temp_home();
+        let logger = test_logger();
+
+        // Infra fixture with one kustomization dir (resources discovered only
+        // when kustomize is installed; discovery tolerates its absence).
+        let infra = tempfile::tempdir().unwrap();
+        let base = infra.path().join("base").join("devtools");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("kustomization.yaml"),
+            "resources: []
+",
+        )
+        .unwrap();
+        sdk::config::set_active_context(sdk::config::Context {
+            infra_dir: infra.path().to_string_lossy().to_string(),
+            ..Default::default()
+        });
+
+        // Profile with no rules validates against any resource set.
+        dispatch(
+            &logger,
+            ProfileAction::AddPreset {
+                profile: "ci".into(),
+                preset: "small".into(),
+                file: None,
+                values: vec!["scale=1".into()],
+            },
+        )
+        .await
+        .unwrap();
+
+        // Missing profile errors.
+        let err = dispatch(
+            &logger,
+            ProfileAction::Validate {
+                profile: "nope".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("nope"), "err: {err}");
+
+        // The Validate/Discover happy paths shell out to kustomize; the SDK
+        // downloads it into ~/.sunbeam/bin with a blocking HTTP client, which
+        // panics inside a tokio runtime. Pre-seed the tool cache from the
+        // system kustomize when one is available; skip otherwise.
+        let system_kustomize = std::process::Command::new("which")
+            .arg("kustomize")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        if let Some(kustomize) = system_kustomize {
+            let bin_dir = _home.path().join(".sunbeam/bin");
+            std::fs::create_dir_all(&bin_dir).unwrap();
+            std::fs::copy(&kustomize, bin_dir.join("kustomize")).unwrap();
+            std::fs::copy(&kustomize, bin_dir.join("helm")).unwrap();
+
+            dispatch(
+                &logger,
+                ProfileAction::Validate {
+                    profile: "ci".into(),
+                },
+            )
+            .await
+            .unwrap();
+            dispatch(
+                &logger,
+                ProfileAction::Discover {
+                    output: OutputFormat::Yaml,
+                },
+            )
+            .await
+            .unwrap();
+            dispatch(
+                &logger,
+                ProfileAction::Discover {
+                    output: OutputFormat::Json,
+                },
+            )
+            .await
+            .unwrap();
+        } else {
+            eprintln!("skipping Validate/Discover happy path: no kustomize on PATH");
+        }
+    }
+
+    #[test]
+    fn test_print_discover_yaml_and_json() {
+        use sdk::profiles::{ManifestResource, Tunable};
+
+        let mut tunables = HashMap::new();
+        tunables.insert(
+            "scale".to_string(),
+            Tunable {
+                type_hint: "integer".to_string(),
+                path: None,
+            },
+        );
+        tunables.insert(
+            "custom".to_string(),
+            Tunable {
+                type_hint: "string".to_string(),
+                path: Some("spec.template.spec.hostAliases".to_string()),
+            },
+        );
+
+        let with_tunables = ManifestResource {
+            kind: "Deployment".to_string(),
+            name: "gitea".to_string(),
+            namespace: "devtools".to_string(),
+            tunables,
+            doc: serde_json::json!({}),
+        };
+        let without_tunables = ManifestResource {
+            kind: "ConfigMap".to_string(),
+            name: "settings".to_string(),
+            namespace: "devtools".to_string(),
+            tunables: HashMap::new(),
+            doc: serde_json::json!({}),
+        };
+
+        let resources = vec![with_tunables, without_tunables];
+        print_discover_yaml(&resources);
+        print_discover_json(&resources);
     }
 }
