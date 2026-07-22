@@ -1,15 +1,12 @@
-//! Self-update from Gitea CI artifacts.
-#![allow(dead_code)]
+//! Self-update from GitHub tagged releases.
 
-use chrono::{DateTime, Utc};
 use sdk::bail;
 use sdk::error::{Result, ResultExt};
 use sdk::info;
 use sdk::reqwest;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
 
 /// Compile-time commit SHA set by build.rs.
 pub const COMMIT: &str = env!("SUNBEAM_COMMIT");
@@ -20,68 +17,34 @@ pub const TARGET: &str = env!("SUNBEAM_TARGET");
 /// Compile-time build date set by build.rs.
 pub const BUILD_DATE: &str = env!("SUNBEAM_BUILD_DATE");
 
-/// Artifact name prefix for this platform.
-fn artifact_name() -> String {
-    format!("sunbeam-{TARGET}")
-}
+/// Compile-time package version.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Resolve the forge url (Gitea instance).
-///
-/// Derives from SUNBEAM_FORGE_URL env var or the active context's domain.
-fn forge_url() -> String {
-    if let Ok(url) = std::env::var("SUNBEAM_FORGE_URL") {
-        return url.trim_end_matches('/').to_string();
-    }
+/// GitHub API base URL — threaded through for testability (wiremock).
+const GITHUB_API_BASE: &str = "https://api.github.com";
 
-    // Derive from active context domain
-    let domain = sdk::config::domain();
-    if !domain.is_empty() {
-        return format!("https://src.{domain}");
-    }
+/// GitHub repository that publishes the release assets.
+const GITHUB_REPO: &str = "sunbeamdotpt/cli";
 
-    // Hard fallback — will fail at runtime if not configured, which is fine.
-    String::new()
-}
-
-/// Cache file location for background update checks.
-fn update_cache_path() -> PathBuf {
-    sdk::config::sunbeam_dir().join("update-check.json")
+/// Raw binary asset name for this platform.
+fn asset_name() -> String {
+    format!("sunbeam-raw-{TARGET}")
 }
 
 // ---------------------------------------------------------------------------
-// Gitea API response types
+// GitHub API response types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-struct BranchResponse {
-    commit: BranchCommit,
+struct Release {
+    tag_name: String,
+    assets: Vec<ReleaseAsset>,
 }
 
 #[derive(Debug, Deserialize)]
-struct BranchCommit {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ArtifactListResponse {
-    artifacts: Vec<Artifact>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Artifact {
+struct ReleaseAsset {
     name: String,
-    id: u64,
-}
-
-// ---------------------------------------------------------------------------
-// Update-check cache
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, Deserialize)]
-struct UpdateCache {
-    last_check: DateTime<Utc>,
-    latest_commit: String,
-    current_commit: String,
+    browser_download_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,204 +58,117 @@ pub fn cmd_version() {
     println!("  built:  {BUILD_DATE}");
 }
 
-/// Self-update from the latest mainline commit via Gitea CI artifacts.
+/// Self-update from the latest GitHub release.
 #[tracing::instrument(skip(logger))]
 pub async fn cmd_update(logger: &sdk::logger::Logger) -> Result<()> {
-    let base = forge_url();
-    if base.is_empty() {
-        bail!(
-            "Forge URL not configured. Set SUNBEAM_FORGE_URL or configure a \
-             production host via `sunbeam config set --host`."
-        );
-    }
-
-    info!(logger, "Checking for updates...");
-
-    let client = reqwest::Client::new();
-
-    // 1. Check latest commit on mainline
-    let latest_commit = fetch_latest_commit(&client, &base).await?;
-    let short_latest = &latest_commit[..std::cmp::min(8, latest_commit.len())];
-
-    info!(logger, "Current version", commit = COMMIT);
-    info!(logger, "Latest version", short_latest = short_latest);
-
-    if latest_commit.starts_with(COMMIT)
-        || COMMIT.starts_with(&latest_commit[..std::cmp::min(COMMIT.len(), latest_commit.len())])
-    {
-        info!(logger, "Already up to date.");
-        return Ok(());
-    }
-
-    // 2. Find the CI artifact for our platform
-    info!(logger, "Downloading update...");
-    let wanted = artifact_name();
-
-    let artifacts = fetch_artifacts(&client, &base).await?;
-    let binary_artifact = artifacts
-        .iter()
-        .find(|a| a.name == wanted)
-        .with_ctx(|| format!("No artifact found for platform '{wanted}'"))?;
-
-    let checksums_artifact = artifacts
-        .iter()
-        .find(|a| a.name == "checksums.txt" || a.name == "checksums");
-
-    // 3. Download the binary
-    let binary_url = format!(
-        "{base}/api/v1/repos/studio/cli/actions/artifacts/{id}",
-        id = binary_artifact.id
-    );
-    let binary_bytes = client
-        .get(&binary_url)
-        .send()
-        .await?
-        .error_for_status()
-        .ctx("Failed to download binary artifact")?
-        .bytes()
-        .await?;
-
-    info!(logger, "Downloaded bytes", size = binary_bytes.len());
-
-    // 4. Verify SHA256 if checksums artifact exists
-    if let Some(checksums) = checksums_artifact {
-        let checksums_url = format!(
-            "{base}/api/v1/repos/studio/cli/actions/artifacts/{id}",
-            id = checksums.id
-        );
-        let checksums_text = client
-            .get(&checksums_url)
-            .send()
-            .await?
-            .error_for_status()
-            .ctx("Failed to download checksums")?
-            .text()
-            .await?;
-
-        verify_checksum(&binary_bytes, &wanted, &checksums_text)?;
-        info!(logger, "SHA256 checksum verified.");
-    } else {
-        info!(
-            logger,
-            "No checksums artifact found; skipping verification."
-        );
-    }
-
-    // 5. Atomic self-replace
-    info!(logger, "Installing update...");
     let current_exe = std::env::current_exe().ctx("Failed to determine current executable path")?;
-    atomic_replace(&current_exe, &binary_bytes)?;
-
-    info!(logger, "Updated sunbeam", old = COMMIT, new = short_latest);
-
-    // Update the cache so background check knows we are current
-    let _ = write_cache(&UpdateCache {
-        last_check: Utc::now(),
-        latest_commit: latest_commit.clone(),
-        current_commit: latest_commit,
-    });
-
-    Ok(())
-}
-
-/// Background update check. Returns a notification message if a newer version
-/// is available, or None if up-to-date / on error / checked too recently.
-///
-/// This function never blocks for long and never returns errors — it silently
-/// returns None on any failure.
-#[tracing::instrument(skip(_logger))]
-pub async fn check_update_background(_logger: &sdk::logger::Logger) -> Option<String> {
-    // Read cache
-    let cache_path = update_cache_path();
-    if let Ok(data) = fs::read_to_string(&cache_path)
-        && let Ok(cache) = serde_json::from_str::<UpdateCache>(&data)
-    {
-        let age = Utc::now().signed_duration_since(cache.last_check);
-        if age.num_seconds() < 3600 {
-            // Checked recently — just compare cached values
-            if cache.latest_commit.starts_with(COMMIT)
-                || COMMIT.starts_with(
-                    &cache.latest_commit[..std::cmp::min(COMMIT.len(), cache.latest_commit.len())],
-                )
-            {
-                return None; // up to date
-            }
-            let short = &cache.latest_commit[..std::cmp::min(8, cache.latest_commit.len())];
-            return Some(format!(
-                "A newer version of sunbeam is available ({short}). Run `sunbeam update` to upgrade."
-            ));
-        }
-    }
-
-    // Time to check again
-    let base = forge_url();
-    if base.is_empty() {
-        return None;
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
-
-    let latest = fetch_latest_commit(&client, &base).await.ok()?;
-
-    let cache = UpdateCache {
-        last_check: Utc::now(),
-        latest_commit: latest.clone(),
-        current_commit: COMMIT.to_string(),
-    };
-    let _ = write_cache(&cache);
-
-    if latest.starts_with(COMMIT)
-        || COMMIT.starts_with(&latest[..std::cmp::min(COMMIT.len(), latest.len())])
-    {
-        return None;
-    }
-
-    let short = &latest[..std::cmp::min(8, latest.len())];
-    Some(format!(
-        "A newer version of sunbeam is available ({short}). Run `sunbeam update` to upgrade."
-    ))
+    run_update(logger, GITHUB_API_BASE, &current_exe).await
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Fetch the latest commit SHA on the mainline branch.
-async fn fetch_latest_commit(client: &reqwest::Client, forge_url: &str) -> Result<String> {
-    let url = format!("{forge_url}/api/v1/repos/studio/cli/branches/mainline");
-    let resp: BranchResponse = client
-        .get(&url)
+/// Full update flow against a given GitHub API base, replacing `current_exe`.
+async fn run_update(
+    logger: &sdk::logger::Logger,
+    api_base: &str,
+    current_exe: &std::path::Path,
+) -> Result<()> {
+    info!(logger, "Checking for updates...");
+
+    let client = reqwest::Client::new();
+
+    // 1. Fetch the latest release
+    let release = fetch_latest_release(&client, api_base).await?;
+    let latest = tag_version(&release.tag_name);
+
+    info!(logger, "Current version", version = VERSION);
+    info!(logger, "Latest version", version = latest);
+
+    if latest == VERSION {
+        info!(logger, "Already up to date.");
+        return Ok(());
+    }
+
+    // 2. Select the raw binary asset for our platform
+    let wanted = asset_name();
+    let binary_asset = find_asset(&release, &wanted)?;
+    let checksums_asset = find_asset(&release, "checksums.txt")?;
+
+    // 3. Download checksums first, then the binary
+    info!(logger, "Downloading update...", version = latest);
+    let checksums_text = client
+        .get(&checksums_asset.browser_download_url)
         .send()
         .await?
         .error_for_status()
-        .ctx("Failed to query mainline branch")?
-        .json()
+        .ctx("Failed to download checksums.txt")?
+        .text()
         .await?;
-    Ok(resp.commit.id)
+
+    let binary_bytes = client
+        .get(&binary_asset.browser_download_url)
+        .send()
+        .await?
+        .error_for_status()
+        .ctx("Failed to download binary asset")?
+        .bytes()
+        .await?;
+
+    info!(logger, "Downloaded bytes", size = binary_bytes.len());
+
+    // 4. Verify SHA256 — mismatch is a hard error, no replacement
+    verify_checksum(&binary_bytes, &wanted, &checksums_text)?;
+    info!(logger, "SHA256 checksum verified.");
+
+    // 5. Atomic self-replace
+    info!(logger, "Installing update...");
+    atomic_replace(current_exe, &binary_bytes)?;
+
+    info!(logger, "Updated sunbeam", old = VERSION, new = latest);
+    Ok(())
 }
 
-/// Fetch the list of CI artifacts for the repo.
-async fn fetch_artifacts(client: &reqwest::Client, forge_url: &str) -> Result<Vec<Artifact>> {
-    let url = format!("{forge_url}/api/v1/repos/studio/cli/actions/artifacts");
-    let resp: ArtifactListResponse = client
+/// Fetch the latest release from the GitHub API.
+///
+/// GitHub requires a User-Agent header on all API requests.
+async fn fetch_latest_release(client: &reqwest::Client, api_base: &str) -> Result<Release> {
+    let url = format!("{api_base}/repos/{GITHUB_REPO}/releases/latest");
+    client
         .get(&url)
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("sunbeam-cli/{VERSION}"),
+        )
         .send()
         .await?
         .error_for_status()
-        .ctx("Failed to query CI artifacts")?
+        .ctx("Failed to query latest GitHub release")?
         .json()
-        .await?;
-    Ok(resp.artifacts)
+        .await
+        .ctx("Failed to parse latest GitHub release")
+}
+
+/// Strip the leading `v` from a release tag to get the bare version.
+fn tag_version(tag: &str) -> &str {
+    tag.strip_prefix('v').unwrap_or(tag)
+}
+
+/// Find a release asset by exact name.
+fn find_asset<'a>(release: &'a Release, name: &str) -> Result<&'a ReleaseAsset> {
+    release
+        .assets
+        .iter()
+        .find(|a| a.name == name)
+        .with_ctx(|| format!("Release '{}' has no asset named '{name}'", release.tag_name))
 }
 
 /// Verify that the downloaded binary matches the expected SHA256 from checksums text.
 ///
 /// Checksums file format (one per line):
 ///   <hex-sha256>  <filename>
-fn verify_checksum(binary: &[u8], artifact_name: &str, checksums_text: &str) -> Result<()> {
+fn verify_checksum(binary: &[u8], asset_name: &str, checksums_text: &str) -> Result<()> {
     let actual = {
         let mut hasher = Sha256::new();
         hasher.update(binary);
@@ -303,18 +179,18 @@ fn verify_checksum(binary: &[u8], artifact_name: &str, checksums_text: &str) -> 
         // Split on whitespace — format is "<hash>  <name>" or "<hash> <name>"
         let mut parts = line.split_whitespace();
         if let (Some(expected_hash), Some(name)) = (parts.next(), parts.next())
-            && name == artifact_name
+            && name == asset_name
         {
             if actual != expected_hash {
                 bail!(
-                    "Checksum mismatch for {artifact_name}:\n  expected: {expected_hash}\n  actual:   {actual}"
+                    "Checksum mismatch for {asset_name}:\n  expected: {expected_hash}\n  actual:   {actual}"
                 );
             }
             return Ok(());
         }
     }
 
-    bail!("No checksum entry found for '{artifact_name}' in checksums file");
+    bail!("No checksum entry found for '{asset_name}' in checksums file");
 }
 
 /// Atomically replace the binary at `target` with `new_bytes`.
@@ -345,20 +221,61 @@ fn atomic_replace(target: &std::path::Path, new_bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Write the update-check cache to disk.
-fn write_cache(cache: &UpdateCache) -> Result<()> {
-    let path = update_cache_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(cache)?;
-    fs::write(&path, json)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_BINARY: &[u8] = b"new-sunbeam-binary";
+
+    fn test_logger() -> sdk::logger::Logger {
+        sdk::logger::Logger::new(sdk::logger::TracingSink)
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Release JSON with our platform asset + checksums.txt, both pointing at
+    /// the mock server, plus a distractor asset for another platform.
+    fn release_json(server: &MockServer, tag: &str) -> serde_json::Value {
+        let uri = server.uri();
+        let target_asset = asset_name();
+        serde_json::json!({
+            "tag_name": tag,
+            "assets": [
+                {
+                    "name": format!("sunbeam_{tag}_aarch64-apple-darwin.tar.gz"),
+                    "browser_download_url": format!("{uri}/download/pkg.tar.gz")
+                },
+                {
+                    "name": "sunbeam-raw-x86_64-unknown-linux-gnu",
+                    "browser_download_url": format!("{uri}/download/other-binary")
+                },
+                {
+                    "name": target_asset,
+                    "browser_download_url": format!("{uri}/download/binary")
+                },
+                {
+                    "name": "checksums.txt",
+                    "browser_download_url": format!("{uri}/download/checksums.txt")
+                }
+            ]
+        })
+    }
+
+    /// Mount the standard happy-path mocks: release, checksums, binary.
+    async fn mount_release_flow(server: &MockServer, tag: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{GITHUB_REPO}/releases/latest")))
+            .and(header("user-agent", format!("sunbeam-cli/{VERSION}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(release_json(server, tag)))
+            .mount(server)
+            .await;
+    }
 
     #[test]
     fn test_version_consts() {
@@ -366,24 +283,58 @@ mod tests {
         assert!(!COMMIT.is_empty());
         assert!(!TARGET.is_empty());
         assert!(!BUILD_DATE.is_empty());
+        assert!(!VERSION.is_empty());
     }
 
     #[test]
-    fn test_artifact_name() {
-        let name = artifact_name();
-        assert!(name.starts_with("sunbeam-"));
+    fn test_asset_name() {
+        let name = asset_name();
+        assert!(name.starts_with("sunbeam-raw-"));
         assert!(name.contains(TARGET));
     }
 
     #[test]
-    fn test_verify_checksum_ok() {
-        let data = b"hello world";
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let hash = format!("{:x}", hasher.finalize());
+    fn test_tag_version_strips_v() {
+        assert_eq!(tag_version("v3.0.0"), "3.0.0");
+        assert_eq!(tag_version("3.0.0"), "3.0.0");
+        assert_eq!(tag_version("v"), "");
+    }
 
-        let checksums = format!("{hash}  sunbeam-test");
-        assert!(verify_checksum(data, "sunbeam-test", &checksums).is_ok());
+    #[test]
+    fn test_find_asset_selects_exact_name() {
+        let release: Release = serde_json::from_value(serde_json::json!({
+            "tag_name": "v1.2.3",
+            "assets": [
+                {"name": "sunbeam-raw-x86_64-apple-darwin", "browser_download_url": "https://x/a"},
+                {"name": "sunbeam-raw-aarch64-apple-darwin", "browser_download_url": "https://x/b"}
+            ]
+        }))
+        .unwrap();
+        let asset = find_asset(&release, "sunbeam-raw-aarch64-apple-darwin").unwrap();
+        assert_eq!(asset.browser_download_url, "https://x/b");
+    }
+
+    #[test]
+    fn test_find_asset_missing_errors() {
+        let release: Release = serde_json::from_value(serde_json::json!({
+            "tag_name": "v1.2.3",
+            "assets": [
+                {"name": "checksums.txt", "browser_download_url": "https://x/c"}
+            ]
+        }))
+        .unwrap();
+        let err = find_asset(&release, "sunbeam-raw-aarch64-apple-darwin").unwrap_err();
+        assert!(
+            err.to_string().contains("sunbeam-raw-aarch64-apple-darwin"),
+            "err: {err}"
+        );
+        assert!(err.to_string().contains("v1.2.3"), "err: {err}");
+    }
+
+    #[test]
+    fn test_verify_checksum_ok() {
+        let checksums = format!("{}  sunbeam-test", sha256_hex(b"hello world"));
+        assert!(verify_checksum(b"hello world", "sunbeam-test", &checksums).is_ok());
     }
 
     #[test]
@@ -399,82 +350,148 @@ mod tests {
         assert!(verify_checksum(b"hello", "sunbeam-test", checksums).is_err());
     }
 
-    #[test]
-    fn test_update_cache_path() {
-        let path = update_cache_path();
-        assert!(path.to_string_lossy().contains("sunbeam"));
-        assert!(path.to_string_lossy().ends_with("update-check.json"));
-    }
+    #[tokio::test]
+    async fn test_fetch_latest_release_parses_response() {
+        let server = MockServer::start().await;
+        mount_release_flow(&server, "v9.9.9").await;
 
-    #[test]
-    fn test_cache_roundtrip() {
-        let cache = UpdateCache {
-            last_check: Utc::now(),
-            latest_commit: "abc12345".to_string(),
-            current_commit: "def67890".to_string(),
-        };
-        let json = serde_json::to_string(&cache).unwrap();
-        let loaded: UpdateCache = serde_json::from_str(&json).unwrap();
-        assert_eq!(loaded.latest_commit, "abc12345");
-        assert_eq!(loaded.current_commit, "def67890");
+        let release = fetch_latest_release(&reqwest::Client::new(), &server.uri())
+            .await
+            .unwrap();
+        assert_eq!(release.tag_name, "v9.9.9");
+        assert_eq!(release.assets.len(), 4);
+        assert!(release.assets.iter().any(|a| a.name == asset_name()));
     }
 
     #[tokio::test]
-    async fn test_check_update_background_returns_none_when_forge_url_empty() {
-        // When SUNBEAM_FORGE_URL is unset and there is no active-context domain,
-        // forge_url() returns "" and check_update_background should return None
-        // without making any network requests.
-        // Clear the env var to ensure we hit the empty-URL path.
-        // SAFETY: This test is not run concurrently with other tests that depend on this env var.
-        unsafe { std::env::remove_var("SUNBEAM_FORGE_URL") };
-        let logger = sdk::logger::Logger::new(sdk::logger::TracingSink);
-        let result = check_update_background(&logger).await;
-        // Either None (empty forge URL or network error) — never panics.
-        // The key property: this completes quickly without hanging.
-        drop(result);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_artifacts_parses_response() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
+    async fn test_fetch_latest_release_http_error_propagates() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/repos/studio/cli/actions/artifacts"))
+            .and(path(format!("/repos/{GITHUB_REPO}/releases/latest")))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let err = fetch_latest_release(&reqwest::Client::new(), &server.uri())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("GitHub release"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_run_update_happy_path() {
+        let server = MockServer::start().await;
+        mount_release_flow(&server, "v9.9.9").await;
+
+        let checksums = format!("{}  {}\n", sha256_hex(TEST_BINARY), asset_name());
+        Mock::given(method("GET"))
+            .and(path("/download/checksums.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(checksums))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/download/binary"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(TEST_BINARY))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("sunbeam");
+        std::fs::write(&exe, b"old-binary").unwrap();
+
+        run_update(&test_logger(), &server.uri(), &exe)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&exe).unwrap(), TEST_BINARY);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&exe).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o111,
+                0o111,
+                "expected executable bits, got {mode:o}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_update_checksum_mismatch_refuses_replacement() {
+        let server = MockServer::start().await;
+        mount_release_flow(&server, "v9.9.9").await;
+
+        let checksums = format!("{}  {}\n", "0".repeat(64), asset_name());
+        Mock::given(method("GET"))
+            .and(path("/download/checksums.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(checksums))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/download/binary"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(TEST_BINARY))
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("sunbeam");
+        std::fs::write(&exe, b"old-binary").unwrap();
+
+        let err = run_update(&test_logger(), &server.uri(), &exe)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Checksum mismatch"), "err: {err}");
+        // Original binary must be untouched.
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old-binary");
+    }
+
+    #[tokio::test]
+    async fn test_run_update_missing_platform_asset_errors() {
+        let server = MockServer::start().await;
+        // Release without our platform's raw asset.
+        let uri = server.uri();
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{GITHUB_REPO}/releases/latest")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "artifacts": [
-                    {"name": "sunbeam-aarch64-apple-darwin", "id": 42},
-                    {"name": "checksums.txt", "id": 43}
+                "tag_name": "v9.9.9",
+                "assets": [
+                    {
+                        "name": "checksums.txt",
+                        "browser_download_url": format!("{uri}/download/checksums.txt")
+                    }
                 ]
             })))
             .mount(&server)
             .await;
 
-        let artifacts = fetch_artifacts(&reqwest::Client::new(), &server.uri())
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("sunbeam");
+        std::fs::write(&exe, b"old-binary").unwrap();
+
+        let err = run_update(&test_logger(), &server.uri(), &exe)
             .await
-            .unwrap();
-        assert_eq!(artifacts.len(), 2);
-        assert_eq!(artifacts[0].name, "sunbeam-aarch64-apple-darwin");
-        assert_eq!(artifacts[0].id, 42);
+            .unwrap_err();
+        assert!(err.to_string().contains(&asset_name()), "err: {err}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old-binary");
     }
 
     #[tokio::test]
-    async fn test_fetch_artifacts_http_error_propagates() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
+    async fn test_run_update_already_up_to_date() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/repos/studio/cli/actions/artifacts"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
+        // Tag matches the running version — no asset mocks on purpose; any
+        // asset request would 404 and fail the update.
+        mount_release_flow(&server, &format!("v{VERSION}")).await;
 
-        let err = fetch_artifacts(&reqwest::Client::new(), &server.uri())
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("sunbeam");
+        std::fs::write(&exe, b"old-binary").unwrap();
+
+        run_update(&test_logger(), &server.uri(), &exe)
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("artifacts"), "err: {err}");
+            .unwrap();
+
+        // Untouched.
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old-binary");
     }
 
     #[test]
