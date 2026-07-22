@@ -252,7 +252,7 @@ mod tests {
                     "browser_download_url": format!("{uri}/download/pkg.tar.gz")
                 },
                 {
-                    "name": "sunbeam-raw-x86_64-unknown-linux-gnu",
+                    "name": "sunbeam-raw-x86_64-pc-windows-msvc",
                     "browser_download_url": format!("{uri}/download/other-binary")
                 },
                 {
