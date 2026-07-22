@@ -26,8 +26,10 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
    (GITHUB_TOKEN-pushed tags don't cascade to `on: push` workflows, hence
    the explicit dispatch). No version bump → tag exists → nothing happens.
 
-4. **`release.yml` builds and publishes.** Native builds on four targets
-   (`aarch64`/`x86_64` × macOS/Linux), each with:
+4. **`release.yml` builds and publishes.** Builds on four targets
+   (`aarch64`/`x86_64` × macOS/Linux; x86_64-apple is cross-compiled on the
+   arm runner and packaged via Rosetta 2 — Intel runners are
+   capacity-starved), each with:
    - the platform's public SSO client ID baked in at compile time via the
      `SUNBEAM_SSO_CLIENT_ID` repo secret (option_env! — never in git),
    - `buf` for the sdk's ConnectRPC codegen,
@@ -68,6 +70,10 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
   OAuth2 client ID, baked into release binaries. If unset, binaries build
   fine but `sunbeam auth login` requires the runtime env var.
 - Builds need network access (crates.io + buf.build for the sdk codegen).
+- Homebrew note: `brew install` filters the environment down to an
+  allowlist plus `HOMEBREW_*` — to bake the client ID into a source build,
+  pass it as `HOMEBREW_SSO_CLIENT_ID` (the formula re-exports it; runtime
+  `SUNBEAM_SSO_CLIENT_ID` remains the fallback).
 
 ## Self-update channel
 

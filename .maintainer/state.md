@@ -44,6 +44,12 @@ timestamp: 2026-07-21T00:00:00Z
   integration test is `#[ignore]`d until the poll bug is fixed.
 - **sdk mail #33** — testing::SsoGateway recovery courier + `sso_url`/
   `sso_client_id` Context fields.
+- **sdk mail #39** — BUG: `tools::ensure_tool` downloads kustomize/helm via
+  `reqwest::blocking`; the internal runtime panics when dropped inside an
+  async context (cold tool cache → any `kustomize_build` from async code
+  crashes, incl. `sunbeam service apply` on a fresh machine). Workaround:
+  tests pre-warm `~/.sunbeam/bin` synchronously (tests/common). When a fix
+  tag lands: bump, drop the prewarm.
 - ~~sdk mail #25~~ — resolved in sdk **v3.1.1** (adopted + validated with a
   real orchestrator boot; local kanban replica deleted).
 - ~~sbbb mail #34~~ — resolved: public client provisioned on the gateway;

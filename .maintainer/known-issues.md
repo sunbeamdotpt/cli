@@ -41,6 +41,10 @@ note it in [log.md](log.md). Verify against the repo before trusting an entry.
   (injectable seams) or a live-cluster test rig — human's call whether either
   is worth it.
 - Several stale remote branches exist — cleanup is the human's call.
+- **sdk `tools::ensure_tool` is async-unsafe** (mail #39): cold-cache tool
+  downloads panic inside async contexts (production-reachable via
+  `sunbeam service apply` on fresh machines). Track the sdk fix; remove
+  the `tests/common::prewarm_tool_cache` workaround when it lands.
 
 ## Resolved 2026-07-21 (kept for the record, remove on next pass)
 
