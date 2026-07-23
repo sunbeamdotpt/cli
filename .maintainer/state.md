@@ -70,6 +70,11 @@ timestamp: 2026-07-23T00:00:00Z
 ## Pick up first
 
 - Check for open mail: `agent-mail inbox` (replies may land on #32/#33).
+- **Automate the tap bump** (human suggestion, 2026-07-23): `release.yml`
+  already prints the four tarball sha256s in its job summary; a final job
+  could check out `sunbeamdotpt/tap` and bump the formula itself. Needs a
+  cross-repo credential (PAT or GitHub App token — `GITHUB_TOKEN` can't
+  push to another repo). Decide PR-vs-direct-push when implementing.
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
   kanban dev board): template column authoring + `board create --template`,
   card-template field plumbing (title/description/labels/checklist),
