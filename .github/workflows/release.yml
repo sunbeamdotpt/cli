@@ -156,6 +156,7 @@ jobs:
     name: bump homebrew formula
     needs: release
     uses: sunbeamdotpt/tap/.github/workflows/bump-formula.yml@mainline
+    secrets: inherit
     with:
       formula: sunbeam
       version: ${{ inputs.tag || github.ref_name }}
