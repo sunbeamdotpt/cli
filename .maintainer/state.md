@@ -10,6 +10,10 @@ timestamp: 2026-07-23T00:00:00Z
 
 ## In flight
 
+- **Login scopes fix (mail #71, 2026-07-23)** — device flow now requests
+  `identity:read identity:admin` on top of the OIDC scopes (src/auth.rs);
+  unblocks `kanban project member add`. **Needs v3.1.2 release to take
+  effect — human owns the cut.**
 - **v3.1.1 RELEASED 2026-07-23** (kanban UUID resolution + `project update
   --prefix` from sunbeam's #59). Tap bumped, verified (`brew upgrade` →
   3.1.1, audit/test green) and pushed. Nothing in flight — next release is

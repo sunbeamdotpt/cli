@@ -190,3 +190,17 @@ formula into the tap clone (or pushing first). Recorded in state.md.
 Human floated automating the tap bump from release.yml — noted under
 Pick up first (needs a cross-repo credential; GITHUB_TOKEN won't push
 to sunbeamdotpt/tap).
+
+
+## 2026-07-23 (later still) — mail #71: device login identity scopes
+
+sunbeam reported `kanban project member add` failing permission_denied
+because `sunbeam auth login` tokens only carry OIDC scopes; the gateway
+client ceiling was raised to allow identity:admin. Fixed by adding
+`identity:read identity:admin` to the device-flow scope request
+(src/auth.rs:295) and the registration doc comment. Chose both scopes
+(admin for member mutations, read for lookups) — the ceiling allows all
+six *:admin, and Hydra-style scope checks are exact-match so admin does
+not imply read. Verified: cargo check, fmt, 67 auth-tagged nextest tests.
+Replied + acked #71. Release (v3.1.2) is required for the fix to reach
+sienna — escalated as human-owned per charter.
