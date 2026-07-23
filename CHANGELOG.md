@@ -7,6 +7,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.1.1] - 2026-07-23
+
+### Fixed
+
+- Kanban ID resolution accepts legacy UUIDs: `template get` (and every other
+  resolver) rejected the exact identifiers `template list` prints because
+  template IDs are UUIDs while the resolver only recognised ULIDs and
+  prefixed IDs.
+
+### Added
+
+- `kanban project update --prefix` — change a project's short key after
+  creation (the server's `UpdateProject` already supported it via the field
+  mask; the CLI never exposed it).
+
 ## [3.1.0] - 2026-07-22
 
 ### Changed
