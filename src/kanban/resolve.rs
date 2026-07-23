@@ -4,7 +4,7 @@
 //! a human-readable reference. An argument is resolved against the visible
 //! entities by, in no particular order:
 //!
-//! - exact ULID (returned unchanged, no RPC)
+//! - exact ULID or legacy UUID (returned unchanged, no RPC)
 //! - ULID prefix (e.g. `01KY0QK98`)
 //! - exact name (case-insensitive)
 //! - project key/prefix (e.g. `TRI`) for projects
@@ -18,15 +18,29 @@ use sdk::kanban::v1;
 
 /// Returns true if `raw` already looks like a backend identifier.
 ///
-/// IDs are recognised in two shapes:
+/// IDs are recognised in three shapes:
 /// - ULIDs (Crockford base32, 26 chars)
+/// - Legacy UUIDs (8-4-4-4-12 hex; some entities, e.g. board templates,
+///   still carry these — `template list` prints them, so they must resolve)
 /// - Prefixed test/production IDs such as `proj_1`, `board_abc123`
 pub(crate) fn looks_like_id(raw: &str) -> bool {
-    is_ulid(raw) || is_prefixed_id(raw)
+    is_ulid(raw) || is_uuid(raw) || is_prefixed_id(raw)
 }
 
 fn is_ulid(s: &str) -> bool {
     ulid::Ulid::from_string(s).is_ok()
+}
+
+fn is_uuid(s: &str) -> bool {
+    let mut segments = s.split('-');
+    let lengths = [8, 4, 4, 4, 12];
+    for want in lengths {
+        match segments.next() {
+            Some(seg) if seg.len() == want && seg.chars().all(|c| c.is_ascii_hexdigit()) => {}
+            _ => return false,
+        }
+    }
+    segments.next().is_none()
 }
 
 fn is_prefixed_id(s: &str) -> bool {
@@ -514,12 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn looks_like_id_rejects_names_and_uuids() {
+    fn looks_like_id_recognises_uuids() {
+        assert!(looks_like_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(looks_like_id("550E8400-E29B-41D4-A716-446655440000"));
+    }
+
+    #[test]
+    fn looks_like_id_rejects_names() {
         assert!(!looks_like_id("Sunbeam"));
         assert!(!looks_like_id("Backlog"));
         assert!(!looks_like_id("Fix frontend crash"));
-        assert!(!looks_like_id("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(!looks_like_id("550E8400-E29B-41D4-A716-446655440000"));
+        assert!(!looks_like_id("550e8400-e29b-41d4-a716"));
+        assert!(!looks_like_id("550e8400e29b41d4a716446655440000"));
     }
 
     #[test]
@@ -615,6 +635,13 @@ mod tests {
         assert_eq!(resolver.card_anywhere("card_1").await.unwrap(), "card_1");
         assert_eq!(resolver.aggregate("agg_1").await.unwrap(), "agg_1");
         assert_eq!(resolver.template(None, "tmpl_1").await.unwrap(), "tmpl_1");
+        assert_eq!(
+            resolver
+                .template(None, "550e8400-e29b-41d4-a716-446655440000")
+                .await
+                .unwrap(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert_eq!(resolver.card_template("ctmpl_1").await.unwrap(), "ctmpl_1");
         assert_eq!(
             resolver.public_board_anywhere("board_1").await.unwrap(),
