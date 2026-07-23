@@ -146,3 +146,25 @@ release workflow's repo secret — the HOMEBREW_SSO_CLIENT_ID bake channel
 from earlier today is now moot (kept in the formula's history only).
 release.yml's job summary now prints the four tarball sha256s for the
 formula update step.
+
+
+## 2026-07-23 — Mail batch: sbbb verifications closed; sunbeam UX triage
+
+sbbb confirmed all kanban fixes hold on 3.1.0 (#48 cold-start retry + whoami,
+#49 positional IDs/prefix resolution, #51 full reverify clean; #50 was a
+mis-addressed consent thread, no cli ask). Also resolved: the whoami
+"expired" confusion was sbbb misreading +01:00 local timestamps as UTC —
+the flag was never broken; our regression test stands regardless.
+
+sunbeam's #59: UX feedback from a ~200-call org-wide kanban rollout. Two
+items fixed same-day on mainline (unreleased): (1) the ID resolver was
+ULID-only while template IDs are legacy UUIDs, so `template get` rejected
+the exact ID `template list` prints — `looks_like_id` now recognises UUIDs
+(decision: accept the printed ID rather than print something else, since
+UUIDs are the server's real identifiers and pass-through costs no RPC);
+(2) `project update --prefix` added — the field existed on the proto but
+was never wired into the CLI's field mask. Deferred to sunbeam's dev-board
+cards (feature design, not drive-bys): template column authoring +
+`board create --template`, card-template field plumbing, `--columns` bulk
+flag, `member add` raw-subject/help polish. Verified: 117/117 kanban tests
+incl. docker end-to-end, clippy -D warnings clean.

@@ -3,7 +3,7 @@ type: State
 title: Current state of cli
 description: What is in flight, what is blocked, what the next session should pick up first.
 tags: [state]
-timestamp: 2026-07-21T00:00:00Z
+timestamp: 2026-07-23T00:00:00Z
 ---
 
 # State — 2026-07-21
@@ -27,12 +27,11 @@ timestamp: 2026-07-21T00:00:00Z
   deliberately untouched until sbbb drops Ory (see Blocked).
 - Build/clippy/fmt/nextest green (694 tests, 83.3% line coverage — ceiling
   analysis in known-issues).
-- **v3.0.1 candidate on mainline (unreleased)**: sbbb prod-feedback package —
-  kanban cold-start retry, positional entity IDs, name/key-prefix (TRI)
-  resolution everywhere, sole-column default, actionable errors; logging is
-  now opt-in (default Warn) on a single stderr pipeline
-  (`Logger::new(TracingSink)`), data moved off info-level logs to stdout.
-  Ship by bumping Cargo.toml to 3.0.1 and merging (human's call).
+- **v3.1.1 candidate on mainline (unreleased)**: from sunbeam's kanban
+  rollout feedback (mail #59) — kanban ID resolver accepts legacy UUIDs
+  (fixes `template get` rejecting the IDs `template list` prints) and
+  `project update --prefix` added. Ship by bumping Cargo.toml and merging
+  (human's call).
 - **Homebrew tap**: live since 3.0.0 (`sunbeamdotpt/tap`).
 - **Logger migration**: unified pipeline done (see log.md 2026-07-22);
   intentional tracing:: remainder in users/auth/secrets_cli/workflows (no
@@ -71,5 +70,11 @@ timestamp: 2026-07-21T00:00:00Z
 ## Pick up first
 
 - Check for open mail: `agent-mail inbox` (replies may land on #32/#33).
+- Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
+  kanban dev board): template column authoring + `board create --template`,
+  card-template field plumbing (title/description/labels/checklist),
+  `--columns` on `board create`, `member add` raw OIDC subject + scope
+  help, `aggregate create` sources, `project list` board/card counts.
+  Check proto/server support before designing flags.
 - Docs are current again (AGENTS.md + README rewritten for v3) — keep them
   that way when the sdk tag bumps.
