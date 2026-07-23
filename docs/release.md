@@ -56,7 +56,11 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
 
 - **Rebuild artifacts for an existing tag**: Actions → release →
   Run workflow → enter the tag. Same tag, fresh artifacts — never move a
-  tag.
+  tag. **Caveat (2026-07-23):** releases are immutable in this org, so a
+  re-dispatch fails at the publish step if the assets already exist —
+  use this only when the release or its assets are missing/broken. If
+  only the `homebrew-tap` job failed, dispatch `bump-formula.yml` in the
+  tap repo directly instead of re-running the whole train.
 - **Broken release**: do not re-tag or edit published artifacts. Cut a
   patch release (bump patch, back to step 2) and optionally mark the
   broken GH release as a pre-release.

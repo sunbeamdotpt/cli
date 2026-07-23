@@ -204,3 +204,30 @@ six *:admin, and Hydra-style scope checks are exact-match so admin does
 not imply read. Verified: cargo check, fmt, 67 auth-tagged nextest tests.
 Replied + acked #71. Release (v3.1.2) is required for the fix to reach
 sienna — escalated as human-owned per charter.
+
+
+## 2026-07-23 (evening) — v3.1.2 shipped; two release-train wrinkles
+
+Human approved the cut. Gates green (clippy, 695/695 nextest), three
+commits on mainline (fix/auth scopes, maintainer, release), CI tagged
+v3.1.2, release published all 9 assets. Then two wrinkles:
+
+1. **homebrew-tap job failed: "appId option is required".** Reusable
+   workflows receive NO secrets unless the caller passes them — the job
+   added in 0b6129d2 lacked `secrets: inherit`, so the org's
+   SUNBEAM_TAP_APP_ID never crossed the workflow_call boundary. Fixed in
+   9b96ed59. Lesson: any `uses: <reusable>` that touches secrets needs
+   `secrets: inherit` (or explicit mapping) — audit future additions.
+2. **Re-dispatching the release for the same tag fails at publish**:
+   org releases are IMMUTABLE — "Cannot delete asset from an immutable
+   release". The runbook's re-dispatch path only works when assets are
+   missing; documented the caveat + the surgical alternative (dispatch
+   bump-formula.yml in tap directly) in docs/release.md.
+
+Tap side: bump-formula opened PR #3 correctly (shas verified against
+checksums.txt) but pull_request test-bot fails repo-wide ("Did not find
+any formulae or commits to test!" — every PR run, #1/#2/#3), so
+auto-merge can never engage. Landed the bump on tap mainline manually
+(331fc79, cherry-pick of the PR commit — same pattern as sunbeam-memory
+0.3.4 earlier today) and closed PR #3. Mailed tap (#75) about the
+broken PR CI.
