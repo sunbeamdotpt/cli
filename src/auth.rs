@@ -24,7 +24,7 @@ use serde::Deserialize;
 // SUNBEAM_SSO_CLIENT_ID (option_env! in resolve_client_id).
 //
 //   response_types: ["code"]
-//   scope: "openid email profile offline_access"
+//   scope: "openid email profile offline_access identity:read identity:admin"
 //   redirect_uris: http://localhost:9876-9880/callback, http://127.0.0.1:9876-9880/callback
 //   post_logout_redirect_uris: http://localhost:9876/callback, http://127.0.0.1:9876/callback
 
@@ -292,7 +292,10 @@ async fn request_device_code(
         .post(endpoint)
         .form(&[
             ("client_id", client_id),
-            ("scope", "openid email profile offline_access"),
+            (
+                "scope",
+                "openid email profile offline_access identity:read identity:admin",
+            ),
         ])
         .send()
         .await
