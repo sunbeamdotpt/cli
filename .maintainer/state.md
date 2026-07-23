@@ -6,15 +6,14 @@ tags: [state]
 timestamp: 2026-07-23T00:00:00Z
 ---
 
-# State — 2026-07-21
+# State — 2026-07-23
 
 ## In flight
 
-- **v3.1.0 RELEASED 2026-07-22** (v3.0.0 earlier same day). Train fully
-  operational: merge → ci.yml tags → release.yml builds/publishes → tap
-  formula installs the PREBUILT tarballs (hard requirement: no build
-  toolchain for brew users). Nothing in flight — next release is a
-  Cargo.toml bump + merge + 4 sha256s in the tap.
+- **v3.1.1 RELEASED 2026-07-23** (kanban UUID resolution + `project update
+  --prefix` from sunbeam's #59). Tap bumped, verified (`brew upgrade` →
+  3.1.1, audit/test green) and pushed. Nothing in flight — next release is
+  a Cargo.toml bump + merge + 4 sha256s in the tap.
 - **Release train = GitHub Actions only** (WFE/Gitea pipeline REMOVED
   2026-07-22): `ci.yml` (fmt/clippy/nextest + auto-tag from Cargo.toml on
   mainline + dispatch) and `release.yml` (native matrix builds, tarballs +
@@ -27,12 +26,11 @@ timestamp: 2026-07-23T00:00:00Z
   deliberately untouched until sbbb drops Ory (see Blocked).
 - Build/clippy/fmt/nextest green (694 tests, 83.3% line coverage — ceiling
   analysis in known-issues).
-- **v3.1.1 candidate on mainline (unreleased)**: from sunbeam's kanban
-  rollout feedback (mail #59) — kanban ID resolver accepts legacy UUIDs
-  (fixes `template get` rejecting the IDs `template list` prints) and
-  `project update --prefix` added. Ship by bumping Cargo.toml and merging
-  (human's call).
-- **Homebrew tap**: live since 3.0.0 (`sunbeamdotpt/tap`).
+- **Homebrew tap**: live since 3.0.0 (`sunbeamdotpt/tap`). NOTE: brew's tap
+  clone under `$(brew --repository)/Library/Taps/sunbeamdotpt/homebrew-tap`
+  is a SEPARATE git clone, not a symlink to `../tap` — local formula edits
+  must be copied in (or pushed + `brew update`) before `brew audit/install/
+  test` will see them.
 - **Logger migration**: unified pipeline done (see log.md 2026-07-22);
   intentional tracing:: remainder in users/auth/secrets_cli/workflows (no
   logger in scope / wfe ctx) — acceptable end state, not debt.

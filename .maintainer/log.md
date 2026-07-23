@@ -168,3 +168,25 @@ cards (feature design, not drive-bys): template column authoring +
 `board create --template`, card-template field plumbing, `--columns` bulk
 flag, `member add` raw-subject/help polish. Verified: 117/117 kanban tests
 incl. docker end-to-end, clippy -D warnings clean.
+
+
+## 2026-07-23 (later) — v3.1.1 shipped; setup-protoc rate limit
+
+Human approved the release train; four conventional commits (fix/feat/
+chore/release) pushed, ci.yml tagged v3.1.1, release dispatched. First
+release run FAILED on x86_64-apple: arduino/setup-protoc hit the
+unauthenticated GitHub API rate limit — same class as the buf failure we
+fixed with github_token (94e08f5b). Fixed identically (repo-token:
+secrets.GITHUB_TOKEN in ci.yml + release.yml, c09864eb) and re-dispatched
+the release for the SAME tag per the runbook (never move tags). Lesson:
+any action that resolves a tool via the GitHub API needs an explicit
+token input; audit future additions for it.
+
+Tap update surfaced a workflow wrinkle: brew's tap clone under
+Library/Taps is a separate clone, not a symlink to ../tap, and this
+brew's `brew audit <path>` is disabled — so the documented
+audit/install/test-then-push order only works after copying the edited
+formula into the tap clone (or pushing first). Recorded in state.md.
+Human floated automating the tap bump from release.yml — noted under
+Pick up first (needs a cross-repo credential; GITHUB_TOKEN won't push
+to sunbeamdotpt/tap).
