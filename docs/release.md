@@ -39,19 +39,18 @@ Everything runs on GitHub Actions (the old WFE/Gitea pipeline is gone).
    creates the GitHub release with everything plus `checksums.txt` and
    auto-generated notes.
 
-5. **Update the Homebrew tap.** The formula installs the prebuilt release
-   tarballs (no build toolchain for users). The release workflow prints the
-   four tarball sha256s into its job summary. In the tap repo
-   (`../tap`, github.com/sunbeamdotpt/tap):
-   - bump the four `url`s to the new version and set the four `sha256`s,
-   - `brew audit sunbeamdotpt/tap/sunbeam`,
-     `brew install sunbeamdotpt/tap/sunbeam`,
-     `brew test sunbeamdotpt/tap/sunbeam`,
-   - commit and push. Users get the release via `brew upgrade sunbeam`.
+5. **Update the Homebrew tap.** Automated: the release workflow's final
+   `homebrew-tap` job calls the reusable `bump-formula.yml` workflow in the
+   tap repo (`../tap`, github.com/sunbeamdotpt/tap), which opens a
+   `chore: bump sunbeam to <version>` PR that auto-merges once tap CI is
+   green. The formula installs the prebuilt release tarballs (no build
+   toolchain for users); shas come from the release's `checksums.txt`.
+   Manual fallback and the full release contract: `../tap/README.md`.
+   Users get the release via `brew upgrade sunbeam`.
 
 6. **Verify.** The GH release page shows all four tarballs + four raw
    binaries + checksums; `sunbeam update` on the previous release moves to
-   the new version; `brew info sunbeam` resolves it after the tap push.
+   the new version; `brew info sunbeam` resolves it after the tap PR merges.
 
 ## Rebuilding and fixing
 

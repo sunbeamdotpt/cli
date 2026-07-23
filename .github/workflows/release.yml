@@ -139,17 +139,6 @@ jobs:
           sha256sum sunbeam_*.tar.gz sunbeam-raw-* > checksums.txt
           cat checksums.txt
 
-      - name: Homebrew tap formula shas
-        run: |
-          set -euo pipefail
-          {
-            echo "### Homebrew tap update — paste into the four sha256 lines of Formula/sunbeam.rb"
-            echo ""
-            echo "\`\`\`"
-            grep '\.tar\.gz$' checksums.txt
-            echo "\`\`\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -159,3 +148,14 @@ jobs:
             sunbeam-raw-*
             checksums.txt
           generate_release_notes: true
+
+  # Automated Homebrew tap bump: opens a `chore: bump sunbeam to <version>`
+  # PR in sunbeamdotpt/tap, which auto-merges once tap CI is green.
+  # Contract: ../tap/README.md ("Release contract for source repos").
+  homebrew-tap:
+    name: bump homebrew formula
+    needs: release
+    uses: sunbeamdotpt/tap/.github/workflows/bump-formula.yml@mainline
+    with:
+      formula: sunbeam
+      version: ${{ inputs.tag || github.ref_name }}
