@@ -45,6 +45,9 @@ pub enum ProjectAction {
         /// New name.
         #[arg(short, long)]
         name: Option<String>,
+        /// New short uppercase prefix.
+        #[arg(short, long)]
+        prefix: Option<String>,
         /// New icon.
         #[arg(short, long)]
         icon: Option<String>,
@@ -244,6 +247,7 @@ pub(crate) async fn run(
         ProjectAction::Update {
             project_id,
             name,
+            prefix,
             icon,
             color,
             description,
@@ -254,6 +258,9 @@ pub(crate) async fn run(
             let mut paths = Vec::new();
             if name.is_some() {
                 paths.push("name".to_string());
+            }
+            if prefix.is_some() {
+                paths.push("prefix".to_string());
             }
             if icon.is_some() {
                 paths.push("icon".to_string());
@@ -272,6 +279,7 @@ pub(crate) async fn run(
                         project: v1::Project {
                             id: project_id.clone(),
                             name: name.unwrap_or_default(),
+                            prefix: prefix.unwrap_or_default(),
                             icon: icon.unwrap_or_default(),
                             color: color.unwrap_or_default(),
                             description: description.unwrap_or_default(),
@@ -548,6 +556,7 @@ mod tests {
             ProjectAction::Update {
                 project_id: "proj_1".into(),
                 name: Some("Renamed".into()),
+                prefix: Some("REN".into()),
                 icon: None,
                 color: Some("blue".into()),
                 description: None,
