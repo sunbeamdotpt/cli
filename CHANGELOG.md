@@ -7,6 +7,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.1.2] - 2026-07-23
+
+### Fixed
+
+- `auth login` now requests `identity:read identity:admin` scopes in the
+  device flow, so login tokens can drive identity-backed operations
+  (`kanban project member add` no longer fails with permission_denied).
+  Re-login once after upgrading to pick up the new scopes.
+
 ## [3.1.1] - 2026-07-23
 
 ### Fixed
