@@ -59,6 +59,10 @@ pub enum CardAction {
         /// Mark the card as blocked (cannot be cleared server-side yet).
         #[arg(long)]
         blocked: bool,
+        /// Assign a milestone (ID or title; titles resolve against the
+        /// card's project).
+        #[arg(long)]
+        milestone: Option<String>,
     },
     /// Assign a card to a user.
     Assign {
@@ -95,6 +99,12 @@ pub enum CardAction {
         /// Comment subcommand to run.
         #[command(subcommand)]
         action: CommentAction,
+    },
+    /// Label assignment.
+    Label {
+        /// Label subcommand to run.
+        #[command(subcommand)]
+        action: CardLabelAction,
     },
     /// Dependency management.
     Dependency {
@@ -171,6 +181,39 @@ pub enum DependencyAction {
         /// Dependency card ID, title, or ref.
         depends_on: String,
     },
+}
+
+/// Card label actions.
+#[derive(Debug, Clone, Subcommand)]
+pub enum CardLabelAction {
+    /// Replace a card's whole label set (no names clears all labels).
+    Set {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Label names or IDs.
+        names: Vec<String>,
+    },
+    /// Add labels to a card.
+    Add {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Label names or IDs.
+        names: Vec<String>,
+    },
+    /// Remove labels from a card.
+    Remove {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Label names or IDs.
+        names: Vec<String>,
+    },
+}
+
+/// How a card label operation combines with the current label set.
+enum LabelMode {
+    Set,
+    Add,
+    Remove,
 }
 
 /// Card comment actions.
@@ -444,6 +487,121 @@ async fn resolve_subject(raw: &str) -> Result<String> {
     }
 }
 
+/// Resolve a `--milestone` argument to a milestone ULID.
+///
+/// ID-shaped input passes through; titles resolve against the milestones of
+/// the card's project.
+async fn resolve_milestone_arg(client: &KanbanClient, card_id: &str, raw: &str) -> Result<String> {
+    if super::resolve::looks_like_id(raw) {
+        return Ok(raw.to_string());
+    }
+    let card = required(
+        client
+            .cards()
+            .get_card_with_options(
+                v1::GetCardRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned()
+            .card,
+        "card",
+    )?;
+    super::resolve::NameResolver::new(client)
+        .milestone(&card.project_id, raw)
+        .await
+}
+
+/// Apply a card label operation against the project catalog.
+///
+/// Label names (and ULIDs) resolve against the catalog visible to the card's
+/// project; the resulting set is pushed through BulkUpdateCardLabels, which
+/// replaces a card's labels wholesale.
+async fn update_card_labels(
+    client: &KanbanClient,
+    card_id: &str,
+    names: &[String],
+    mode: LabelMode,
+    format: OutputFormat,
+) -> Result<()> {
+    let card = required(
+        client
+            .cards()
+            .get_card_with_options(
+                v1::GetCardRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned()
+            .card,
+        "card",
+    )?;
+    let catalog = super::resolve::NameResolver::new(client)
+        .project_labels(&card.project_id)
+        .await?;
+    let available: Vec<String> = catalog.iter().map(|l| l.name.clone()).collect();
+
+    let mut wanted: Vec<String> = Vec::new();
+    for name in names {
+        if super::resolve::looks_like_id(name) {
+            wanted.push(name.clone());
+            continue;
+        }
+        let matches: Vec<_> = catalog
+            .iter()
+            .filter(|l| super::resolve::name_matches(&l.name, name))
+            .map(|l| (l.id.clone(), l.name.clone()))
+            .collect();
+        wanted.push(super::resolve::unique_match(
+            matches, "label", name, &available,
+        )?);
+    }
+
+    let current: Vec<String> = card.labels.iter().map(|l| l.id.clone()).collect();
+    let next: Vec<String> = match mode {
+        LabelMode::Set => wanted,
+        LabelMode::Add => {
+            let mut ids = current;
+            for id in wanted {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            ids
+        }
+        LabelMode::Remove => current
+            .into_iter()
+            .filter(|id| !wanted.contains(id))
+            .collect(),
+    };
+
+    let resp = client
+        .cards()
+        .bulk_update_card_labels_with_options(
+            v1::BulkUpdateCardLabelsRequest {
+                card_ids: vec![card_id.to_string()],
+                label_ids: next,
+                idempotency_key: new_idempotency_key(),
+                ..Default::default()
+            },
+            object_id_options(card_id),
+        )
+        .await?
+        .into_owned();
+    let updated = resp
+        .cards
+        .into_iter()
+        .next()
+        .ok_or_else(|| sdk::error::SunbeamError::network("server response missing card"))?;
+    render_card_detail(updated, format).await
+}
+
 /// Run a card command.
 pub(crate) async fn run(
     cmd: CardAction,
@@ -554,6 +712,7 @@ pub(crate) async fn run(
             description,
             priority,
             blocked,
+            milestone,
         } => {
             let mut update_card = v1::Card {
                 id: card_id.clone(),
@@ -577,6 +736,10 @@ pub(crate) async fn run(
                 // so the flag can be set but never cleared through the patch.
                 update_card.blocked = true;
                 paths.push("blocked".to_string());
+            }
+            if let Some(m) = milestone {
+                update_card.milestone_id = resolve_milestone_arg(client, &card_id, &m).await?;
+                paths.push("milestone_id".to_string());
             }
             let resp = client
                 .cards()
@@ -683,6 +846,14 @@ pub(crate) async fn run(
                 .await?
                 .into_owned();
             render_card_detail(required(resp.card, "card")?, format).await
+        }
+        CardAction::Label { action } => {
+            let (card_id, names, mode) = match action {
+                CardLabelAction::Set { card_id, names } => (card_id, names, LabelMode::Set),
+                CardLabelAction::Add { card_id, names } => (card_id, names, LabelMode::Add),
+                CardLabelAction::Remove { card_id, names } => (card_id, names, LabelMode::Remove),
+            };
+            update_card_labels(client, &card_id, &names, mode, format).await
         }
         CardAction::Comment { action } => match action {
             CommentAction::List { card_id } => {
@@ -1022,6 +1193,7 @@ mod tests {
                 description: None,
                 priority: Some(PriorityArg::Low),
                 blocked: true,
+                milestone: None,
             },
             OutputFormat::Json,
             &client,
@@ -1233,6 +1405,182 @@ mod tests {
                     card_id: "card_1".into(),
                     depends_on: "card_0".into(),
                 },
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+    }
+
+    fn labeled_card() -> v1::Card {
+        v1::Card {
+            labels: vec![v1::Label {
+                id: "label_bug".into(),
+                project_id: "proj_1".into(),
+                name: "bug".into(),
+                style: "red".into(),
+                ..Default::default()
+            }],
+            ..lean_card("card_1", "Fix crash")
+        }
+    }
+
+    /// Mount the GetCard + ListLabels + BulkUpdateCardLabels responders the
+    /// label operations need.
+    async fn mount_label_flow(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: labeled_card().into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.LabelService/ListLabels"))
+            .respond_with(testutil::proto_response(&v1::ListLabelsResponse {
+                labels: vec![
+                    v1::Label {
+                        id: "label_bug".into(),
+                        project_id: "proj_1".into(),
+                        name: "bug".into(),
+                        style: "red".into(),
+                        ..Default::default()
+                    },
+                    v1::Label {
+                        id: "label_backend".into(),
+                        project_id: "proj_1".into(),
+                        name: "backend".into(),
+                        style: "blue".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/BulkUpdateCardLabels"))
+            .respond_with(testutil::proto_response(
+                &v1::BulkUpdateCardLabelsResponse {
+                    cards: vec![labeled_card()],
+                    ..Default::default()
+                },
+            ))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn card_label_set_add_remove() {
+        let server = MockServer::start().await;
+        mount_label_flow(&server).await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Label {
+                action: CardLabelAction::Set {
+                    card_id: "card_1".into(),
+                    names: vec!["backend".into()],
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Label {
+                action: CardLabelAction::Add {
+                    card_id: "card_1".into(),
+                    names: vec!["BUG".into(), "label_backend".into()],
+                },
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Label {
+                action: CardLabelAction::Remove {
+                    card_id: "card_1".into(),
+                    names: vec!["bug".into()],
+                },
+            },
+            OutputFormat::Yaml,
+            &client,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn card_label_unknown_name_lists_available() {
+        let server = MockServer::start().await;
+        mount_label_flow(&server).await;
+
+        let client = testutil::client_for(&server.uri());
+        let err = run(
+            CardAction::Label {
+                action: CardLabelAction::Add {
+                    card_id: "card_1".into(),
+                    names: vec!["nope".into()],
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no label matches"), "{msg}");
+        assert!(msg.contains("backend"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn update_assigns_milestone_by_title() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.MilestoneService/ListMilestones"))
+            .respond_with(testutil::proto_response(&v1::ListMilestonesResponse {
+                milestones: vec![v1::Milestone {
+                    id: "ms_1".into(),
+                    project_id: "proj_1".into(),
+                    title: "3.2".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/UpdateCard"))
+            .respond_with(testutil::proto_response(&v1::UpdateCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Update {
+                card_id: "card_1".into(),
+                title: None,
+                description: None,
+                priority: None,
+                blocked: false,
+                milestone: Some("3.2".into()),
             },
             OutputFormat::Json,
             &client,

@@ -11,6 +11,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `kanban label list/create/update/delete` — project label catalog management
+  over the new LabelService; names resolve against the catalog with
+  `--project` (CLI-009).
+- `kanban card label set/add/remove <card> <names...>` — assign labels by
+  name (or ULID); names resolve against the card's project catalog and the
+  resulting set replaces wholesale via BulkUpdateCardLabels (CLI-007/CLI-009).
+- `kanban milestone list/get/create/update/delete` — project milestone
+  management over the new MilestoneService, with completion stats in list
+  output and `--due` accepting RFC 3339 or YYYY-MM-DD.
+- `kanban card update --milestone <id|title>` — assign a card to a milestone;
+  titles resolve against the card's project (KANBAN-017 follow-up).
 - `kanban card comment list/add/edit/delete` — full comment support over the
   CardService comment RPCs (CLI-003).
 - `kanban card assign/unassign <card> <subject-or-email>` — emails resolve to
@@ -26,6 +37,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Adopted sdk v3.3.0 (kanban LabelService + MilestoneService clients).
 - `kanban card create` without `--column` now targets the board's left-most
   (lowest-position) column instead of erroring on multi-column boards; only a
   column-less board still fails (CLI-002).

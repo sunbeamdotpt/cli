@@ -452,6 +452,66 @@ impl<'a> NameResolver<'a> {
         Ok(resp.detail.into_option().unwrap_or_default().columns)
     }
 
+    /// Resolve a label name within a project's catalog (or return the ID
+    /// unchanged).
+    ///
+    /// `project_id` must already be a resolved project identifier; the
+    /// catalog is the global labels plus that project's labels.
+    pub(crate) async fn label(&self, project_id: &str, raw: &str) -> Result<String> {
+        if looks_like_id(raw) {
+            return Ok(raw.to_string());
+        }
+        let labels = self.project_labels(project_id).await?;
+        let available: Vec<String> = labels.iter().map(|l| l.name.clone()).collect();
+        let matches: Vec<_> = labels
+            .into_iter()
+            .filter(|l| entity_matches(&l.id, &l.name, raw))
+            .map(|l| (l.id, l.name))
+            .collect();
+        unique_match(matches, "label", raw, &available)
+    }
+
+    /// Fetch the label catalog visible to a project (global + project).
+    pub(crate) async fn project_labels(&self, project_id: &str) -> Result<Vec<v1::Label>> {
+        let resp = self
+            .client
+            .labels()
+            .list_labels(v1::ListLabelsRequest {
+                project_id: project_id.to_string(),
+                ..Default::default()
+            })
+            .await?
+            .into_owned();
+        Ok(resp.labels)
+    }
+
+    /// Resolve a milestone title within a project (or return the ID
+    /// unchanged).
+    ///
+    /// `project_id` must already be a resolved project identifier.
+    pub(crate) async fn milestone(&self, project_id: &str, raw: &str) -> Result<String> {
+        if looks_like_id(raw) {
+            return Ok(raw.to_string());
+        }
+        let resp = self
+            .client
+            .milestones()
+            .list_milestones(v1::ListMilestonesRequest {
+                project_id: project_id.to_string(),
+                ..Default::default()
+            })
+            .await?
+            .into_owned();
+        let available: Vec<String> = resp.milestones.iter().map(|m| m.title.clone()).collect();
+        let matches: Vec<_> = resp
+            .milestones
+            .into_iter()
+            .filter(|m| entity_matches(&m.id, &m.title, raw))
+            .map(|m| (m.id, m.title))
+            .collect();
+        unique_match(matches, "milestone", raw, &available)
+    }
+
     /// Resolve a column title or ULID prefix within a board.
     ///
     /// Failures list the board's columns (title + id) so the user can pick a

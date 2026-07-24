@@ -7,6 +7,8 @@ mod boards;
 mod card_templates;
 mod cards;
 mod github_links;
+mod labels;
+mod milestones;
 mod projects;
 mod public_boards;
 mod resolve;
@@ -48,6 +50,18 @@ pub enum KanbanCommand {
         /// Card subcommand to run.
         #[command(subcommand)]
         action: cards::CardAction,
+    },
+    /// Label catalog management.
+    Label {
+        /// Label subcommand to run.
+        #[command(subcommand)]
+        action: labels::LabelAction,
+    },
+    /// Milestone management.
+    Milestone {
+        /// Milestone subcommand to run.
+        #[command(subcommand)]
+        action: milestones::MilestoneAction,
     },
     /// Board templates.
     Template {
@@ -181,13 +195,18 @@ pub(crate) fn fmt_ts(ts: &buffa::MessageField<buffa_types::google::protobuf::Tim
 /// Returns true for transport-class failures worth one cold-start retry.
 ///
 /// Fresh H2 connection setup intermittently fails the first RPC of a new
-/// process (`unavailable: error sending request for url (...)`); server-side
-/// application errors are never retried.
+/// process (a Connect `unavailable` whose message is the reqwest send
+/// failure); server-side application errors are never retried.
 fn is_cold_start_transport(err: &SunbeamError) -> bool {
-    let SunbeamError::Network { context, .. } = err else {
-        return false;
-    };
-    context.starts_with("unavailable:") || context.contains("error sending request")
+    match err {
+        SunbeamError::Connect { code, context } => {
+            *code == connectrpc::ErrorCode::Unavailable && context.contains("error sending request")
+        }
+        SunbeamError::Network { context, .. } => {
+            context.starts_with("unavailable:") || context.contains("error sending request")
+        }
+        _ => false,
+    }
 }
 
 /// Run `op`, retrying once on a cold-start transport failure.
@@ -412,12 +431,14 @@ async fn dispatch_authed(
                     description,
                     priority,
                     blocked,
+                    milestone,
                 } => cards::CardAction::Update {
                     card_id: resolver.card_anywhere(&card_id).await?,
                     title,
                     description,
                     priority,
                     blocked,
+                    milestone,
                 },
                 cards::CardAction::Assign { card_id, subject } => cards::CardAction::Assign {
                     card_id: resolver.card_anywhere(&card_id).await?,
@@ -427,6 +448,29 @@ async fn dispatch_authed(
                     card_id: resolver.card_anywhere(&card_id).await?,
                     subject,
                 },
+                cards::CardAction::Label { action } => {
+                    let action = match action {
+                        cards::CardLabelAction::Set { card_id, names } => {
+                            cards::CardLabelAction::Set {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                names,
+                            }
+                        }
+                        cards::CardLabelAction::Add { card_id, names } => {
+                            cards::CardLabelAction::Add {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                names,
+                            }
+                        }
+                        cards::CardLabelAction::Remove { card_id, names } => {
+                            cards::CardLabelAction::Remove {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                names,
+                            }
+                        }
+                    };
+                    cards::CardAction::Label { action }
+                }
                 cards::CardAction::Comment { action } => {
                     let action = match action {
                         cards::CommentAction::List { card_id } => cards::CommentAction::List {
@@ -494,6 +538,100 @@ async fn dispatch_authed(
                 }
             };
             cards::run(action, format, client).await
+        }
+        KanbanCommand::Label { action } => {
+            let resolver = resolve::NameResolver::new(client);
+            let action = match action {
+                labels::LabelAction::List { project } => labels::LabelAction::List {
+                    project: resolver.project(&project).await?,
+                },
+                labels::LabelAction::Create {
+                    project,
+                    name,
+                    style,
+                } => labels::LabelAction::Create {
+                    project: match project {
+                        Some(p) => Some(resolver.project(&p).await?),
+                        None => None,
+                    },
+                    name,
+                    style,
+                },
+                labels::LabelAction::Update {
+                    label,
+                    project,
+                    name,
+                    style,
+                } => labels::LabelAction::Update {
+                    label,
+                    project: match project {
+                        Some(p) => Some(resolver.project(&p).await?),
+                        None => None,
+                    },
+                    name,
+                    style,
+                },
+                labels::LabelAction::Delete { label, project } => labels::LabelAction::Delete {
+                    label,
+                    project: match project {
+                        Some(p) => Some(resolver.project(&p).await?),
+                        None => None,
+                    },
+                },
+            };
+            labels::run(action, format, client).await
+        }
+        KanbanCommand::Milestone { action } => {
+            let resolver = resolve::NameResolver::new(client);
+            let action = match action {
+                milestones::MilestoneAction::List { project } => {
+                    milestones::MilestoneAction::List {
+                        project: resolver.project(&project).await?,
+                    }
+                }
+                milestones::MilestoneAction::Get { milestone, project } => {
+                    milestones::MilestoneAction::Get {
+                        milestone,
+                        project: match project {
+                            Some(p) => Some(resolver.project(&p).await?),
+                            None => None,
+                        },
+                    }
+                }
+                milestones::MilestoneAction::Create {
+                    project,
+                    title,
+                    due,
+                } => milestones::MilestoneAction::Create {
+                    project: resolver.project(&project).await?,
+                    title,
+                    due,
+                },
+                milestones::MilestoneAction::Update {
+                    milestone,
+                    project,
+                    title,
+                    due,
+                } => milestones::MilestoneAction::Update {
+                    milestone,
+                    project: match project {
+                        Some(p) => Some(resolver.project(&p).await?),
+                        None => None,
+                    },
+                    title,
+                    due,
+                },
+                milestones::MilestoneAction::Delete { milestone, project } => {
+                    milestones::MilestoneAction::Delete {
+                        milestone,
+                        project: match project {
+                            Some(p) => Some(resolver.project(&p).await?),
+                            None => None,
+                        },
+                    }
+                }
+            };
+            milestones::run(action, format, client).await
         }
         KanbanCommand::Template { action } => {
             let resolver = resolve::NameResolver::new(client);
@@ -784,12 +922,18 @@ mod tests {
     }
 
     #[test]
-    fn connect_error_converts_to_network_via_from() {
+    fn connect_error_converts_to_structured_variant_via_from() {
         let err = SunbeamError::from(connectrpc::ConnectError::new(
             connectrpc::ErrorCode::Unauthenticated,
             "bad token",
         ));
-        assert!(matches!(err, SunbeamError::Network { .. }));
+        assert!(matches!(
+            err,
+            SunbeamError::Connect {
+                code: connectrpc::ErrorCode::Unauthenticated,
+                ..
+            }
+        ));
         assert!(err.to_string().contains("bad token"));
     }
 
@@ -1271,6 +1415,13 @@ mod tests {
             "invalid column_id",
         ));
         assert!(!is_cold_start_transport(&invalid));
+        // A server-side `unavailable` application error is not a transport
+        // failure and must not be retried.
+        let server_side = SunbeamError::from(connectrpc::ConnectError::new(
+            connectrpc::ErrorCode::Unavailable,
+            "database unavailable",
+        ));
+        assert!(!is_cold_start_transport(&server_side));
         assert!(!is_cold_start_transport(&SunbeamError::Other(
             "no project matches".into()
         )));
