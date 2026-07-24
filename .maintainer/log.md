@@ -273,3 +273,13 @@ Human asked to card the tracked work: sdk dev board now has SDK-001..009
 scoring dimension — no numeric field exists). Found two kanban gaps while
 doing it: `card list` returns 2 of 11 cards (KANBAN-012, high) and no
 numeric score/estimate field (KANBAN-013, medium) — mailed kanban (#96).
+
+## 2026-07-24 — agent-mail → kanban ticketing migration
+
+Cross-repo coordination moved off agent-mail (deprecated) onto kanban cards
+via `sunbeam kanban` — the same migration sbbb did earlier. The AGENTS.md
+ritual, charter, state.md, and interfaces.md now describe the kanban flow;
+mail-thread references in older entries and in state.md (#32/#33/#39/#44
+etc.) are historical identifiers, kept so the record stays traceable.
+*Why:* the human standardized cross-repo tracking on kanban so tickets are
+visible to everyone, not just the two mail endpoints.

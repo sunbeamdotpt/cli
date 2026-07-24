@@ -14,9 +14,9 @@ Contexts in `~/.sunbeam/config.json` point `infra_dir` at an sbbb checkout
 (auto-discovery looks for an `sbbb` sibling). `sunbeam up` / `apply`
 kustomize-build those manifests with DOMAIN_SUFFIX substitution and
 server-side apply. The CLI reads `sunbeam.pt/*` labels/annotations and the
-`profiles/` schema from sbbb. **Contract changes need coordination with the
-`sbbb` identity via agent-mail** — either side changing unilaterally breaks
-the other.
+`profiles/` schema from sbbb. **Contract changes need coordination with
+sbbb via a kanban card on the `sbbb` project's dev board** — either side
+changing unilaterally breaks the other.
 
 ## kanban
 

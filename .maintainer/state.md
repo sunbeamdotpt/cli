@@ -96,7 +96,10 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Pick up first
 
-- Check for open mail: `agent-mail inbox` (replies may land on #32/#33).
+- Check for open cards on the `cli` boards (`sunbeam kanban board list
+  cli`, then `sunbeam kanban card list <board-id>`). The old agent-mail
+  threads (#32/#33 etc.) are historical; cross-repo tracking is kanban-only
+  now.
 - **Automate the tap bump** (human suggestion, 2026-07-23): `release.yml`
   already prints the four tarball sha256s in its job summary; a final job
   could check out `sunbeamdotpt/tap` and bump the formula itself. Needs a
