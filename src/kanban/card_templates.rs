@@ -32,6 +32,21 @@ pub enum CardTemplateAction {
         /// Template name.
         #[arg(short, long)]
         name: String,
+        /// Template description.
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Default card title.
+        #[arg(long)]
+        title: Option<String>,
+        /// Default card description.
+        #[arg(long)]
+        default_description: Option<String>,
+        /// Label applied to created cards (repeatable).
+        #[arg(long)]
+        label: Vec<String>,
+        /// Checklist item for created cards (repeatable).
+        #[arg(long)]
+        checklist: Vec<String>,
     },
     /// Update a card template.
     Update {
@@ -40,6 +55,21 @@ pub enum CardTemplateAction {
         /// New name.
         #[arg(short, long)]
         name: Option<String>,
+        /// New description.
+        #[arg(short, long)]
+        description: Option<String>,
+        /// New default card title.
+        #[arg(long)]
+        title: Option<String>,
+        /// New default card description.
+        #[arg(long)]
+        default_description: Option<String>,
+        /// Replace the label set wholesale (repeatable).
+        #[arg(long)]
+        label: Option<Vec<String>>,
+        /// Replace the checklist wholesale (repeatable).
+        #[arg(long)]
+        checklist: Option<Vec<String>>,
     },
     /// Delete a card template.
     Delete {
@@ -154,7 +184,15 @@ pub(crate) async fn run(
                 format,
             )
         }
-        CardTemplateAction::Create { project, name } => {
+        CardTemplateAction::Create {
+            project,
+            name,
+            description,
+            title,
+            default_description,
+            label,
+            checklist,
+        } => {
             let object_id = project.clone().unwrap_or_else(|| "global".to_string());
             let resp = client
                 .templates()
@@ -162,11 +200,17 @@ pub(crate) async fn run(
                     v1::CreateCardTemplateRequest {
                         project_id: project.unwrap_or_default(),
                         name,
-                        description: String::new(),
-                        title: String::new(),
-                        default_description: String::new(),
-                        label_names: Vec::new(),
-                        checklist_items: Vec::new(),
+                        description: description.unwrap_or_default(),
+                        title: title.unwrap_or_default(),
+                        default_description: default_description.unwrap_or_default(),
+                        label_names: label,
+                        checklist_items: checklist
+                            .into_iter()
+                            .map(|title| v1::TemplateChecklistItem {
+                                title,
+                                ..Default::default()
+                            })
+                            .collect(),
                         ..Default::default()
                     },
                     mutating_options(&object_id),
@@ -178,13 +222,36 @@ pub(crate) async fn run(
                 format,
             )
         }
-        CardTemplateAction::Update { template_id, name } => {
+        CardTemplateAction::Update {
+            template_id,
+            name,
+            description,
+            title,
+            default_description,
+            label,
+            checklist,
+        } => {
             let template_id = super::resolve::NameResolver::new(client)
                 .card_template(&template_id)
                 .await?;
             let mut paths = Vec::new();
             if name.is_some() {
                 paths.push("name".to_string());
+            }
+            if description.is_some() {
+                paths.push("description".to_string());
+            }
+            if title.is_some() {
+                paths.push("title".to_string());
+            }
+            if default_description.is_some() {
+                paths.push("default_description".to_string());
+            }
+            if label.is_some() {
+                paths.push("label_names".to_string());
+            }
+            if checklist.is_some() {
+                paths.push("checklist_items".to_string());
             }
             let resp = client
                 .templates()
@@ -197,11 +264,18 @@ pub(crate) async fn run(
                         })
                         .into(),
                         name: name.unwrap_or_default(),
-                        description: String::new(),
-                        title: String::new(),
-                        default_description: String::new(),
-                        label_names: Vec::new(),
-                        checklist_items: Vec::new(),
+                        description: description.unwrap_or_default(),
+                        title: title.unwrap_or_default(),
+                        default_description: default_description.unwrap_or_default(),
+                        label_names: label.unwrap_or_default(),
+                        checklist_items: checklist
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|title| v1::TemplateChecklistItem {
+                                title,
+                                ..Default::default()
+                            })
+                            .collect(),
                         ..Default::default()
                     },
                     mutating_options(&template_id),
@@ -393,6 +467,11 @@ mod tests {
             CardTemplateAction::Create {
                 project: Some("proj_1".into()),
                 name: "New".into(),
+                description: Some("Bug card template".into()),
+                title: Some("[BUG] ".into()),
+                default_description: Some("Describe the bug".into()),
+                label: vec!["bug".into()],
+                checklist: vec!["Reproduce".into()],
             },
             OutputFormat::Table,
             &client,
@@ -403,6 +482,11 @@ mod tests {
             CardTemplateAction::Create {
                 project: None,
                 name: "Global".into(),
+                description: None,
+                title: None,
+                default_description: None,
+                label: Vec::new(),
+                checklist: Vec::new(),
             },
             OutputFormat::Json,
             &client,
@@ -413,6 +497,11 @@ mod tests {
             CardTemplateAction::Update {
                 template_id: "ctmpl_1".into(),
                 name: Some("Renamed".into()),
+                description: Some("Updated".into()),
+                title: Some("[ISSUE] ".into()),
+                default_description: None,
+                label: Some(vec!["bug".into(), "triage".into()]),
+                checklist: Some(vec!["Reproduce".into(), "Bisect".into()]),
             },
             OutputFormat::Yaml,
             &client,
@@ -449,6 +538,11 @@ mod tests {
             CardTemplateAction::Update {
                 template_id: "ctmpl_1".into(),
                 name: None,
+                description: None,
+                title: None,
+                default_description: None,
+                label: None,
+                checklist: None,
             },
             OutputFormat::Json,
             &client,

@@ -7,6 +7,31 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.2.0] - 2026-07-24
+
+### Added
+
+- `kanban card comment list/add/edit/delete` — full comment support over the
+  CardService comment RPCs (CLI-003).
+- `kanban card assign/unassign <card> <subject-or-email>` — emails resolve to
+  OIDC subjects through the sso-gateway; `card list` now renders assignees
+  (CLI-008).
+- `kanban card update --blocked` — mark a card blocked. Note: clearing is a
+  server-side no-op today (UpdateCard only applies `blocked=true`), so the
+  flag can be set but not yet unset (CLI-006).
+- `kanban card-template create/update` now plumb `--description`, `--title`,
+  `--default-description`, `--label` (repeatable), and `--checklist`
+  (repeatable) through to the server; update mask paths extend per flag and
+  repeated fields replace wholesale (CLI-004).
+
+### Changed
+
+- `kanban card create` without `--column` now targets the board's left-most
+  (lowest-position) column instead of erroring on multi-column boards; only a
+  column-less board still fails (CLI-002).
+- `kanban board create` without `--visibility` still defaults to private but
+  now warns that the board is invisible to the rest of the tenant (CLI-001).
+
 ## [3.1.3] - 2026-07-24
 
 ### Changed

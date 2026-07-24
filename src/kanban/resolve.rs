@@ -475,8 +475,9 @@ impl<'a> NameResolver<'a> {
 
     /// Resolve the target column for `card create`.
     ///
-    /// Without an explicit `--column`, a board with exactly one column
-    /// defaults to it; a board with several fails listing the valid columns.
+    /// Without an explicit `--column`, the board's left-most (lowest-position)
+    /// column is used — matching how triage cards are filed. Only a board
+    /// with no columns at all fails.
     pub(crate) async fn column_for_create(
         &self,
         board_id: &str,
@@ -486,23 +487,15 @@ impl<'a> NameResolver<'a> {
             return self.column(board_id, raw).await;
         }
         let columns = self.board_columns(board_id).await?;
-        match columns.as_slice() {
-            [only] => Ok(only.id.clone()),
-            _ => {
-                let available = if columns.is_empty() {
-                    "none — the board has no columns".to_string()
-                } else {
-                    columns
-                        .iter()
-                        .map(|c| format!("{} {}", c.title, c.id))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                Err(SunbeamError::Other(format!(
-                    "required: --column <ID|name> (columns on this board: {available})"
-                )))
-            }
-        }
+        columns
+            .iter()
+            .min_by_key(|c| c.position)
+            .map(|c| c.id.clone())
+            .ok_or_else(|| {
+                SunbeamError::Other(
+                    "required: --column <ID|name> (the board has no columns)".to_string(),
+                )
+            })
     }
 }
 
@@ -854,16 +847,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn column_for_create_requires_choice_on_multi_column_board() {
+    async fn column_for_create_defaults_to_leftmost_column() {
         let server = MockServer::start().await;
-        mount_board_detail(
-            &server,
-            vec![
-                column("01KY5JAZ000000000000000000", "cli-test"),
-                column("01KY5JB1000000000000000000", "backlog"),
-            ],
-        )
-        .await;
+        let mut doing = column("col_2", "Doing");
+        doing.position = 3;
+        let mut todo = column("col_1", "Todo");
+        todo.position = 0;
+        // Server order is not position order; the lowest position must win.
+        mount_board_detail(&server, vec![doing, todo]).await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver.column_for_create("board_1", None).await.unwrap(),
+            "col_1"
+        );
+    }
+
+    #[tokio::test]
+    async fn column_for_create_fails_without_columns() {
+        let server = MockServer::start().await;
+        mount_board_detail(&server, Vec::new()).await;
 
         let client = testutil::client_for(&server.uri());
         let resolver = NameResolver::new(&client);
@@ -871,10 +875,7 @@ mod tests {
             .column_for_create("board_1", None)
             .await
             .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("required: --column"), "{msg}");
-        assert!(msg.contains("cli-test 01KY5JAZ"), "{msg}");
-        assert!(msg.contains("backlog 01KY5JB1"), "{msg}");
+        assert!(err.to_string().contains("no columns"), "{err}");
     }
 
     #[tokio::test]

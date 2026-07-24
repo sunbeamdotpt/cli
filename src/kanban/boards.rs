@@ -36,9 +36,9 @@ pub enum BoardAction {
         /// Icon identifier.
         #[arg(short, long)]
         icon: Option<String>,
-        /// Visibility.
-        #[arg(long, value_enum, default_value = "private")]
-        visibility: VisibilityArg,
+        /// Visibility (defaults to private, with a warning).
+        #[arg(long, value_enum)]
+        visibility: Option<VisibilityArg>,
     },
     /// Update a board.
     Update {
@@ -305,6 +305,13 @@ pub(crate) async fn run(
             icon,
             visibility,
         } => {
+            let visibility = visibility.unwrap_or_else(|| {
+                tracing::warn!(
+                    "no --visibility given: creating a private board, invisible to the \
+                     rest of the tenant; pass --visibility internal|public to share it"
+                );
+                VisibilityArg::Private
+            });
             let resp = client
                 .boards()
                 .create_board_with_options(
@@ -692,9 +699,23 @@ mod tests {
                 name: "New".into(),
                 description: None,
                 icon: Some("star".into()),
-                visibility: VisibilityArg::Internal,
+                visibility: Some(VisibilityArg::Internal),
             },
             OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+        // No --visibility: defaults to private (with a warning).
+        run(
+            BoardAction::Create {
+                project: "proj_1".into(),
+                name: "Quiet".into(),
+                description: None,
+                icon: None,
+                visibility: None,
+            },
+            OutputFormat::Json,
             &client,
         )
         .await

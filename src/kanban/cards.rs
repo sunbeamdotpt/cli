@@ -7,7 +7,7 @@ use sdk::kanban::prelude::buffa_types;
 use sdk::kanban::v1;
 use serde::Serialize;
 
-use super::{fmt_ts, new_idempotency_key, object_id_options, required};
+use super::{fmt_ts, mutating_options, new_idempotency_key, object_id_options, required};
 use crate::output::{OutputFormat, render, render_list};
 
 /// Card actions.
@@ -30,7 +30,7 @@ pub enum CardAction {
     Create {
         /// Board ID or name.
         board: String,
-        /// Column ID or title (defaults to the board's only column).
+        /// Column ID or title (defaults to the board's left-most column).
         #[arg(short, long)]
         column: Option<String>,
         /// Title.
@@ -56,6 +56,23 @@ pub enum CardAction {
         /// New priority.
         #[arg(short, long, value_enum)]
         priority: Option<PriorityArg>,
+        /// Mark the card as blocked (cannot be cleared server-side yet).
+        #[arg(long)]
+        blocked: bool,
+    },
+    /// Assign a card to a user.
+    Assign {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// User OIDC subject or email address.
+        subject: String,
+    },
+    /// Unassign a card from a user.
+    Unassign {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// User OIDC subject or email address.
+        subject: String,
     },
     /// Move a card.
     Move {
@@ -72,6 +89,12 @@ pub enum CardAction {
     Delete {
         /// Card ID, title, or ref.
         card_id: String,
+    },
+    /// Comment management.
+    Comment {
+        /// Comment subcommand to run.
+        #[command(subcommand)]
+        action: CommentAction,
     },
     /// Dependency management.
     Dependency {
@@ -150,6 +173,65 @@ pub enum DependencyAction {
     },
 }
 
+/// Card comment actions.
+#[derive(Debug, Clone, Subcommand)]
+pub enum CommentAction {
+    /// List comments on a card.
+    List {
+        /// Card ID, title, or ref.
+        card_id: String,
+    },
+    /// Add a comment to a card.
+    Add {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Comment body (markdown).
+        #[arg(short, long)]
+        message: String,
+    },
+    /// Edit a comment.
+    Edit {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Comment ID.
+        comment_id: String,
+        /// New comment body (markdown).
+        #[arg(short, long)]
+        message: String,
+    },
+    /// Delete a comment.
+    Delete {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Comment ID.
+        comment_id: String,
+    },
+}
+
+/// Serializable comment for output.
+#[derive(Serialize)]
+struct CommentOut {
+    id: String,
+    card_id: String,
+    author_sub: String,
+    body: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<v1::Comment> for CommentOut {
+    fn from(c: v1::Comment) -> Self {
+        Self {
+            id: c.id,
+            card_id: c.card_id,
+            author_sub: c.author_sub,
+            body: c.body,
+            created_at: fmt_ts(&c.created_at),
+            updated_at: fmt_ts(&c.updated_at),
+        }
+    }
+}
+
 /// Serializable card summary for list views.
 #[derive(Serialize)]
 struct CardOut {
@@ -161,6 +243,7 @@ struct CardOut {
     priority: String,
     blocked: bool,
     position: i32,
+    assignees: Vec<String>,
     comments_count: i32,
     attachments_count: i32,
 }
@@ -176,6 +259,17 @@ impl From<v1::Card> for CardOut {
             priority: priority_name(card.priority.to_i32()),
             blocked: card.blocked,
             position: card.position,
+            assignees: card
+                .assignees
+                .into_iter()
+                .map(|a| {
+                    if a.display_name.is_empty() {
+                        a.subject
+                    } else {
+                        a.display_name
+                    }
+                })
+                .collect(),
             comments_count: card.comments_count,
             attachments_count: card.attachments_count,
         }
@@ -338,6 +432,18 @@ async fn render_card_detail(card: v1::Card, format: OutputFormat) -> Result<()> 
     render(&detail, format)
 }
 
+/// Resolve an assignee argument to an OIDC subject.
+///
+/// Values containing `@` are treated as email addresses and resolved through
+/// the sso-gateway; anything else is assumed to already be a subject.
+async fn resolve_subject(raw: &str) -> Result<String> {
+    if raw.contains('@') {
+        crate::auth::resolve_subject_for_email(raw).await
+    } else {
+        Ok(raw.to_string())
+    }
+}
+
 /// Run a card command.
 pub(crate) async fn run(
     cmd: CardAction,
@@ -370,7 +476,14 @@ pub(crate) async fn run(
             render_list(
                 &cards,
                 &[
-                    "REF", "COLUMN", "TITLE", "PRIORITY", "BLOCKED", "POSITION", "ID",
+                    "REF",
+                    "COLUMN",
+                    "TITLE",
+                    "PRIORITY",
+                    "BLOCKED",
+                    "ASSIGNEES",
+                    "POSITION",
+                    "ID",
                 ],
                 |c| {
                     vec![
@@ -379,6 +492,7 @@ pub(crate) async fn run(
                         c.title.clone(),
                         c.priority.clone(),
                         c.blocked.to_string(),
+                        c.assignees.join(", "),
                         c.position.to_string(),
                         c.id.clone(),
                     ]
@@ -439,6 +553,7 @@ pub(crate) async fn run(
             title,
             description,
             priority,
+            blocked,
         } => {
             let mut update_card = v1::Card {
                 id: card_id.clone(),
@@ -456,6 +571,12 @@ pub(crate) async fn run(
             if let Some(p) = priority {
                 update_card.priority = v1::CardPriority::from(p).into();
                 paths.push("priority".to_string());
+            }
+            if blocked {
+                // Server-side quirk: the UpdateCard SQL only applies blocked=true,
+                // so the flag can be set but never cleared through the patch.
+                update_card.blocked = true;
+                paths.push("blocked".to_string());
             }
             let resp = client
                 .cards()
@@ -531,6 +652,126 @@ pub(crate) async fn run(
                 .await?;
             Ok(())
         }
+        CardAction::Assign { card_id, subject } => {
+            let subject = resolve_subject(&subject).await?;
+            let resp = client
+                .cards()
+                .assign_card_with_options(
+                    v1::AssignCardRequest {
+                        card_id: card_id.clone(),
+                        subject,
+                        ..Default::default()
+                    },
+                    mutating_options(&card_id),
+                )
+                .await?
+                .into_owned();
+            render_card_detail(required(resp.card, "card")?, format).await
+        }
+        CardAction::Unassign { card_id, subject } => {
+            let subject = resolve_subject(&subject).await?;
+            let resp = client
+                .cards()
+                .unassign_card_with_options(
+                    v1::UnassignCardRequest {
+                        card_id: card_id.clone(),
+                        subject,
+                        ..Default::default()
+                    },
+                    mutating_options(&card_id),
+                )
+                .await?
+                .into_owned();
+            render_card_detail(required(resp.card, "card")?, format).await
+        }
+        CardAction::Comment { action } => match action {
+            CommentAction::List { card_id } => {
+                let resp = client
+                    .cards()
+                    .list_comments_with_options(
+                        v1::ListCommentsRequest {
+                            card_id: card_id.clone(),
+                            ..Default::default()
+                        },
+                        object_id_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+                let comments: Vec<CommentOut> = resp.comments.into_iter().map(Into::into).collect();
+                render_list(
+                    &comments,
+                    &["ID", "AUTHOR", "BODY", "CREATED"],
+                    |c| {
+                        vec![
+                            c.id.clone(),
+                            c.author_sub.clone(),
+                            c.body.clone(),
+                            c.created_at.clone(),
+                        ]
+                    },
+                    format,
+                )
+            }
+            CommentAction::Add { card_id, message } => {
+                let resp = client
+                    .cards()
+                    .add_comment_with_options(
+                        v1::AddCommentRequest {
+                            card_id: card_id.clone(),
+                            body: message,
+                            idempotency_key: new_idempotency_key(),
+                            ..Default::default()
+                        },
+                        object_id_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+                render(
+                    &CommentOut::from(required(resp.comment, "comment")?),
+                    format,
+                )
+            }
+            CommentAction::Edit {
+                card_id,
+                comment_id,
+                message,
+            } => {
+                let resp = client
+                    .cards()
+                    .edit_comment_with_options(
+                        v1::EditCommentRequest {
+                            card_id: card_id.clone(),
+                            comment_id,
+                            body: message,
+                            ..Default::default()
+                        },
+                        mutating_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+                render(
+                    &CommentOut::from(required(resp.comment, "comment")?),
+                    format,
+                )
+            }
+            CommentAction::Delete {
+                card_id,
+                comment_id,
+            } => {
+                client
+                    .cards()
+                    .delete_comment_with_options(
+                        v1::DeleteCommentRequest {
+                            card_id: card_id.clone(),
+                            comment_id,
+                            ..Default::default()
+                        },
+                        mutating_options(&card_id),
+                    )
+                    .await?;
+                Ok(())
+            }
+        },
         CardAction::Dependency { action } => match action {
             DependencyAction::Add {
                 board,
@@ -780,6 +1021,7 @@ mod tests {
                 title: Some("New title".into()),
                 description: None,
                 priority: Some(PriorityArg::Low),
+                blocked: true,
             },
             OutputFormat::Json,
             &client,
@@ -802,6 +1044,142 @@ mod tests {
                 card_id: "card_1".into(),
             },
             OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn comment_list_add_edit_delete() {
+        let server = MockServer::start().await;
+        let comment = || v1::Comment {
+            id: "cmt_1".into(),
+            card_id: "card_1".into(),
+            author_sub: "user:alice".into(),
+            body: "looking into it".into(),
+            ..Default::default()
+        };
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/ListComments"))
+            .respond_with(testutil::proto_response(&v1::ListCommentsResponse {
+                comments: vec![comment()],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AddComment"))
+            .respond_with(testutil::proto_response(&v1::AddCommentResponse {
+                comment: comment().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/EditComment"))
+            .respond_with(testutil::proto_response(&v1::EditCommentResponse {
+                comment: comment().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/DeleteComment"))
+            .respond_with(testutil::proto_response(
+                &v1::DeleteCommentResponse::default(),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Comment {
+                action: CommentAction::List {
+                    card_id: "card_1".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Comment {
+                action: CommentAction::Add {
+                    card_id: "card_1".into(),
+                    message: "looking into it".into(),
+                },
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Comment {
+                action: CommentAction::Edit {
+                    card_id: "card_1".into(),
+                    comment_id: "cmt_1".into(),
+                    message: "root cause found".into(),
+                },
+            },
+            OutputFormat::Yaml,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Comment {
+                action: CommentAction::Delete {
+                    card_id: "card_1".into(),
+                    comment_id: "cmt_1".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn assign_and_unassign() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AssignCard"))
+            .respond_with(testutil::proto_response(&v1::AssignCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/UnassignCard"))
+            .respond_with(testutil::proto_response(&v1::UnassignCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Assign {
+                card_id: "card_1".into(),
+                subject: "user:alice".into(),
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+        run(
+            CardAction::Unassign {
+                card_id: "card_1".into(),
+                subject: "user:alice".into(),
+            },
+            OutputFormat::Json,
             &client,
         )
         .await
@@ -861,6 +1239,15 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_subject_passes_non_emails_through() {
+        assert_eq!(resolve_subject("user:alice").await.unwrap(), "user:alice");
+        assert_eq!(
+            resolve_subject("auth0|abc123").await.unwrap(),
+            "auth0|abc123"
+        );
     }
 
     #[tokio::test]

@@ -411,12 +411,52 @@ async fn dispatch_authed(
                     title,
                     description,
                     priority,
+                    blocked,
                 } => cards::CardAction::Update {
                     card_id: resolver.card_anywhere(&card_id).await?,
                     title,
                     description,
                     priority,
+                    blocked,
                 },
+                cards::CardAction::Assign { card_id, subject } => cards::CardAction::Assign {
+                    card_id: resolver.card_anywhere(&card_id).await?,
+                    subject,
+                },
+                cards::CardAction::Unassign { card_id, subject } => cards::CardAction::Unassign {
+                    card_id: resolver.card_anywhere(&card_id).await?,
+                    subject,
+                },
+                cards::CardAction::Comment { action } => {
+                    let action = match action {
+                        cards::CommentAction::List { card_id } => cards::CommentAction::List {
+                            card_id: resolver.card_anywhere(&card_id).await?,
+                        },
+                        cards::CommentAction::Add { card_id, message } => {
+                            cards::CommentAction::Add {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                message,
+                            }
+                        }
+                        cards::CommentAction::Edit {
+                            card_id,
+                            comment_id,
+                            message,
+                        } => cards::CommentAction::Edit {
+                            card_id: resolver.card_anywhere(&card_id).await?,
+                            comment_id,
+                            message,
+                        },
+                        cards::CommentAction::Delete {
+                            card_id,
+                            comment_id,
+                        } => cards::CommentAction::Delete {
+                            card_id: resolver.card_anywhere(&card_id).await?,
+                            comment_id,
+                        },
+                    };
+                    cards::CardAction::Comment { action }
+                }
                 cards::CardAction::Move {
                     card_id,
                     column,
@@ -491,15 +531,26 @@ async fn dispatch_authed(
                         },
                     }
                 }
-                card_templates::CardTemplateAction::Create { project, name } => {
-                    card_templates::CardTemplateAction::Create {
-                        project: match project {
-                            Some(p) => Some(resolver.project(&p).await?),
-                            None => None,
-                        },
-                        name,
-                    }
-                }
+                card_templates::CardTemplateAction::Create {
+                    project,
+                    name,
+                    description,
+                    title,
+                    default_description,
+                    label,
+                    checklist,
+                } => card_templates::CardTemplateAction::Create {
+                    project: match project {
+                        Some(p) => Some(resolver.project(&p).await?),
+                        None => None,
+                    },
+                    name,
+                    description,
+                    title,
+                    default_description,
+                    label,
+                    checklist,
+                },
                 other => other,
             };
             card_templates::run(action, format, client).await
