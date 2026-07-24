@@ -3,13 +3,16 @@ type: State
 title: Current state of cli
 description: What is in flight, what is blocked, what the next session should pick up first.
 tags: [state]
-timestamp: 2026-07-23T00:00:00Z
+timestamp: 2026-07-24T00:00:00Z
 ---
 
-# State — 2026-07-23
+# State — 2026-07-24
 
 ## In flight
 
+- **v3.1.3 RELEASED 2026-07-24** (sdk v3.1.1 → v3.2.0: auth-proto regen for
+  the sso-gateway `skip_consent` update; no CLI surface changes). Gates green
+  (fmt/clippy/695 nextest), pushed as `release: v3.1.3` (715fea99).
 - **v3.1.2 RELEASED 2026-07-23** (mail #71: device login requests
   `identity:read identity:admin`; unblocks `kanban project member add` —
   re-login required). GH release published (9 assets); formula landed on
@@ -42,22 +45,32 @@ timestamp: 2026-07-23T00:00:00Z
 
 ## Blocked / waiting
 
-- **sso-gateway mail #32** — six API gaps (public device RPCs, broken device
-  poll `server_error`, identity-by-email lookup, disable/enable RPC, admin
-  set-password, directory-read scope). CLI workarounds in place (poll treats
-  `server_error` as pending — COE-2026-004, confirmed by sbbb); device-poll
-  integration test is `#[ignore]`d until the poll bug is fixed.
+- **sso-gateway mail #32** — six API gaps. Item 2 (device poll
+  `server_error`) FIXED gateway-side in v2026.07.22 (mail #82): the oauth2
+  proxy now relays Hydra 4xx bodies verbatim → proper RFC 8628
+  `authorization_pending`. CLI workaround (poll treats `server_error` as
+  pending — COE-2026-004) stays until the fix is confirmed in the testing
+  image; then un-ignore the device-poll integration test. Items 1, 3-6
+  (public device RPCs, identity-by-email, disable/enable RPC, admin
+  set-password, directory-read scope) triaged separately by sso-gateway;
+  thread open.
 - **sdk mail #33** — testing::SsoGateway recovery courier + `sso_url`/
-  `sso_client_id` Context fields.
+  `sso_client_id` Context fields. sdk reply (#90, 2026-07-24): both
+  reasonable, queued for the next testing-harness pass; NOT in v3.2.0.
 - **sdk mail #39** — BUG: `tools::ensure_tool` downloads kustomize/helm via
   `reqwest::blocking`; the internal runtime panics when dropped inside an
   async context (cold tool cache → any `kustomize_build` from async code
-  crashes, incl. `sunbeam service apply` on a fresh machine). Workaround:
+  crashes, incl. `sunbeam service apply` on a fresh machine). sdk reply
+  (#88, 2026-07-24): confirmed real; non-breaking fix (spawn_blocking wrap)
+  queued for the NEXT cycle (not v3.2.0); making ensure_tool async waits
+  for the next major (breaks `kustomize_build` signature). Workaround:
   tests pre-warm `~/.sunbeam/bin` synchronously (tests/common). When a fix
   tag lands: bump, drop the prewarm.
 - **sdk mail #44** — `From<ConnectError>` collapses the structured
-  ConnectRPC code into a string; cli string-matches `"unavailable:"` for
-  its retry decision until a structured variant lands.
+  ConnectRPC code into a string. sdk reply (#89, 2026-07-24): dedicated
+  variant/structured code field planned, targeted for the release AFTER
+  v3.2.0. cli string-matches `"unavailable:"` for its retry decision until
+  then.
 - ~~sdk mail #25~~ — resolved in sdk **v3.1.1** (adopted + validated with a
   real orchestrator boot; local kanban replica deleted).
 - ~~sbbb mail #34~~ — resolved: public client provisioned on the gateway;

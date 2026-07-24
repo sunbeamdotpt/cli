@@ -231,3 +231,30 @@ auto-merge can never engage. Landed the bump on tap mainline manually
 (331fc79, cherry-pick of the PR commit — same pattern as sunbeam-memory
 0.3.4 earlier today) and closed PR #3. Mailed tap (#75) about the
 broken PR CI.
+
+
+## 2026-07-24 — sdk v3.2.0 adopted; cli v3.1.3 shipped
+
+Human pre-authorized a patch release triggered on sdk mail. A 15-min cron
+watch (kimi session cron 7c8390dd) caught four sdk replies landing together:
+
+- #87 (kanban testing bugs): sdk confirmed, closed — acked. v3.1.1 stands
+  as the good orchestrator baseline.
+- #88 (ensure_tool reqwest::blocking panic): confirmed real, but NOT in
+  v3.2.0 — spawn_blocking wrap queued for the next cycle; async signature
+  change waits for the next major. Prewarm workaround stays.
+- #89 (From<ConnectError> loses code): structured variant planned for the
+  release after v3.2.0. String match on "unavailable:" stays.
+- #90 (recovery courier + sso_url/sso_client_id Context fields): both
+  queued for the next testing-harness pass; not in v3.2.0.
+
+Decision: v3.2.0 (auth-proto regen for sso-gateway skip_consent) carried
+none of the tracked fixes, but adopting it promptly keeps the tag delta
+small — bumped both sdk entries in Cargo.toml, version 3.1.2 → 3.1.3,
+CHANGELOG entry, gates green (fmt, clippy, 695/695 nextest), pushed as
+715fea99. Why patch not minor: no CLI surface change, dependency-only.
+
+Also handled sso-gateway #82: item 2 of the six API gaps fixed in gateway
+v2026.07.22 (oauth2 proxy relays Hydra 4xx verbatim → RFC 8628
+authorization_pending). Replied (#83); COE-2026-004 workaround + the
+#[ignore]d device-poll test stay until the fix reaches the testing image.
