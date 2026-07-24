@@ -283,3 +283,39 @@ mail-thread references in older entries and in state.md (#32/#33/#39/#44
 etc.) are historical identifiers, kept so the record stays traceable.
 *Why:* the human standardized cross-repo tracking on kanban so tickets are
 visible to everyone, not just the two mail endpoints.
+
+
+## 2026-07-24 (later) — v3.2.0 prepared: kanban UX batch (CLI-001..004/006/008)
+
+Human asked to work the cli dev board and cut a release. Six cards in todo;
+five implementable against sdk v3.2.0 + the live BSR module, CLI-008 added to
+the pile by the human mid-session. CLI-005 (archive) stays blocked on
+KANBAN-001 server-side; CLI-007 (labels) landed mid-session and is likewise
+server-blocked (no ListLabels RPC — names can't resolve to catalog ULIDs).
+
+Shipped in one minor release (new verbs/flags → minor per docs/release.md):
+card comment list/add/edit/delete (CLI-003), card assign/unassign with
+email→subject resolution via sso-gateway + assignees in list output (CLI-008),
+card update --blocked (CLI-006; set-only — the server's UpdateCard SQL never
+applies blocked=false, documented in the CHANGELOG), card-template field
+plumbing (CLI-004), card create defaults to the left-most column (CLI-002),
+board create warns when defaulting to private (CLI-001). Gates green: fmt,
+clippy, 699/699 nextest.
+
+Milestone ask ("make the cards part of the 3.2 milestone") turned out to be
+impossible client-side: Card.milestone_id exists in the proto but there is no
+MilestoneService anywhere — not on the BSR, not in the kanban repo. Filed
+KANBAN-017 on kanban/dev. Human then pushed a BSR update; it documented
+cross-board dependency edges (not milestones) — dogfooded immediately: CLI-005
+now depends_on KANBAN-001 across boards, and CLI-005 is marked blocked=true
+with the freshly built --blocked flag.
+
+Board end state: six implemented cards in review (→ done when the release
+publishes), CLI-005 todo+blocked with the dependency edge, CLI-007 todo.
+
+Commit e09b1768 "release: v3.2.0" is on mainline but NOT pushed — human
+chose commit-only; pushing triggers the tag + publish.
+
+Ops note: the kanban server returned intermittent empty `unauthenticated:`
+errors all session (token valid; retries succeeded). Worth watching — if it
+persists, card it against kanban.

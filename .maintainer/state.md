@@ -10,6 +10,14 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## In flight
 
+- **v3.2.0 COMMITTED, NOT PUSHED** (e09b1768 on mainline, 2026-07-24):
+  kanban UX batch — card comments (CLI-003), assign/unassign (CLI-008),
+  `card update --blocked` (CLI-006), card-template field plumbing (CLI-004),
+  card create left-most-column default (CLI-002), board create private-visibility
+  warning (CLI-001). Gates green (fmt/clippy/699 nextest). Human chose
+  commit-only; **pushing mainline tags v3.2.0 and publishes** — that push is
+  the next action, human's call. Cards CLI-001/002/003/004/006/008 sit in
+  review → move to done once the GH release is out.
 - **v3.1.3 RELEASED 2026-07-24** (sdk v3.1.1 → v3.2.0: auth-proto regen for
   the sso-gateway `skip_consent` update; no CLI surface changes). Gates green
   (fmt/clippy/695 nextest), pushed as `release: v3.1.3` (715fea99).
@@ -56,6 +64,12 @@ timestamp: 2026-07-24T00:00:00Z
   sdk/sso items as SDK-001..009 (priority as scoring — no numeric field
   exists, carded as KANBAN-013). Kanban list bug carded as KANBAN-012
   (cards_count=11, `card list` returns 2). Mailed kanban (#96).
+- **Kanban server gaps** (2026-07-24): no MilestoneService anywhere (proto
+  field only) — carded as KANBAN-017. CLI-007 (text labels) is blocked on a
+  missing ListLabels RPC. BSR update same day documented cross-board
+  dependency edges (live: CLI-005 → KANBAN-001 wired). Also observed
+  intermittent empty `unauthenticated:` responses with a valid token —
+  retries succeeded; card it if it persists.
 - **sso-gateway mail #32** — six API gaps. Item 2 (device poll
   `server_error`) FIXED gateway-side in v2026.07.22 (mail #82): the oauth2
   proxy now relays Hydra 4xx bodies verbatim → proper RFC 8628
@@ -96,10 +110,12 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Pick up first
 
-- Check for open cards on the `cli` boards (`sunbeam kanban board list
-  cli`, then `sunbeam kanban card list <board-id>`). The old agent-mail
-  threads (#32/#33 etc.) are historical; cross-repo tracking is kanban-only
-  now.
+- **Push e09b1768 to publish v3.2.0** (human held the push 2026-07-24).
+  After the GH release is out: move CLI-001/002/003/004/006/008 from review
+  to done, bump the tap (manual fallback — bump-formula is still broken,
+  see Blocked), and verify `sunbeam update` / `brew info sunbeam`.
+- The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
+  tracking is kanban-only now.
 - **Automate the tap bump** (human suggestion, 2026-07-23): `release.yml`
   already prints the four tarball sha256s in its job summary; a final job
   could check out `sunbeamdotpt/tap` and bump the formula itself. Needs a
@@ -107,9 +123,9 @@ timestamp: 2026-07-24T00:00:00Z
   push to another repo). Decide PR-vs-direct-push when implementing.
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
   kanban dev board): template column authoring + `board create --template`,
-  card-template field plumbing (title/description/labels/checklist),
   `--columns` on `board create`, `member add` raw OIDC subject + scope
   help, `aggregate create` sources, `project list` board/card counts.
-  Check proto/server support before designing flags.
+  Check proto/server support before designing flags. (card-template field
+  plumbing shipped in v3.2.0.)
 - Docs are current again (AGENTS.md + README rewritten for v3) — keep them
   that way when the sdk tag bumps.
