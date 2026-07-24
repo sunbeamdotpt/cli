@@ -10,14 +10,16 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## In flight
 
-- **v3.2.0 COMMITTED, NOT PUSHED** (e09b1768 on mainline, 2026-07-24):
-  kanban UX batch — card comments (CLI-003), assign/unassign (CLI-008),
-  `card update --blocked` (CLI-006), card-template field plumbing (CLI-004),
-  card create left-most-column default (CLI-002), board create private-visibility
-  warning (CLI-001). Gates green (fmt/clippy/699 nextest). Human chose
-  commit-only; **pushing mainline tags v3.2.0 and publishes** — that push is
-  the next action, human's call. Cards CLI-001/002/003/004/006/008 sit in
-  review → move to done once the GH release is out.
+- **v3.2.0 RELEASED 2026-07-24** (sdk v3.2.0 → v3.3.0). Kanban batch:
+  label CRUD + `card label set|add|remove` (CLI-007/009), milestone CRUD +
+  `card update --milestone`, comments (CLI-003), assign/unassign (CLI-008),
+  `--blocked` (CLI-006), card-template plumbing (CLI-004), left-most-column
+  default (CLI-002), private-visibility warning (CLI-001). Gates green
+  (fmt/clippy/713 nextest). GH release: 9 assets. Tap: bump-formula
+  root-caused + fixed (caller-context checkout bug, 8bf6217); formula
+  landed manually (180a51f) because the tap PR test-bot is repo-wide broken.
+  `brew info sunbeam` → 3.2.0. All 8 cards done under the cli '3.2'
+  milestone. Nothing in flight — next release is a Cargo.toml bump + push.
 - **v3.1.3 RELEASED 2026-07-24** (sdk v3.1.1 → v3.2.0: auth-proto regen for
   the sso-gateway `skip_consent` update; no CLI surface changes). Gates green
   (fmt/clippy/695 nextest), pushed as `release: v3.1.3` (715fea99).
@@ -53,23 +55,26 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Blocked / waiting
 
-- **tap: bump-formula reusable workflow broken** (v3.1.3, 2026-07-24):
-  release train green through publish (9 assets on v3.1.3), but the
-  homebrew-tap job fails with exit 127 — `scripts/bump-formula.sh: No such
-  file or directory` inside the tap repo's `bump-formula.yml`. Re-dispatch
-  will fail identically; needs a tap-side fix or the documented manual
-  fallback (4 sha256s from the release's checksums.txt). Human call —
-  tap mainline is another repo's publish.
+- **tap: pull_request test-bot repo-wide broken** (2026-07-24, still open):
+  every bump PR fails "Did not find any formulae or commits to test!", so
+  auto-merge never fires and each release needs a manual mainline landing
+  (cherry-pick the bot branch; done for 3.1.2 #3 and 3.2.0 #4). Tap-repo fix.
+  ~~bump-formula exit 127~~ FIXED 2026-07-24 (8bf6217): reusable workflows
+  inherit the caller's github context, so the checkout pulled the source
+  repo, not the tap — checkout now pins `repository: sunbeamdotpt/tap`.
+  The 3.1.3 formula bump was never landed (tap went 3.1.2 → 3.2.0 direct).
 - **Kanban tracking** (2026-07-24): sdk dev board carries the tracked
   sdk/sso items as SDK-001..009 (priority as scoring — no numeric field
   exists, carded as KANBAN-013). Kanban list bug carded as KANBAN-012
   (cards_count=11, `card list` returns 2). Mailed kanban (#96).
-- **Kanban server gaps** (2026-07-24): no MilestoneService anywhere (proto
-  field only) — carded as KANBAN-017. CLI-007 (text labels) is blocked on a
-  missing ListLabels RPC. BSR update same day documented cross-board
-  dependency edges (live: CLI-005 → KANBAN-001 wired). Also observed
-  intermittent empty `unauthenticated:` responses with a valid token —
-  retries succeeded; card it if it persists.
+- **Kanban server** (2026-07-24): v2026.07.7 shipped MilestoneService +
+  label catalog CRUD, closing KANBAN-017/018 same-day; cli v3.2.0 consumes
+  both. Filed KANBAN-023 (done-column moves don't set completed_at →
+  milestone stats read 0). SDK-002 (structured ConnectError) and SDK-010
+  (label/milestone clients) are delivered in sdk v3.3.0 — adopted; sdk
+  board left for the sdk maintainer. Intermittent empty `unauthenticated:`
+  responses with a valid token observed all session — retries succeeded;
+  card it if it persists.
 - **sso-gateway mail #32** — six API gaps. Item 2 (device poll
   `server_error`) FIXED gateway-side in v2026.07.22 (mail #82): the oauth2
   proxy now relays Hydra 4xx bodies verbatim → proper RFC 8628
@@ -110,17 +115,14 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Pick up first
 
-- **Push e09b1768 to publish v3.2.0** (human held the push 2026-07-24).
-  After the GH release is out: move CLI-001/002/003/004/006/008 from review
-  to done, bump the tap (manual fallback — bump-formula is still broken,
-  see Blocked), and verify `sunbeam update` / `brew info sunbeam`.
+- Nothing pressing — v3.2.0 is fully shipped (release + tap + boards).
+  Next session: check the cli boards for new cards.
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
-- **Automate the tap bump** (human suggestion, 2026-07-23): `release.yml`
-  already prints the four tarball sha256s in its job summary; a final job
-  could check out `sunbeamdotpt/tap` and bump the formula itself. Needs a
-  cross-repo credential (PAT or GitHub App token — `GITHUB_TOKEN` can't
-  push to another repo). Decide PR-vs-direct-push when implementing.
+- **Fix the tap PR test-bot** (the last manual step in the train): every
+  bump PR fails "Did not find any formulae or commits to test!" repo-wide.
+  Once fixed, bump PRs auto-merge and releases are hands-off end to end.
+  Tap-repo work (`sunbeamdotpt/tap`, tests.yml).
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
   kanban dev board): template column authoring + `board create --template`,
   `--columns` on `board create`, `member add` raw OIDC subject + scope

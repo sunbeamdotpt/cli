@@ -319,3 +319,43 @@ chose commit-only; pushing triggers the tag + publish.
 Ops note: the kanban server returned intermittent empty `unauthenticated:`
 errors all session (token valid; retries succeeded). Worth watching — if it
 persists, card it against kanban.
+
+
+## 2026-07-24 (evening) — v3.2.0 SHIPPED: labels + milestones land mid-flight
+
+The v3.2.0 release scope grew twice in-session. After the kanban UX batch
+was committed (e09b1768, unpushed), kanban shipped v2026.07.7 — MilestoneService
++ label catalog CRUD, closing KANBAN-017/018 same-day — and sdk tagged v3.3.0
+with the matching clients (labels()/milestones() accessors) plus the
+structured SunbeamError::Connect variant (SDK-002). Human directed: adopt,
+implement CLI-009, and push.
+
+Adopted sdk v3.3.0; implemented label CRUD + `card label set|add|remove`
+(name resolution via ListLabels, wholesale replace via BulkUpdateCardLabels —
+CLI-007 covered too), milestone CRUD + `card update --milestone` (title
+resolution against the card's project). The sdk's new Connect variant broke
+two kanban retry tests — the cold-start matcher now uses the structured
+ErrorCode::Unavailable + send-failure message instead of the old string
+collapse, and pins that server-side `unavailable` is NOT retried. Gates:
+fmt/clippy/713 nextest green. Conventional commits on top (chore(deps),
+feat(kanban)), pushed 1ffb846d; CI tagged v3.2.0, release workflow
+published all 9 assets.
+
+Tap: the homebrew-tap job failed exit 127 AGAIN — root cause found this
+time: reusable workflows inherit the CALLER's github context, so the
+workflow's checkout pulled sunbeamdotpt/cli (no scripts/bump-formula.sh)
+instead of the tap. Fixed tap-side (8bf6217: pin repository+ref on the
+checkout), dispatched bump-formula for 3.2.0 — bot PR #4 shas verified
+against checksums.txt, but the repo-wide pull_request test-bot failure
+('Did not find any formulae or commits to test!') blocked auto-merge again,
+so landed on tap mainline manually (180a51f, same pattern as 3.1.2's #3)
+and closed the PR. brew info sunbeam → stable 3.2.0. The test-bot bug is
+now the only manual step in the train; it's tap-repo work, still open.
+
+Board end state: CLI-001..004/006/007/008/009 done, grouped under the new
+'3.2' milestone on the cli project (milestone management itself dogfooded
+from the fresh debug binary). CLI-005 stays todo+blocked (KANBAN-001).
+Filed KANBAN-023: done-column moves don't set completed_at, so milestone
+completion stats read 0/8 despite all cards done — stats vs column semantics
+is a kanban-team call. SDK-002 and SDK-010 are delivered in sdk v3.3.0
+(sdk board left for the sdk maintainer to move).
