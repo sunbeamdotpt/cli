@@ -45,6 +45,17 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Blocked / waiting
 
+- **tap: bump-formula reusable workflow broken** (v3.1.3, 2026-07-24):
+  release train green through publish (9 assets on v3.1.3), but the
+  homebrew-tap job fails with exit 127 — `scripts/bump-formula.sh: No such
+  file or directory` inside the tap repo's `bump-formula.yml`. Re-dispatch
+  will fail identically; needs a tap-side fix or the documented manual
+  fallback (4 sha256s from the release's checksums.txt). Human call —
+  tap mainline is another repo's publish.
+- **Kanban tracking** (2026-07-24): sdk dev board carries the tracked
+  sdk/sso items as SDK-001..009 (priority as scoring — no numeric field
+  exists, carded as KANBAN-013). Kanban list bug carded as KANBAN-012
+  (cards_count=11, `card list` returns 2). Mailed kanban (#96).
 - **sso-gateway mail #32** — six API gaps. Item 2 (device poll
   `server_error`) FIXED gateway-side in v2026.07.22 (mail #82): the oauth2
   proxy now relays Hydra 4xx bodies verbatim → proper RFC 8628

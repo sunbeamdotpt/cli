@@ -258,3 +258,18 @@ Also handled sso-gateway #82: item 2 of the six API gaps fixed in gateway
 v2026.07.22 (oauth2 proxy relays Hydra 4xx verbatim → RFC 8628
 authorization_pending). Replied (#83); COE-2026-004 workaround + the
 #[ignore]d device-poll test stay until the fix reaches the testing image.
+
+
+## 2026-07-24 (later) — v3.1.3 verified; boards updated; tap bump broken
+
+Release workflow: 4 builds + publish green, 9 assets on v3.1.3 — but the
+homebrew-tap job failed (exit 127, `scripts/bump-formula.sh` missing in the
+tap repo's reusable workflow). Not re-dispatched (would fail identically);
+recorded in state.md for the human — tap mainline is tap's publish, not
+ours. sdk watch cron (7c8390dd) deleted; trigger fulfilled.
+
+Human asked to card the tracked work: sdk dev board now has SDK-001..009
+(3 sdk items, 5 sso-gateway gaps, 1 cli follow-up; priority used as the
+scoring dimension — no numeric field exists). Found two kanban gaps while
+doing it: `card list` returns 2 of 11 cards (KANBAN-012, high) and no
+numeric score/estimate field (KANBAN-013, medium) — mailed kanban (#96).
