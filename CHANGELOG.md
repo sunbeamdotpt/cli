@@ -7,6 +7,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.1.3] - 2026-07-24
+
+### Changed
+
+- Adopted sdk v3.2.0 (auth-proto regen for the sso-gateway `skip_consent`
+  update). No CLI surface changes; local workarounds for sdk-tracked items
+  (tools::ensure_tool async panic, structured ConnectRPC error codes,
+  testing-harness recovery courier) remain in place pending future sdk
+  releases.
+
 ## [3.1.2] - 2026-07-23
 
 ### Fixed
