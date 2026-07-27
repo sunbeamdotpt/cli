@@ -359,3 +359,38 @@ Filed KANBAN-023: done-column moves don't set completed_at, so milestone
 completion stats read 0/8 despite all cards done — stats vs column semantics
 is a kanban-team call. SDK-002 and SDK-010 are delivered in sdk v3.3.0
 (sdk board left for the sdk maintainer to move).
+
+
+## 2026-07-27 — CLI-013 shipped as v3.2.1; KANBAN-026 filed
+
+Human-directed release (charter escalation satisfied in-session). CLI-013:
+`card-template get` name lookup only searched global templates and had no
+`-p` flag. Fix: `NameResolver::card_template` takes an optional project —
+scoped = one ListCardTemplates against the resolved project; unscoped =
+globals first, then every visible project's templates. Both passes filter
+by `is_global` so a template is never double-counted regardless of how the
+server scopes its list responses (server behavior confirmed live: a
+project-scoped list DOES include globals). `get`/`update`/`delete` gained
+`-p/--project`. Why search-all-projects unscoped instead of requiring `-p`:
+the card's expected behavior, and `board_anywhere` already set the
+N+1-RPC precedent for name resolution. Error candidates are now labeled
+`name (global)` / `name (project: X)` — the old message listing only
+globals was the misleading part of the bug.
+
+Validated live against kanban.sunbeam.pt with the debug binary (the card's
+exact repro: create project-scoped template → get by name scoped and
+unscoped → delete by name). Side finding: the seeded global templates
+(bug/chore/feature from server v2026.07.5) 404 on GetCardTemplate even by
+raw ULID, on the release CLI too — server-side, filed as KANBAN-026 on the
+kanban dev board.
+
+Train: `release: v3.2.1` (10c6fe63) pushed to mainline; CI tagged v3.2.1;
+release workflow green on all 4 targets + publish (9 assets). Tap PR #5
+opened but the repo-wide test-bot failure blocked auto-merge AGAIN — landed
+manually on tap mainline (38df8b1, cherry-pick of the bot branch, hashes
+verified against checksums.txt, brew audit/reinstall/test green) and closed
+the PR with the reason. `brew info` resolves 3.2.1. The tap test-bot is
+still the only manual step in the train.
+
+Board end state: CLI-013 done under the '3.2' milestone with a full
+comment trail. Gates: fmt/clippy/716 nextest green (1 docker-gated skip).

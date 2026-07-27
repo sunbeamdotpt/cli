@@ -3,13 +3,20 @@ type: State
 title: Current state of cli
 description: What is in flight, what is blocked, what the next session should pick up first.
 tags: [state]
-timestamp: 2026-07-24T00:00:00Z
+timestamp: 2026-07-27T00:00:00Z
 ---
 
-# State — 2026-07-24
+# State — 2026-07-27
 
 ## In flight
 
+- **v3.2.1 RELEASED 2026-07-27** (patch: CLI-013 card-template name
+  resolution now covers project-scoped templates; `-p/--project` on
+  get/update/delete). Gates green (fmt/clippy/716 nextest). GH release: 9
+  assets. Tap formula landed manually on mainline (38df8b1) — test-bot
+  still broken; PR #5 closed with the reason. `brew info sunbeam` → 3.2.1.
+  CLI-013 done under the '3.2' milestone. Side finding: seeded global card
+  templates 404 on GetCardTemplate — filed KANBAN-026 (kanban dev board).
 - **v3.2.0 RELEASED 2026-07-24** (sdk v3.2.0 → v3.3.0). Kanban batch:
   label CRUD + `card label set|add|remove` (CLI-007/009), milestone CRUD +
   `card update --milestone`, comments (CLI-003), assign/unassign (CLI-008),
@@ -115,7 +122,7 @@ timestamp: 2026-07-24T00:00:00Z
 
 ## Pick up first
 
-- Nothing pressing — v3.2.0 is fully shipped (release + tap + boards).
+- Nothing pressing — v3.2.1 is fully shipped (release + tap + boards).
   Next session: check the cli boards for new cards.
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
