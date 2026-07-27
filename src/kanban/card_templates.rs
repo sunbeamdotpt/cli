@@ -21,6 +21,9 @@ pub enum CardTemplateAction {
     },
     /// Get a card template.
     Get {
+        /// Project ID or name (omit to search global and all projects).
+        #[arg(short, long)]
+        project: Option<String>,
         /// Template ID or name.
         template_id: String,
     },
@@ -50,6 +53,9 @@ pub enum CardTemplateAction {
     },
     /// Update a card template.
     Update {
+        /// Project ID or name (omit to search global and all projects).
+        #[arg(short, long)]
+        project: Option<String>,
         /// Template ID or name.
         template_id: String,
         /// New name.
@@ -73,6 +79,9 @@ pub enum CardTemplateAction {
     },
     /// Delete a card template.
     Delete {
+        /// Project ID or name (omit to search global and all projects).
+        #[arg(short, long)]
+        project: Option<String>,
         /// Template ID or name.
         template_id: String,
     },
@@ -167,9 +176,12 @@ pub(crate) async fn run(
                 format,
             )
         }
-        CardTemplateAction::Get { template_id } => {
+        CardTemplateAction::Get {
+            project,
+            template_id,
+        } => {
             let template_id = super::resolve::NameResolver::new(client)
-                .card_template(&template_id)
+                .card_template(project.as_deref(), &template_id)
                 .await?;
             let resp = client
                 .templates()
@@ -223,6 +235,7 @@ pub(crate) async fn run(
             )
         }
         CardTemplateAction::Update {
+            project,
             template_id,
             name,
             description,
@@ -232,7 +245,7 @@ pub(crate) async fn run(
             checklist,
         } => {
             let template_id = super::resolve::NameResolver::new(client)
-                .card_template(&template_id)
+                .card_template(project.as_deref(), &template_id)
                 .await?;
             let mut paths = Vec::new();
             if name.is_some() {
@@ -287,9 +300,12 @@ pub(crate) async fn run(
                 format,
             )
         }
-        CardTemplateAction::Delete { template_id } => {
+        CardTemplateAction::Delete {
+            project,
+            template_id,
+        } => {
             let template_id = super::resolve::NameResolver::new(client)
-                .card_template(&template_id)
+                .card_template(project.as_deref(), &template_id)
                 .await?;
             client
                 .templates()
@@ -409,6 +425,18 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
+            .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
+                projects: vec![v1::Project {
+                    id: "proj_1".into(),
+                    name: "One".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
             .and(path("/sunbeam.kanban.v1.TemplatesService/GetCardTemplate"))
             .respond_with(testutil::proto_response(&v1::GetCardTemplateResponse {
                 template: card_template("ctmpl_1", "Bug").into(),
@@ -420,6 +448,42 @@ mod tests {
         let client = testutil::client_for(&server.uri());
         run(
             CardTemplateAction::Get {
+                project: None,
+                template_id: "bug".into(),
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_card_template_resolves_name_scoped_to_project() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/sunbeam.kanban.v1.TemplatesService/ListCardTemplates",
+            ))
+            .respond_with(testutil::proto_response(&v1::ListCardTemplatesResponse {
+                templates: vec![card_template("ctmpl_1", "Bug")],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.TemplatesService/GetCardTemplate"))
+            .respond_with(testutil::proto_response(&v1::GetCardTemplateResponse {
+                template: card_template("ctmpl_1", "Bug").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardTemplateAction::Get {
+                project: Some("proj_1".into()),
                 template_id: "bug".into(),
             },
             OutputFormat::Json,
@@ -495,6 +559,7 @@ mod tests {
         .unwrap();
         run(
             CardTemplateAction::Update {
+                project: None,
                 template_id: "ctmpl_1".into(),
                 name: Some("Renamed".into()),
                 description: Some("Updated".into()),
@@ -510,6 +575,7 @@ mod tests {
         .unwrap();
         run(
             CardTemplateAction::Delete {
+                project: None,
                 template_id: "ctmpl_1".into(),
             },
             OutputFormat::Table,
@@ -536,6 +602,7 @@ mod tests {
         let client = testutil::client_for(&server.uri());
         run(
             CardTemplateAction::Update {
+                project: None,
                 template_id: "ctmpl_1".into(),
                 name: None,
                 description: None,

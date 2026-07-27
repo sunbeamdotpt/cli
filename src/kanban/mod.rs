@@ -1274,6 +1274,7 @@ mod tests {
             },
             KanbanCommand::CardTemplate {
                 action: card_templates::CardTemplateAction::Get {
+                    project: None,
                     template_id: "ctmpl_1".into(),
                 },
             },

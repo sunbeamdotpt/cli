@@ -7,6 +7,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.2.1] - 2026-07-27
+
+### Fixed
+
+- `kanban card-template get/update/delete` name resolution now finds
+  project-scoped card templates, not just global ones: a new `-p/--project`
+  flag scopes the lookup, and without it the search covers global templates
+  plus every visible project's templates. "No match" errors now label each
+  available template with its scope instead of listing only globals
+  (CLI-013).
+
 ## [3.2.0] - 2026-07-24
 
 ### Added

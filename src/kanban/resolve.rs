@@ -291,28 +291,93 @@ impl<'a> NameResolver<'a> {
 
     /// Resolve a card-template name or ULID prefix.
     ///
-    /// Searches global templates (matching the old CLI behaviour of passing
-    /// no project when resolving card-template names).
-    pub(crate) async fn card_template(&self, raw: &str) -> Result<String> {
+    /// `project` scopes the search to a single project (global templates
+    /// remain visible, as they are in every project); `None` searches global
+    /// templates first, then the templates of every visible project.
+    pub(crate) async fn card_template(&self, project: Option<&str>, raw: &str) -> Result<String> {
         if looks_like_id(raw) {
             return Ok(raw.to_string());
         }
+
+        let mut matches = Vec::new();
+        let mut available = Vec::new();
+
+        if let Some(project) = project {
+            let project_id = self.project(project).await?;
+            let resp = self
+                .client
+                .templates()
+                .list_card_templates(v1::ListCardTemplatesRequest {
+                    project_id,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            for t in resp.templates {
+                let label = if t.is_global {
+                    format!("{} (global)", t.name)
+                } else {
+                    format!("{} (project: {})", t.name, project)
+                };
+                if entity_matches(&t.id, &t.name, raw) {
+                    matches.push((t.id, label.clone()));
+                }
+                available.push(label);
+            }
+            return unique_match(matches, "card template", raw, &available);
+        }
+
+        // Unscoped: globals first, then every visible project's templates.
+        // Each pass keeps only its own scope (via `is_global`) so templates
+        // are never double-counted regardless of how the server scopes its
+        // list responses.
         let resp = self
             .client
             .templates()
-            .list_card_templates(v1::ListCardTemplatesRequest {
-                project_id: String::new(),
-                ..Default::default()
-            })
+            .list_card_templates(v1::ListCardTemplatesRequest::default())
             .await?
             .into_owned();
-        let available: Vec<String> = resp.templates.iter().map(|t| t.name.clone()).collect();
-        let matches: Vec<_> = resp
-            .templates
-            .into_iter()
-            .filter(|t| entity_matches(&t.id, &t.name, raw))
-            .map(|t| (t.id, t.name))
-            .collect();
+        for t in resp.templates {
+            if !t.is_global {
+                continue;
+            }
+            let label = format!("{} (global)", t.name);
+            if entity_matches(&t.id, &t.name, raw) {
+                matches.push((t.id, label.clone()));
+            }
+            available.push(label);
+        }
+
+        let projects = self
+            .client
+            .projects()
+            .list_projects(v1::ListProjectsRequest::default())
+            .await?
+            .into_owned()
+            .projects;
+        for project in projects {
+            let resp = self
+                .client
+                .templates()
+                .list_card_templates(v1::ListCardTemplatesRequest {
+                    project_id: project.id.clone(),
+                    ..Default::default()
+                })
+                .await;
+            let Ok(resp) = resp else {
+                continue;
+            };
+            for t in resp.into_owned().templates {
+                if t.is_global {
+                    continue;
+                }
+                let label = format!("{} (project: {})", t.name, project.name);
+                if entity_matches(&t.id, &t.name, raw) {
+                    matches.push((t.id, label.clone()));
+                }
+                available.push(label);
+            }
+        }
         unique_match(matches, "card template", raw, &available)
     }
 
@@ -695,7 +760,10 @@ mod tests {
                 .unwrap(),
             "550e8400-e29b-41d4-a716-446655440000"
         );
-        assert_eq!(resolver.card_template("ctmpl_1").await.unwrap(), "ctmpl_1");
+        assert_eq!(
+            resolver.card_template(None, "ctmpl_1").await.unwrap(),
+            "ctmpl_1"
+        );
         assert_eq!(
             resolver.public_board_anywhere("board_1").await.unwrap(),
             "board_1"
@@ -766,6 +834,77 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("no project matches"), "{msg}");
         assert!(msg.contains("available projects: Sunbeam"), "{msg}");
+    }
+
+    fn card_template(id: &str, name: &str, is_global: bool) -> v1::CardTemplate {
+        v1::CardTemplate {
+            id: id.to_string(),
+            name: name.to_string(),
+            is_global,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn card_template_unscoped_searches_projects() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/sunbeam.kanban.v1.TemplatesService/ListCardTemplates",
+            ))
+            .respond_with(testutil::proto_response(&v1::ListCardTemplatesResponse {
+                templates: vec![
+                    card_template("ctmpl_1", "bug", true),
+                    card_template("ctmpl_9", "my-tpl", false),
+                ],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        mount_projects(&server, vec![project("proj_1", "One")]).await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        // Global templates resolve from the global list...
+        assert_eq!(
+            resolver.card_template(None, "BUG").await.unwrap(),
+            "ctmpl_1"
+        );
+        // ...and project-scoped templates from the per-project lists.
+        assert_eq!(
+            resolver.card_template(None, "my-tpl").await.unwrap(),
+            "ctmpl_9"
+        );
+        let err = resolver.card_template(None, "missing").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no card template matches"), "{msg}");
+        assert!(msg.contains("bug (global)"), "{msg}");
+        assert!(msg.contains("my-tpl (project: One)"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn card_template_scoped_to_project() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/sunbeam.kanban.v1.TemplatesService/ListCardTemplates",
+            ))
+            .respond_with(testutil::proto_response(&v1::ListCardTemplatesResponse {
+                templates: vec![card_template("ctmpl_9", "my-tpl", false)],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = NameResolver::new(&client);
+        assert_eq!(
+            resolver
+                .card_template(Some("proj_1"), "my-tpl")
+                .await
+                .unwrap(),
+            "ctmpl_9"
+        );
     }
 
     #[tokio::test]
