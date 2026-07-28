@@ -1,3 +1,9 @@
+---
+title: "Release train — Sunbeam Compute Platform CLI"
+description: "How a `sunbeam` release goes from merged code to installed binary."
+updated_at: "2026-07-28"
+---
+
 # Release train — Sunbeam Compute Platform CLI
 
 How a `sunbeam` release goes from merged code to installed binary.

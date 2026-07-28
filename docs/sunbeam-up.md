@@ -1,3 +1,9 @@
+---
+title: "`sunbeam up` — Complete Cluster Bring-Up"
+description: "One command to go from zero to a working local Kubernetes development stack."
+updated_at: "2026-07-28"
+---
+
 # `sunbeam up` — Complete Cluster Bring-Up
 
 > **One command to go from zero to a working local Kubernetes development stack.**
