@@ -1,3 +1,9 @@
+---
+title: "Sunbeam Service Discovery Labels"
+description: "Migration guide: replacing hardcoded service definitions in the SDK service registry with Kubernetes label-based discovery."
+updated_at: "2026-07-28"
+---
+
 # Sunbeam Service Discovery Labels
 
 Migration guide: replacing hardcoded service definitions in `sunbeam-sdk/src/registry/services.rs` with Kubernetes label-based discovery.
