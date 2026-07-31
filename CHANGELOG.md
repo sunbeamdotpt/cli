@@ -9,6 +9,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `kanban card create --urgency` and `kanban card update --urgency` —
+  urgency (low/medium/high/critical) is now writable via the CLI instead of
+  always defaulting to medium (CLI-026).
+
 ### Changed
 
 - Bumped the `sdk` git-tag dependency to v3.3.2.

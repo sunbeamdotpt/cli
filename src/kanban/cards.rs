@@ -42,6 +42,9 @@ pub enum CardAction {
         /// Priority.
         #[arg(short, long, value_enum)]
         priority: Option<PriorityArg>,
+        /// Urgency (defaults to medium).
+        #[arg(short, long, value_enum)]
+        urgency: Option<UrgencyArg>,
     },
     /// Update a card.
     Update {
@@ -56,6 +59,9 @@ pub enum CardAction {
         /// New priority.
         #[arg(short, long, value_enum)]
         priority: Option<PriorityArg>,
+        /// New urgency.
+        #[arg(short, long, value_enum)]
+        urgency: Option<UrgencyArg>,
         /// Mark the card as blocked.
         #[arg(long)]
         blocked: bool,
@@ -143,6 +149,30 @@ impl From<PriorityArg> for v1::CardPriority {
             PriorityArg::Medium => v1::CardPriority::Medium,
             PriorityArg::High => v1::CardPriority::High,
             PriorityArg::Urgent => v1::CardPriority::Urgent,
+        }
+    }
+}
+
+/// Urgency values matching `CardUrgency`.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum UrgencyArg {
+    /// Low.
+    Low,
+    /// Medium.
+    Medium,
+    /// High.
+    High,
+    /// Critical.
+    Critical,
+}
+
+impl From<UrgencyArg> for v1::CardUrgency {
+    fn from(u: UrgencyArg) -> Self {
+        match u {
+            UrgencyArg::Low => v1::CardUrgency::Low,
+            UrgencyArg::Medium => v1::CardUrgency::Medium,
+            UrgencyArg::High => v1::CardUrgency::High,
+            UrgencyArg::Critical => v1::CardUrgency::Critical,
         }
     }
 }
@@ -1083,6 +1113,7 @@ pub(crate) async fn run(
             title,
             description,
             priority,
+            urgency,
         } => {
             let column = super::resolve::NameResolver::new(client)
                 .column_for_create(&board, column.as_deref())
@@ -1102,7 +1133,10 @@ pub(crate) async fn run(
                         milestone_id: String::new(),
                         position: 0,
                         idempotency_key: new_idempotency_key(),
-                        urgency: v1::CardUrgency::Medium.into(),
+                        urgency: urgency
+                            .map(v1::CardUrgency::from)
+                            .unwrap_or(v1::CardUrgency::Medium)
+                            .into(),
                         ..Default::default()
                     },
                     object_id_options(&board),
@@ -1116,6 +1150,7 @@ pub(crate) async fn run(
             title,
             description,
             priority,
+            urgency,
             blocked,
             unblocked,
             milestone,
@@ -1136,6 +1171,10 @@ pub(crate) async fn run(
             if let Some(p) = priority {
                 update_card.priority = v1::CardPriority::from(p).into();
                 paths.push("priority".to_string());
+            }
+            if let Some(u) = urgency {
+                update_card.urgency = v1::CardUrgency::from(u).into();
+                paths.push("urgency".to_string());
             }
             if blocked {
                 update_card.blocked = true;
@@ -1557,6 +1596,7 @@ mod tests {
                 title: "Fix crash".into(),
                 description: Some("details".into()),
                 priority: Some(PriorityArg::High),
+                urgency: Some(UrgencyArg::Critical),
             },
             OutputFormat::Table,
             &client,
@@ -1569,6 +1609,7 @@ mod tests {
                 title: Some("New title".into()),
                 description: None,
                 priority: Some(PriorityArg::Low),
+                urgency: Some(UrgencyArg::High),
                 blocked: true,
                 unblocked: false,
                 milestone: None,
@@ -1599,6 +1640,27 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // Priority/urgency flags land on the wire (CLI-026).
+        use sdk::kanban::prelude::buffa::Message;
+        let requests = server.received_requests().await.unwrap();
+        let create = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/CreateCard"))
+            .expect("CreateCard request");
+        let created = v1::CreateCardRequest::decode(&mut create.body.as_slice()).unwrap();
+        assert_eq!(created.priority, v1::CardPriority::High);
+        assert_eq!(created.urgency, v1::CardUrgency::Critical);
+        let update = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/UpdateCard"))
+            .expect("UpdateCard request");
+        let updated = v1::UpdateCardRequest::decode(&mut update.body.as_slice()).unwrap();
+        let card = updated.card.as_option().expect("update card patch");
+        assert_eq!(card.priority, v1::CardPriority::Low);
+        assert_eq!(card.urgency, v1::CardUrgency::High);
+        let mask = updated.update_mask.as_option().expect("update mask");
+        assert!(mask.paths.contains(&"urgency".to_string()));
     }
 
     #[tokio::test]
@@ -2031,6 +2093,7 @@ mod tests {
                 title: None,
                 description: None,
                 priority: None,
+                urgency: None,
                 blocked: false,
                 unblocked: false,
                 milestone: Some("3.2".into()),
@@ -2134,6 +2197,7 @@ mod tests {
                 title: None,
                 description: None,
                 priority: None,
+                urgency: None,
                 blocked: false,
                 unblocked: true,
                 milestone: None,
