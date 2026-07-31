@@ -11,6 +11,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `kanban card checklist add|toggle|remove|set` — manage a card's
+  checklist items (the `(n/m)` list the UI renders) from the CLI. Toggle
+  and remove accept an item ID or exact text; `set --items "a,b,c"` bulk
+  replaces the list (CLI-022).
 - `kanban card create --urgency` and `kanban card update --urgency` —
   urgency (low/medium/high/critical) is now writable via the CLI instead of
   always defaulting to medium (CLI-026).

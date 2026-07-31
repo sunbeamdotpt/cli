@@ -498,6 +498,35 @@ async fn dispatch_authed(
                     };
                     cards::CardAction::Label { action }
                 }
+                cards::CardAction::Checklist { action } => {
+                    let action = match action {
+                        cards::CardChecklistAction::Add { card_id, text } => {
+                            cards::CardChecklistAction::Add {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                text,
+                            }
+                        }
+                        cards::CardChecklistAction::Toggle { card_id, item } => {
+                            cards::CardChecklistAction::Toggle {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                item,
+                            }
+                        }
+                        cards::CardChecklistAction::Remove { card_id, item } => {
+                            cards::CardChecklistAction::Remove {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                item,
+                            }
+                        }
+                        cards::CardChecklistAction::Set { card_id, items } => {
+                            cards::CardChecklistAction::Set {
+                                card_id: resolver.card_anywhere(&card_id).await?,
+                                items,
+                            }
+                        }
+                    };
+                    cards::CardAction::Checklist { action }
+                }
                 cards::CardAction::Comment { action } => {
                     let action = match action {
                         cards::CommentAction::List { card_id } => cards::CommentAction::List {

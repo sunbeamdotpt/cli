@@ -121,6 +121,12 @@ pub enum CardAction {
         #[command(subcommand)]
         action: CardLabelAction,
     },
+    /// Checklist management.
+    Checklist {
+        /// Checklist subcommand to run.
+        #[command(subcommand)]
+        action: CardChecklistAction,
+    },
     /// Dependency management.
     Dependency {
         /// Dependency subcommand to run.
@@ -245,6 +251,41 @@ pub enum CardLabelAction {
         card_id: String,
         /// Label names or IDs.
         names: Vec<String>,
+    },
+}
+
+/// Card checklist actions.
+#[derive(Debug, Clone, Subcommand)]
+pub enum CardChecklistAction {
+    /// Add a checklist item.
+    Add {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Item text.
+        #[arg(long)]
+        text: String,
+    },
+    /// Toggle an item's done state (item ID or exact text).
+    Toggle {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Item ID or exact text.
+        item: String,
+    },
+    /// Remove an item (item ID or exact text).
+    Remove {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Item ID or exact text.
+        item: String,
+    },
+    /// Replace the whole checklist (comma-separated item texts).
+    Set {
+        /// Card ID, title, or ref.
+        card_id: String,
+        /// Comma-separated item texts, e.g. --items "repro,fix,test".
+        #[arg(long)]
+        items: String,
     },
 }
 
@@ -648,6 +689,163 @@ async fn update_card_labels(
         .next()
         .ok_or_else(|| sdk::error::SunbeamError::network("server response missing card"))?;
     render_card_detail(updated, format).await
+}
+
+/// Checklist operations — add/toggle/remove/set against the card's item
+/// list, mirroring the `card label` subcommand group (CLI-022).
+async fn run_card_checklist(
+    client: &KanbanClient,
+    action: CardChecklistAction,
+    format: OutputFormat,
+) -> Result<()> {
+    /// Fetch the current card (checklist state changes under every op).
+    async fn fetch_card(client: &KanbanClient, card_id: &str) -> Result<v1::Card> {
+        required(
+            client
+                .cards()
+                .get_card_with_options(
+                    v1::GetCardRequest {
+                        card_id: card_id.to_string(),
+                        ..Default::default()
+                    },
+                    object_id_options(card_id),
+                )
+                .await?
+                .into_owned()
+                .card,
+            "card",
+        )
+    }
+
+    /// Resolve an item argument (ULID or exact text) against the card's
+    /// checklist.
+    fn resolve_item(card: &v1::Card, item: &str) -> Result<v1::ChecklistItem> {
+        if super::resolve::looks_like_id(item)
+            && let Some(found) = card.checklist.iter().find(|c| c.id == item)
+        {
+            return Ok(found.clone());
+        }
+        let matches: Vec<&v1::ChecklistItem> =
+            card.checklist.iter().filter(|c| c.text == item).collect();
+        match matches.as_slice() {
+            [only] => Ok((*only).clone()),
+            [] => {
+                let available: Vec<String> =
+                    card.checklist.iter().map(|c| c.text.clone()).collect();
+                sdk::bail!(
+                    "no checklist item matches {item:?}; available: {}",
+                    available.join(", ")
+                );
+            }
+            _ => sdk::bail!(
+                "multiple checklist items match {item:?}; use the item id from `card get`"
+            ),
+        }
+    }
+
+    match action {
+        CardChecklistAction::Add { card_id, text } => {
+            let resp = client
+                .cards()
+                .add_checklist_item_with_options(
+                    v1::AddChecklistItemRequest {
+                        card_id: card_id.clone(),
+                        text,
+                        position: 0,
+                        idempotency_key: new_idempotency_key(),
+                        ..Default::default()
+                    },
+                    object_id_options(&card_id),
+                )
+                .await?
+                .into_owned();
+            render_card_detail(required(resp.card, "card")?, format).await
+        }
+        CardChecklistAction::Toggle { card_id, item } => {
+            let card = fetch_card(client, &card_id).await?;
+            let current = resolve_item(&card, &item)?;
+            let resp = client
+                .cards()
+                .update_checklist_item_with_options(
+                    v1::UpdateChecklistItemRequest {
+                        card_id: card_id.clone(),
+                        item_id: current.id.clone(),
+                        item: v1::ChecklistItem {
+                            done: !current.done,
+                            ..Default::default()
+                        }
+                        .into(),
+                        update_mask: Some(buffa_types::google::protobuf::FieldMask {
+                            paths: vec!["done".to_string()],
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    mutating_options(&card_id),
+                )
+                .await?
+                .into_owned();
+            render_card_detail(required(resp.card, "card")?, format).await
+        }
+        CardChecklistAction::Remove { card_id, item } => {
+            let card = fetch_card(client, &card_id).await?;
+            let current = resolve_item(&card, &item)?;
+            client
+                .cards()
+                .remove_checklist_item_with_options(
+                    v1::RemoveChecklistItemRequest {
+                        card_id: card_id.clone(),
+                        item_id: current.id,
+                        ..Default::default()
+                    },
+                    mutating_options(&card_id),
+                )
+                .await?
+                .into_owned();
+            // Remove returns Empty; re-fetch for the rendered detail.
+            render_card_detail(fetch_card(client, &card_id).await?, format).await
+        }
+        CardChecklistAction::Set { card_id, items } => {
+            let card = fetch_card(client, &card_id).await?;
+            for existing in &card.checklist {
+                client
+                    .cards()
+                    .remove_checklist_item_with_options(
+                        v1::RemoveChecklistItemRequest {
+                            card_id: card_id.clone(),
+                            item_id: existing.id.clone(),
+                            ..Default::default()
+                        },
+                        mutating_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+            }
+            for (i, text) in items
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .enumerate()
+            {
+                client
+                    .cards()
+                    .add_checklist_item_with_options(
+                        v1::AddChecklistItemRequest {
+                            card_id: card_id.clone(),
+                            text: text.to_string(),
+                            position: i as i32 + 1,
+                            idempotency_key: new_idempotency_key(),
+                            ..Default::default()
+                        },
+                        object_id_options(&card_id),
+                    )
+                    .await?
+                    .into_owned();
+            }
+            render_card_detail(fetch_card(client, &card_id).await?, format).await
+        }
+    }
 }
 
 /// Move a card to another column on its current board.
@@ -1271,6 +1469,7 @@ pub(crate) async fn run(
             };
             update_card_labels(client, &card_id, &names, mode, format).await
         }
+        CardAction::Checklist { action } => run_card_checklist(client, action, format).await,
         CardAction::Comment { action } => match action {
             CommentAction::List { card_id } => {
                 let resp = client
@@ -2051,6 +2250,180 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("no label matches"), "{msg}");
         assert!(msg.contains("backend"), "{msg}");
+    }
+
+    fn checklisted_card() -> v1::Card {
+        v1::Card {
+            checklist: vec![
+                v1::ChecklistItem {
+                    id: "chk_1".into(),
+                    text: "repro".into(),
+                    done: false,
+                    position: 1,
+                    ..Default::default()
+                },
+                v1::ChecklistItem {
+                    id: "chk_2".into(),
+                    text: "fix".into(),
+                    done: true,
+                    position: 2,
+                    ..Default::default()
+                },
+            ],
+            ..lean_card("card_1", "Fix crash")
+        }
+    }
+
+    /// Mount the responders the checklist operations need (GetCard plus the
+    /// three checklist RPCs).
+    async fn mount_checklist_flow(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: checklisted_card().into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AddChecklistItem"))
+            .respond_with(testutil::proto_response(&v1::AddChecklistItemResponse {
+                card: checklisted_card().into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/UpdateChecklistItem"))
+            .respond_with(testutil::proto_response(&v1::UpdateChecklistItemResponse {
+                card: checklisted_card().into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/RemoveChecklistItem"))
+            .respond_with(testutil::proto_response(
+                &v1::RemoveChecklistItemResponse::default(),
+            ))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn card_checklist_add_toggle_remove_set() {
+        use sdk::kanban::prelude::buffa::Message;
+
+        let server = MockServer::start().await;
+        mount_checklist_flow(&server).await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Checklist {
+                action: CardChecklistAction::Add {
+                    card_id: "card_1".into(),
+                    text: "regression test".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+        // Toggle by exact text flips done=false -> true.
+        run(
+            CardAction::Checklist {
+                action: CardChecklistAction::Toggle {
+                    card_id: "card_1".into(),
+                    item: "repro".into(),
+                },
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+        // Remove by item id.
+        run(
+            CardAction::Checklist {
+                action: CardChecklistAction::Remove {
+                    card_id: "card_1".into(),
+                    item: "chk_2".into(),
+                },
+            },
+            OutputFormat::Yaml,
+            &client,
+        )
+        .await
+        .unwrap();
+        // Set replaces: removes the two existing items, adds two new.
+        run(
+            CardAction::Checklist {
+                action: CardChecklistAction::Set {
+                    card_id: "card_1".into(),
+                    items: "a, b".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let toggled = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/UpdateChecklistItem"))
+            .expect("UpdateChecklistItem request");
+        let req = v1::UpdateChecklistItemRequest::decode(&mut toggled.body.as_slice()).unwrap();
+        assert_eq!(req.item_id, "chk_1");
+        let item = req.item.as_option().expect("checklist item patch");
+        assert!(item.done);
+        let mask = req.update_mask.as_option().expect("update mask");
+        assert_eq!(mask.paths, vec!["done".to_string()]);
+
+        let removals: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/RemoveChecklistItem"))
+            .collect();
+        // One explicit remove (chk_2) + two from set.
+        assert_eq!(removals.len(), 3);
+        let first =
+            v1::RemoveChecklistItemRequest::decode(&mut removals[0].body.as_slice()).unwrap();
+        assert_eq!(first.item_id, "chk_2");
+
+        let adds: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/AddChecklistItem"))
+            .collect();
+        // One explicit add + two from set.
+        assert_eq!(adds.len(), 3);
+        let set_a = v1::AddChecklistItemRequest::decode(&mut adds[1].body.as_slice()).unwrap();
+        assert_eq!(set_a.text, "a");
+        assert_eq!(set_a.position, 1);
+    }
+
+    #[tokio::test]
+    async fn card_checklist_unknown_item_lists_available() {
+        let server = MockServer::start().await;
+        mount_checklist_flow(&server).await;
+
+        let client = testutil::client_for(&server.uri());
+        let err = run(
+            CardAction::Checklist {
+                action: CardChecklistAction::Toggle {
+                    card_id: "card_1".into(),
+                    item: "nope".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no checklist item matches"), "{msg}");
+        assert!(msg.contains("repro"), "{msg}");
     }
 
     #[tokio::test]
