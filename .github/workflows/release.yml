@@ -155,7 +155,7 @@ jobs:
   homebrew-tap:
     name: bump homebrew formula
     needs: release
-    uses: sunbeamdotpt/tap/.github/workflows/bump-formula.yml@mainline
+    uses: sunbeamdotpt/homebrew-tap/.github/workflows/bump-formula.yml@mainline
     secrets: inherit
     with:
       formula: sunbeam
