@@ -121,6 +121,10 @@ pub enum ColumnAction {
         /// Position.
         #[arg(short, long)]
         position: Option<i32>,
+        /// Mark the column as a completion lane (moving a card in sets
+        /// completed_at).
+        #[arg(long)]
+        is_done: bool,
     },
     /// Update a column.
     Update {
@@ -137,6 +141,12 @@ pub enum ColumnAction {
         /// New WIP limit.
         #[arg(short, long)]
         wip_limit: Option<i32>,
+        /// Mark the column as a completion lane.
+        #[arg(long, conflicts_with = "no_is_done")]
+        is_done: bool,
+        /// Unmark the column as a completion lane.
+        #[arg(long)]
+        no_is_done: bool,
     },
     /// Remove a column.
     Remove {
@@ -198,6 +208,7 @@ struct ColumnOut {
     accent: String,
     wip_limit: i32,
     position: i32,
+    is_done: bool,
     created_at: String,
     updated_at: String,
 }
@@ -211,6 +222,7 @@ impl From<v1::Column> for ColumnOut {
             accent: c.accent,
             wip_limit: c.wip_limit,
             position: c.position,
+            is_done: c.is_done,
             created_at: fmt_ts(&c.created_at),
             updated_at: fmt_ts(&c.updated_at),
         }
@@ -403,6 +415,7 @@ pub(crate) async fn run(
                 accent,
                 wip_limit,
                 position,
+                is_done,
             } => {
                 let resp = client
                     .boards()
@@ -414,6 +427,7 @@ pub(crate) async fn run(
                             wip_limit: wip_limit.unwrap_or_default(),
                             position: position.unwrap_or_default(),
                             idempotency_key: new_idempotency_key(),
+                            is_done,
                             ..Default::default()
                         },
                         object_id_options(&board_id),
@@ -428,6 +442,8 @@ pub(crate) async fn run(
                 title,
                 accent,
                 wip_limit,
+                is_done,
+                no_is_done,
             } => {
                 let column_id = resolve_column_id(client, &board_id, &column_id).await?;
                 let mut paths = Vec::new();
@@ -439,6 +455,9 @@ pub(crate) async fn run(
                 }
                 if wip_limit.is_some() {
                     paths.push("wip_limit".to_string());
+                }
+                if is_done || no_is_done {
+                    paths.push("is_done".to_string());
                 }
                 let resp = client
                     .boards()
@@ -452,6 +471,7 @@ pub(crate) async fn run(
                                 title: title.unwrap_or_default(),
                                 accent: accent.unwrap_or_default(),
                                 wip_limit: wip_limit.unwrap_or_default(),
+                                is_done,
                                 ..Default::default()
                             }
                             .into(),
@@ -796,6 +816,7 @@ mod tests {
                     accent: Some("blue".into()),
                     wip_limit: Some(5),
                     position: None,
+                    is_done: false,
                 },
             },
             OutputFormat::Table,
@@ -811,6 +832,8 @@ mod tests {
                     title: Some("Doing".into()),
                     accent: None,
                     wip_limit: Some(3),
+                    is_done: false,
+                    no_is_done: false,
                 },
             },
             OutputFormat::Json,
@@ -874,6 +897,8 @@ mod tests {
                     title: Some("Doing".into()),
                     accent: None,
                     wip_limit: None,
+                    is_done: false,
+                    no_is_done: false,
                 },
             },
             OutputFormat::Table,
@@ -881,6 +906,105 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn column_out_surfaces_is_done() {
+        let out = ColumnOut::from(v1::Column {
+            is_done: true,
+            ..column("col_1", "Done")
+        });
+        assert!(out.is_done);
+        assert!(!ColumnOut::from(column("col_2", "Todo")).is_done);
+    }
+
+    #[tokio::test]
+    async fn column_add_is_done_sets_request_flag() {
+        use sdk::kanban::prelude::buffa::Message;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/AddColumn"))
+            .respond_with(testutil::proto_response(&v1::AddColumnResponse {
+                column: v1::Column {
+                    is_done: true,
+                    ..column("col_1", "Done")
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            BoardAction::Column {
+                action: ColumnAction::Add {
+                    board_id: "board_1".into(),
+                    title: "Done".into(),
+                    accent: None,
+                    wip_limit: None,
+                    position: None,
+                    is_done: true,
+                },
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let req = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/AddColumn"))
+            .expect("AddColumn request");
+        let decoded = v1::AddColumnRequest::decode(&mut req.body.as_slice()).unwrap();
+        assert!(decoded.is_done);
+    }
+
+    #[tokio::test]
+    async fn column_update_is_done_sends_update_mask() {
+        use sdk::kanban::prelude::buffa::Message;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/UpdateColumn"))
+            .respond_with(testutil::proto_response(&v1::UpdateColumnResponse {
+                column: column("col_1", "Done").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        for (is_done, no_is_done, want) in [(true, false, true), (false, true, false)] {
+            run(
+                BoardAction::Column {
+                    action: ColumnAction::Update {
+                        board_id: "board_1".into(),
+                        column_id: "col_1".into(),
+                        title: None,
+                        accent: None,
+                        wip_limit: None,
+                        is_done,
+                        no_is_done,
+                    },
+                },
+                OutputFormat::Json,
+                &client,
+            )
+            .await
+            .unwrap();
+
+            let requests = server.received_requests().await.unwrap();
+            let req = requests
+                .iter()
+                .rfind(|r| r.url.path().ends_with("/UpdateColumn"))
+                .expect("UpdateColumn request");
+            let decoded = v1::UpdateColumnRequest::decode(&mut req.body.as_slice()).unwrap();
+            let mask = decoded.update_mask.as_option().expect("update_mask");
+            assert_eq!(mask.paths, vec!["is_done".to_string()]);
+            assert_eq!(decoded.column.as_option().unwrap().is_done, want);
+        }
     }
 
     #[tokio::test]

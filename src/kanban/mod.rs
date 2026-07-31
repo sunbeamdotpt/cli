@@ -17,7 +17,7 @@ mod subscribe;
 mod templates;
 
 use clap::Subcommand;
-use sdk::error::{Result, ResultExt, SunbeamError};
+use sdk::error::{Result, SunbeamError};
 use sdk::kanban::KanbanClient;
 use sdk::kanban::prelude::{buffa, buffa_types, connectrpc, sunbeam_g2v};
 
@@ -137,9 +137,14 @@ pub(crate) fn resolve_server_url(url_override: Option<&str>) -> Result<String> {
 
 /// Resolve and validate a bearer token for authenticated RPCs.
 async fn require_token() -> Result<String> {
-    crate::auth::get_token()
-        .await
-        .with_ctx(|| "run `sunbeam auth login` first".to_string())
+    // Only genuine auth failures get the re-login hint — transport errors
+    // already carry their own connectivity context.
+    crate::auth::get_token().await.map_err(|e| match e {
+        SunbeamError::Identity(msg) => {
+            SunbeamError::identity(format!("run `sunbeam auth login` first: {msg}"))
+        }
+        other => other,
+    })
 }
 
 /// Build a [`KanbanClient`] for `server`.
@@ -196,14 +201,15 @@ pub(crate) fn fmt_ts(ts: &buffa::MessageField<buffa_types::google::protobuf::Tim
 ///
 /// Fresh H2 connection setup intermittently fails the first RPC of a new
 /// process (a Connect `unavailable` whose message is the reqwest send
-/// failure); server-side application errors are never retried.
+/// failure); server-side application errors are never retried. The
+/// connectrpc crate maps transport failures to `ErrorCode::Unavailable`
+/// with no structured transport marker, so the reqwest send-failure
+/// substring is still the only way to tell them apart from a server-side
+/// `unavailable`.
 fn is_cold_start_transport(err: &SunbeamError) -> bool {
     match err {
         SunbeamError::Connect { code, context } => {
             *code == connectrpc::ErrorCode::Unavailable && context.contains("error sending request")
-        }
-        SunbeamError::Network { context, .. } => {
-            context.starts_with("unavailable:") || context.contains("error sending request")
         }
         _ => false,
     }
@@ -266,6 +272,15 @@ pub async fn dispatch(
     }
 }
 
+/// Resolve a `--board` reference: `project/board`, a bare board name, or an ID.
+async fn resolve_board_ref(resolver: &resolve::NameResolver<'_>, raw: &str) -> Result<String> {
+    if let Some((project, board)) = raw.split_once('/') {
+        let project_id = resolver.project(project).await?;
+        return resolver.board(&project_id, board).await;
+    }
+    resolver.board_anywhere(raw).await
+}
+
 /// Dispatch an authenticated kanban subcommand against a ready client.
 ///
 /// Split from [`dispatch`] so the name-resolution remapping can be exercised
@@ -323,12 +338,14 @@ async fn dispatch_authed(
                             accent,
                             wip_limit,
                             position,
+                            is_done,
                         } => boards::ColumnAction::Add {
                             board_id: resolver.board_anywhere(&board_id).await?,
                             title,
                             accent,
                             wip_limit,
                             position,
+                            is_done,
                         },
                         boards::ColumnAction::Update {
                             board_id,
@@ -336,12 +353,16 @@ async fn dispatch_authed(
                             title,
                             accent,
                             wip_limit,
+                            is_done,
+                            no_is_done,
                         } => boards::ColumnAction::Update {
                             board_id: resolver.board_anywhere(&board_id).await?,
                             column_id,
                             title,
                             accent,
                             wip_limit,
+                            is_done,
+                            no_is_done,
                         },
                         boards::ColumnAction::Remove {
                             board_id,
@@ -431,6 +452,7 @@ async fn dispatch_authed(
                     description,
                     priority,
                     blocked,
+                    unblocked,
                     milestone,
                 } => cards::CardAction::Update {
                     card_id: resolver.card_anywhere(&card_id).await?,
@@ -438,6 +460,7 @@ async fn dispatch_authed(
                     description,
                     priority,
                     blocked,
+                    unblocked,
                     milestone,
                 },
                 cards::CardAction::Assign { card_id, subject } => cards::CardAction::Assign {
@@ -505,10 +528,15 @@ async fn dispatch_authed(
                     card_id,
                     column,
                     position,
+                    board,
                 } => cards::CardAction::Move {
                     card_id: resolver.card_anywhere(&card_id).await?,
                     column,
                     position,
+                    board: match board {
+                        Some(raw) => Some(resolve_board_ref(&resolver, &raw).await?),
+                        None => None,
+                    },
                 },
                 cards::CardAction::Delete { card_id } => cards::CardAction::Delete {
                     card_id: resolver.card_anywhere(&card_id).await?,
@@ -1328,6 +1356,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_board_ref_handles_project_slash_board_and_bare_names() {
+        use sdk::kanban::v1;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.ProjectService/ListProjects"))
+            .respond_with(testutil::proto_response(&v1::ListProjectsResponse {
+                projects: vec![v1::Project {
+                    id: "proj_1".into(),
+                    name: "Sunbeam".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/ListBoards"))
+            .respond_with(testutil::proto_response(&v1::ListBoardsResponse {
+                boards: vec![v1::Board {
+                    id: "board_9".into(),
+                    project_id: "proj_1".into(),
+                    name: "Dev".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        let resolver = resolve::NameResolver::new(&client);
+        assert_eq!(
+            resolve_board_ref(&resolver, "sunbeam/dev").await.unwrap(),
+            "board_9"
+        );
+        assert_eq!(
+            resolve_board_ref(&resolver, "dev").await.unwrap(),
+            "board_9"
+        );
+        // ID-shaped input passes through without any RPC.
+        let offline = testutil::client_for("http://127.0.0.1:1");
+        let offline_resolver = resolve::NameResolver::new(&offline);
+        assert_eq!(
+            resolve_board_ref(&offline_resolver, "board_9")
+                .await
+                .unwrap(),
+            "board_9"
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_public_board_get_unauthenticated() {
         use sdk::kanban::v1;
         use wiremock::matchers::{method, path};
@@ -1408,9 +1490,11 @@ mod tests {
             "error sending request for url (https://kanban.sunbeam.test/)",
         ));
         assert!(is_cold_start_transport(&connect));
+        // sdk v3.3.0 routes ConnectRPC failures through the structured
+        // `Connect` variant; a bare `Network` error is not retried.
         let plain =
             SunbeamError::network("error sending request for url (https://kanban.sunbeam.test/)");
-        assert!(is_cold_start_transport(&plain));
+        assert!(!is_cold_start_transport(&plain));
         let invalid = SunbeamError::from(connectrpc::ConnectError::new(
             connectrpc::ErrorCode::InvalidArgument,
             "invalid column_id",

@@ -56,9 +56,12 @@ pub enum CardAction {
         /// New priority.
         #[arg(short, long, value_enum)]
         priority: Option<PriorityArg>,
-        /// Mark the card as blocked (cannot be cleared server-side yet).
+        /// Mark the card as blocked.
         #[arg(long)]
         blocked: bool,
+        /// Clear the blocked flag.
+        #[arg(long, conflicts_with = "blocked")]
+        unblocked: bool,
         /// Assign a milestone (ID or title; titles resolve against the
         /// card's project).
         #[arg(long)]
@@ -68,17 +71,18 @@ pub enum CardAction {
     Assign {
         /// Card ID, title, or ref.
         card_id: String,
-        /// User OIDC subject or email address.
+        /// User email address or identity ULID (`user:<ulid>`).
         subject: String,
     },
     /// Unassign a card from a user.
     Unassign {
         /// Card ID, title, or ref.
         card_id: String,
-        /// User OIDC subject or email address.
+        /// User email address or identity ULID (`user:<ulid>`).
         subject: String,
     },
-    /// Move a card.
+    /// Move a card. Moves within the card's board by default; pass --board
+    /// to relocate it to another board (recreate-and-close).
     Move {
         /// Card ID, title, or ref.
         card_id: String,
@@ -88,6 +92,11 @@ pub enum CardAction {
         /// Position within the column.
         #[arg(short, long)]
         position: Option<i32>,
+        /// Destination board for a cross-board move (ID, name, or
+        /// project/board). The card is recreated there and the original is
+        /// deleted.
+        #[arg(short, long)]
+        board: Option<String>,
     },
     /// Delete a card.
     Delete {
@@ -289,6 +298,9 @@ struct CardOut {
     assignees: Vec<String>,
     comments_count: i32,
     attachments_count: i32,
+    created_at: String,
+    updated_at: String,
+    completed_at: String,
 }
 
 impl From<v1::Card> for CardOut {
@@ -315,6 +327,9 @@ impl From<v1::Card> for CardOut {
                 .collect(),
             comments_count: card.comments_count,
             attachments_count: card.attachments_count,
+            created_at: fmt_ts(&card.created_at),
+            updated_at: fmt_ts(&card.updated_at),
+            completed_at: fmt_ts(&card.completed_at),
         }
     }
 }
@@ -478,12 +493,13 @@ async fn render_card_detail(card: v1::Card, format: OutputFormat) -> Result<()> 
 /// Resolve an assignee argument to an OIDC subject.
 ///
 /// Values containing `@` are treated as email addresses and resolved through
-/// the sso-gateway; anything else is assumed to already be a subject.
+/// the sso-gateway; ULID-shaped values (bare or `user:`-prefixed) are
+/// verified via GetIdentity; anything else is rejected locally.
 async fn resolve_subject(raw: &str) -> Result<String> {
     if raw.contains('@') {
         crate::auth::resolve_subject_for_email(raw).await
     } else {
-        Ok(raw.to_string())
+        crate::auth::resolve_verified_subject(raw).await
     }
 }
 
@@ -602,6 +618,401 @@ async fn update_card_labels(
     render_card_detail(updated, format).await
 }
 
+/// Move a card to another column on its current board.
+async fn move_card_within_board(
+    client: &KanbanClient,
+    card_id: &str,
+    column: &str,
+    position: Option<i32>,
+    format: OutputFormat,
+) -> Result<()> {
+    // Resolve column titles against the card's current board.
+    let column = if super::resolve::looks_like_id(column) {
+        column.to_string()
+    } else {
+        let card = client
+            .cards()
+            .get_card_with_options(
+                v1::GetCardRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned();
+        let board_id = required(card.card, "card")?.board_id;
+        super::resolve::NameResolver::new(client)
+            .column(&board_id, column)
+            .await?
+    };
+    let resp = client
+        .cards()
+        .move_card_with_options(
+            v1::MoveCardRequest {
+                card_id: card_id.to_string(),
+                to_column_id: column,
+                to_position: position.unwrap_or_default(),
+                idempotency_key: new_idempotency_key(),
+                ..Default::default()
+            },
+            object_id_options(card_id),
+        )
+        .await?
+        .into_owned();
+    render_card_detail(required(resp.card, "card")?, format).await
+}
+
+/// Relocate a card to another board: recreate-and-close.
+///
+/// The server rejects cross-project moves, so the card is recreated on the
+/// target board (title, description, priority, urgency, due, labels,
+/// assignees, and checklist copied), both cards are cross-referenced with
+/// comments, and the source is then deleted — never moved to a done column,
+/// which would stamp `completed_at` and pollute completion metrics. Any
+/// failure before the delete leaves the source card untouched.
+async fn move_card_to_board(
+    client: &KanbanClient,
+    card_id: &str,
+    board_id: &str,
+    column: &str,
+    position: Option<i32>,
+    format: OutputFormat,
+) -> Result<()> {
+    let source = required(
+        client
+            .cards()
+            .get_card_with_options(
+                v1::GetCardRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned()
+            .card,
+        "card",
+    )?;
+
+    // A --board naming the card's own board is a plain column move.
+    if source.board_id == board_id {
+        return move_card_within_board(client, card_id, column, position, format).await;
+    }
+
+    let resolver = super::resolve::NameResolver::new(client);
+    let column_id = resolver.column(board_id, column).await?;
+
+    // Summarize what deleting the source would lose (no copy endpoints exist
+    // for comments or attachments) so the origin comment can carry it over.
+    let comments = if source.comments_count > 0 {
+        client
+            .cards()
+            .list_comments_with_options(
+                v1::ListCommentsRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned()
+            .comments
+    } else {
+        Vec::new()
+    };
+    let attachments = if source.attachments_count > 0 {
+        client
+            .attachments()
+            .list_attachments_by_card_with_options(
+                v1::ListAttachmentsByCardRequest {
+                    card_id: card_id.to_string(),
+                    ..Default::default()
+                },
+                object_id_options(card_id),
+            )
+            .await?
+            .into_owned()
+            .attachments
+    } else {
+        Vec::new()
+    };
+
+    // Copy the card itself. The milestone is project-scoped, so it is not
+    // carried to a board in another project.
+    let mut new_card = required(
+        client
+            .cards()
+            .create_card_with_options(
+                v1::CreateCardRequest {
+                    board_id: board_id.to_string(),
+                    column_id,
+                    title: source.title.clone(),
+                    description: source.description.clone(),
+                    priority: source.priority,
+                    due: source.due.clone(),
+                    milestone_id: String::new(),
+                    position: position.unwrap_or_default(),
+                    idempotency_key: new_idempotency_key(),
+                    urgency: source.urgency,
+                    ..Default::default()
+                },
+                object_id_options(board_id),
+            )
+            .await?
+            .into_owned()
+            .card,
+        "card",
+    )?;
+
+    // Labels are project-scoped: re-match the source label names against the
+    // target project's catalog and push the surviving IDs wholesale.
+    let mut dropped_labels: Vec<String> = Vec::new();
+    if !source.labels.is_empty() {
+        let catalog = resolver.project_labels(&new_card.project_id).await?;
+        let mut label_ids = Vec::new();
+        for label in &source.labels {
+            match catalog
+                .iter()
+                .find(|c| super::resolve::name_matches(&c.name, &label.name))
+            {
+                Some(c) => label_ids.push(c.id.clone()),
+                None => dropped_labels.push(label.name.clone()),
+            }
+        }
+        if !label_ids.is_empty() {
+            let resp = client
+                .cards()
+                .bulk_update_card_labels_with_options(
+                    v1::BulkUpdateCardLabelsRequest {
+                        card_ids: vec![new_card.id.clone()],
+                        label_ids,
+                        idempotency_key: new_idempotency_key(),
+                        ..Default::default()
+                    },
+                    object_id_options(&new_card.id),
+                )
+                .await?
+                .into_owned();
+            if let Some(card) = resp.cards.into_iter().next() {
+                new_card = card;
+            }
+        }
+    }
+
+    // Assignee subjects are global identities and copy across projects.
+    for assignee in &source.assignees {
+        if assignee.subject.is_empty() {
+            continue;
+        }
+        let resp = client
+            .cards()
+            .assign_card_with_options(
+                v1::AssignCardRequest {
+                    card_id: new_card.id.clone(),
+                    subject: assignee.subject.clone(),
+                    ..Default::default()
+                },
+                mutating_options(&new_card.id),
+            )
+            .await?
+            .into_owned();
+        if let Some(card) = resp.card.into_option() {
+            new_card = card;
+        }
+    }
+
+    // CreateCard takes no checklist; re-add each item in order and restore
+    // the done flag via a follow-up patch.
+    for item in &source.checklist {
+        let resp = client
+            .cards()
+            .add_checklist_item_with_options(
+                v1::AddChecklistItemRequest {
+                    card_id: new_card.id.clone(),
+                    text: item.text.clone(),
+                    position: item.position,
+                    idempotency_key: new_idempotency_key(),
+                    ..Default::default()
+                },
+                object_id_options(&new_card.id),
+            )
+            .await?
+            .into_owned();
+        if let Some(card) = resp.card.into_option() {
+            new_card = card;
+        }
+        if item.done
+            && let Some(added) = new_card
+                .checklist
+                .iter()
+                .find(|c| c.text == item.text && c.position == item.position)
+                .map(|c| c.id.clone())
+        {
+            let resp = client
+                .cards()
+                .update_checklist_item_with_options(
+                    v1::UpdateChecklistItemRequest {
+                        card_id: new_card.id.clone(),
+                        item_id: added,
+                        item: v1::ChecklistItem {
+                            done: true,
+                            ..Default::default()
+                        }
+                        .into(),
+                        update_mask: Some(buffa_types::google::protobuf::FieldMask {
+                            paths: vec!["done".to_string()],
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    mutating_options(&new_card.id),
+                )
+                .await?
+                .into_owned();
+            if let Some(card) = resp.card.into_option() {
+                new_card = card;
+            }
+        }
+    }
+
+    // Cross-reference both directions.
+    client
+        .cards()
+        .add_comment_with_options(
+            v1::AddCommentRequest {
+                card_id: new_card.id.clone(),
+                body: origin_note(&source, &comments, &attachments, &dropped_labels),
+                idempotency_key: new_idempotency_key(),
+                ..Default::default()
+            },
+            object_id_options(&new_card.id),
+        )
+        .await?;
+    client
+        .cards()
+        .add_comment_with_options(
+            v1::AddCommentRequest {
+                card_id: card_id.to_string(),
+                body: format!(
+                    "Moved to {} via `sunbeam kanban card move`; this card is closed by deletion.",
+                    new_card.r#ref
+                ),
+                idempotency_key: new_idempotency_key(),
+                ..Default::default()
+            },
+            object_id_options(card_id),
+        )
+        .await?;
+
+    // Close the source without stamping completed_at.
+    client
+        .cards()
+        .delete_card_with_options(
+            v1::DeleteCardRequest {
+                card_id: card_id.to_string(),
+                ..Default::default()
+            },
+            object_id_options(card_id),
+        )
+        .await?;
+    tracing::info!(
+        "kanban card moved across boards: {} deleted after recreation as {}",
+        source.r#ref,
+        new_card.r#ref
+    );
+    render_card_detail(new_card, format).await
+}
+
+/// Body of the origin comment left on the recreated card.
+///
+/// Deleting the source card drops its comments, attachments, and GitHub
+/// links (no copy endpoints exist), so they are summarized here, along with
+/// any labels that have no namesake on the target project.
+fn origin_note(
+    source: &v1::Card,
+    comments: &[v1::Comment],
+    attachments: &[v1::Attachment],
+    dropped_labels: &[String],
+) -> String {
+    let mut note = format!(
+        "Moved from {} via `sunbeam kanban card move`.",
+        source.r#ref
+    );
+    let mut losses: Vec<String> = Vec::new();
+    if !comments.is_empty() {
+        let recent: Vec<String> = comments
+            .iter()
+            .rev()
+            .take(3)
+            .map(|c| {
+                format!(
+                    "\"{}\"",
+                    truncate(c.body.lines().next().unwrap_or_default(), 120)
+                )
+            })
+            .collect();
+        losses.push(format!(
+            "{} comment(s); most recent: {}",
+            comments.len(),
+            recent.join(", ")
+        ));
+    }
+    if !attachments.is_empty() {
+        losses.push(format!(
+            "{} attachment(s): {}",
+            attachments.len(),
+            attachments
+                .iter()
+                .map(|a| a.filename.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !source.github_links.is_empty() {
+        losses.push(format!(
+            "GitHub links: {}",
+            source
+                .github_links
+                .iter()
+                .map(|g| format!("{}#{} ({})", g.repo, g.number, g.state))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !dropped_labels.is_empty() {
+        losses.push(format!(
+            "labels not on the target project: {}",
+            dropped_labels.join(", ")
+        ));
+    }
+    note.push_str("\n\nThe source card was deleted after the copy");
+    if losses.is_empty() {
+        note.push('.');
+    } else {
+        note.push_str(&format!(
+            "; not carried over:\n{}",
+            losses
+                .iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    note
+}
+
+/// Truncate `s` to `max` chars, appending an ellipsis when cut.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
 /// Run a card command.
 pub(crate) async fn run(
     cmd: CardAction,
@@ -641,6 +1052,7 @@ pub(crate) async fn run(
                     "BLOCKED",
                     "ASSIGNEES",
                     "POSITION",
+                    "CREATED",
                     "ID",
                 ],
                 |c| {
@@ -652,6 +1064,7 @@ pub(crate) async fn run(
                         c.blocked.to_string(),
                         c.assignees.join(", "),
                         c.position.to_string(),
+                        c.created_at.clone(),
                         c.id.clone(),
                     ]
                 },
@@ -712,6 +1125,7 @@ pub(crate) async fn run(
             description,
             priority,
             blocked,
+            unblocked,
             milestone,
         } => {
             let mut update_card = v1::Card {
@@ -732,9 +1146,10 @@ pub(crate) async fn run(
                 paths.push("priority".to_string());
             }
             if blocked {
-                // Server-side quirk: the UpdateCard SQL only applies blocked=true,
-                // so the flag can be set but never cleared through the patch.
                 update_card.blocked = true;
+                paths.push("blocked".to_string());
+            } else if unblocked {
+                update_card.blocked = false;
                 paths.push("blocked".to_string());
             }
             if let Some(m) = milestone {
@@ -765,43 +1180,13 @@ pub(crate) async fn run(
             card_id,
             column,
             position,
-        } => {
-            // Resolve column titles against the card's current board.
-            let column = if super::resolve::looks_like_id(&column) {
-                column
-            } else {
-                let card = client
-                    .cards()
-                    .get_card_with_options(
-                        v1::GetCardRequest {
-                            card_id: card_id.clone(),
-                            ..Default::default()
-                        },
-                        object_id_options(&card_id),
-                    )
-                    .await?
-                    .into_owned();
-                let board_id = required(card.card, "card")?.board_id;
-                super::resolve::NameResolver::new(client)
-                    .column(&board_id, &column)
-                    .await?
-            };
-            let resp = client
-                .cards()
-                .move_card_with_options(
-                    v1::MoveCardRequest {
-                        card_id: card_id.clone(),
-                        to_column_id: column,
-                        to_position: position.unwrap_or_default(),
-                        idempotency_key: new_idempotency_key(),
-                        ..Default::default()
-                    },
-                    object_id_options(&card_id),
-                )
-                .await?
-                .into_owned();
-            render_card_detail(required(resp.card, "card")?, format).await
-        }
+            board,
+        } => match board {
+            Some(board) => {
+                move_card_to_board(client, &card_id, &board, &column, position, format).await
+            }
+            None => move_card_within_board(client, &card_id, &column, position, format).await,
+        },
         CardAction::Delete { card_id } => {
             client
                 .cards()
@@ -1193,6 +1578,7 @@ mod tests {
                 description: None,
                 priority: Some(PriorityArg::Low),
                 blocked: true,
+                unblocked: false,
                 milestone: None,
             },
             OutputFormat::Json,
@@ -1205,6 +1591,7 @@ mod tests {
                 card_id: "card_1".into(),
                 column: "col_2".into(),
                 position: Some(3),
+                board: None,
             },
             OutputFormat::Yaml,
             &client,
@@ -1315,9 +1702,51 @@ mod tests {
         .unwrap();
     }
 
+    const ULID: &str = "01HZY9JTKKHK3Y6XJJYHZ9Q5TV";
+
+    /// Redirect HOME to a tempdir, point the sso-gateway client at the
+    /// wiremock server, and seed a valid cached token.
+    fn sso_env(server_uri: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var(crate::auth::SSO_URL_ENV, server_uri);
+        }
+        sdk::config::set_active_context(sdk::config::Context {
+            domain: "example.com".into(),
+            ..Default::default()
+        });
+        sdk::config::set_auth_tokens(
+            "example.com",
+            &sdk::config::AuthTokens {
+                access_token: "cached-access".into(),
+                refresh_token: String::new(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(3600),
+                id_token: None,
+            },
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Mount a GetIdentity responder for the sso-gateway IdentityService.
+    async fn mount_identity(server: &MockServer) {
+        use sdk::auth::v1 as iam;
+        Mock::given(method("POST"))
+            .and(path("/iam.v1.IdentityService/GetIdentity"))
+            .respond_with(testutil::proto_response(&iam::Identity {
+                id: ULID.into(),
+                ..Default::default()
+            }))
+            .mount(server)
+            .await;
+    }
+
     #[tokio::test]
     async fn assign_and_unassign() {
         let server = MockServer::start().await;
+        mount_identity(&server).await;
         Mock::given(method("POST"))
             .and(path("/sunbeam.kanban.v1.CardService/AssignCard"))
             .respond_with(testutil::proto_response(&v1::AssignCardResponse {
@@ -1335,11 +1764,12 @@ mod tests {
             .mount(&server)
             .await;
 
+        let _home = sso_env(&server.uri());
         let client = testutil::client_for(&server.uri());
         run(
             CardAction::Assign {
                 card_id: "card_1".into(),
-                subject: "user:alice".into(),
+                subject: ULID.into(),
             },
             OutputFormat::Table,
             &client,
@@ -1349,13 +1779,41 @@ mod tests {
         run(
             CardAction::Unassign {
                 card_id: "card_1".into(),
-                subject: "user:alice".into(),
+                subject: format!("user:{ULID}"),
             },
             OutputFormat::Json,
             &client,
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn assign_rejects_garbage_subject_locally() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AssignCard"))
+            .respond_with(testutil::proto_response(&v1::AssignCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        let err = run(
+            CardAction::Assign {
+                card_id: "card_1".into(),
+                subject: "tony".into(),
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown user 'tony'"), "{msg}");
     }
 
     #[tokio::test]
@@ -1580,6 +2038,7 @@ mod tests {
                 description: None,
                 priority: None,
                 blocked: false,
+                unblocked: false,
                 milestone: Some("3.2".into()),
             },
             OutputFormat::Json,
@@ -1590,12 +2049,117 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_subject_passes_non_emails_through() {
-        assert_eq!(resolve_subject("user:alice").await.unwrap(), "user:alice");
+    async fn resolve_subject_rejects_non_id_subjects_locally() {
+        for raw in ["tony", "user:tony", "user:", "auth0|abc123"] {
+            let err = resolve_subject(raw).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!("unknown user '{raw}'")),
+                "{raw}: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_subject_verifies_ulid_via_identity_service() {
+        let server = MockServer::start().await;
+        mount_identity(&server).await;
+        let _home = sso_env(&server.uri());
+
+        assert_eq!(resolve_subject(ULID).await.unwrap(), format!("user:{ULID}"));
         assert_eq!(
-            resolve_subject("auth0|abc123").await.unwrap(),
-            "auth0|abc123"
+            resolve_subject(&format!("user:{ULID}")).await.unwrap(),
+            format!("user:{ULID}")
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_subject_errors_when_identity_missing() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/iam.v1.IdentityService/GetIdentity"))
+            .respond_with(testutil::connect_error(
+                404,
+                "not_found",
+                "identity not found",
+            ))
+            .mount(&server)
+            .await;
+        let _home = sso_env(&server.uri());
+
+        let err = resolve_subject(ULID).await.unwrap_err();
+        assert!(err.to_string().contains("Identity not found"), "{err}");
+    }
+
+    #[test]
+    fn card_out_surfaces_timestamps() {
+        let ts = |seconds: i64| {
+            buffa_types::google::protobuf::Timestamp {
+                seconds,
+                nanos: 0,
+                ..Default::default()
+            }
+            .into()
+        };
+        let card = v1::Card {
+            created_at: ts(1_700_000_000),
+            updated_at: ts(1_700_100_000),
+            completed_at: ts(1_700_200_000),
+            ..lean_card("card_1", "Fix crash")
+        };
+        let out = CardOut::from(card);
+        assert!(
+            out.created_at.starts_with("2023-11-14T"),
+            "{}",
+            out.created_at
+        );
+        assert!(!out.updated_at.is_empty());
+        assert!(!out.completed_at.is_empty());
+        let open = CardOut::from(lean_card("card_2", "Open"));
+        assert_eq!(open.created_at, "");
+        assert_eq!(open.completed_at, "");
+    }
+
+    #[tokio::test]
+    async fn update_unblocked_sends_false_patch() {
+        use sdk::kanban::prelude::buffa::Message;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/UpdateCard"))
+            .respond_with(testutil::proto_response(&v1::UpdateCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Update {
+                card_id: "card_1".into(),
+                title: None,
+                description: None,
+                priority: None,
+                blocked: false,
+                unblocked: true,
+                milestone: None,
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let req = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/UpdateCard"))
+            .expect("UpdateCard request");
+        let decoded = v1::UpdateCardRequest::decode(&mut req.body.as_slice()).unwrap();
+        let mask = decoded.update_mask.as_option().expect("update_mask");
+        assert_eq!(mask.paths, vec!["blocked".to_string()]);
+        let patch = decoded.card.as_option().expect("card patch");
+        assert!(!patch.blocked);
     }
 
     #[tokio::test]
@@ -1618,5 +2182,441 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("card gone"));
+    }
+
+    #[test]
+    fn truncate_cuts_long_text_with_ellipsis() {
+        assert_eq!(truncate("short", 10), "short");
+        let long = "x".repeat(200);
+        let out = truncate(&long, 120);
+        assert_eq!(out.chars().count(), 121);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn origin_note_summarizes_losses() {
+        let mut source = card("card_1", "Fix crash");
+        let comments = vec![
+            v1::Comment {
+                id: "cmt_1".into(),
+                body: "first".into(),
+                ..Default::default()
+            },
+            v1::Comment {
+                id: "cmt_2".into(),
+                body: "second".into(),
+                ..Default::default()
+            },
+        ];
+        let attachments = vec![v1::Attachment {
+            id: "att_1".into(),
+            filename: "design.png".into(),
+            ..Default::default()
+        }];
+        let note = origin_note(&source, &comments, &attachments, &["infra".to_string()]);
+        assert!(note.contains("Moved from BEAM-1"), "{note}");
+        assert!(note.contains("2 comment(s)"), "{note}");
+        assert!(note.contains("\"second\""), "{note}");
+        assert!(note.contains("1 attachment(s): design.png"), "{note}");
+        assert!(note.contains("sunbeam/cli#42 (open)"), "{note}");
+        assert!(
+            note.contains("labels not on the target project: infra"),
+            "{note}"
+        );
+
+        source.github_links.clear();
+        let clean = origin_note(&source, &[], &[], &[]);
+        assert!(clean.ends_with("deleted after the copy."), "{clean}");
+        assert!(!clean.contains("not carried over"), "{clean}");
+    }
+
+    /// Source card for cross-board move tests: labels, an assignee, a done
+    /// checklist item, a GitHub link, comments, and an attachment.
+    fn move_source_card() -> v1::Card {
+        let mut c = card("card_1", "Fix crash");
+        c.description = "details".into();
+        c.comments_count = 2;
+        c.attachments_count = 1;
+        c.due = buffa_types::google::protobuf::Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+            ..Default::default()
+        }
+        .into();
+        c
+    }
+
+    /// The recreated card on the target board (no assignees, so rendering it
+    /// never triggers sso-gateway email resolution).
+    fn move_target_card() -> v1::Card {
+        v1::Card {
+            id: "card_9".into(),
+            project_id: "proj_2".into(),
+            board_id: "board_2".into(),
+            column_id: "col_9".into(),
+            r#ref: "TRI-4".into(),
+            title: "Fix crash".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_board_move_recreates_and_deletes_source() {
+        use sdk::kanban::prelude::buffa::Message;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: move_source_card().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/GetBoard"))
+            .respond_with(testutil::proto_response(&v1::GetBoardResponse {
+                detail: v1::BoardDetail {
+                    board: v1::Board {
+                        id: "board_2".into(),
+                        project_id: "proj_2".into(),
+                        name: "Dev".into(),
+                        ..Default::default()
+                    }
+                    .into(),
+                    columns: vec![v1::Column {
+                        id: "col_9".into(),
+                        board_id: "board_2".into(),
+                        title: "Todo".into(),
+                        position: 1,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/ListComments"))
+            .respond_with(testutil::proto_response(&v1::ListCommentsResponse {
+                comments: vec![
+                    v1::Comment {
+                        id: "cmt_1".into(),
+                        body: "looking into it".into(),
+                        ..Default::default()
+                    },
+                    v1::Comment {
+                        id: "cmt_2".into(),
+                        body: "root cause found".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/sunbeam.kanban.v1.AttachmentService/ListAttachmentsByCard",
+            ))
+            .respond_with(testutil::proto_response(
+                &v1::ListAttachmentsByCardResponse {
+                    attachments: vec![v1::Attachment {
+                        id: "att_1".into(),
+                        filename: "design.png".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/CreateCard"))
+            .respond_with(testutil::proto_response(&v1::CreateCardResponse {
+                card: move_target_card().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.LabelService/ListLabels"))
+            .respond_with(testutil::proto_response(&v1::ListLabelsResponse {
+                labels: vec![v1::Label {
+                    id: "label_bug2".into(),
+                    project_id: "proj_2".into(),
+                    name: "bug".into(),
+                    style: "red".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/BulkUpdateCardLabels"))
+            .respond_with(testutil::proto_response(
+                &v1::BulkUpdateCardLabelsResponse {
+                    cards: vec![move_target_card()],
+                    ..Default::default()
+                },
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AssignCard"))
+            .respond_with(testutil::proto_response(&v1::AssignCardResponse {
+                card: move_target_card().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AddChecklistItem"))
+            .respond_with(testutil::proto_response(&v1::AddChecklistItemResponse {
+                card: v1::Card {
+                    checklist: vec![v1::ChecklistItem {
+                        id: "chk_new".into(),
+                        text: "repro".into(),
+                        done: false,
+                        position: 1,
+                        ..Default::default()
+                    }],
+                    ..move_target_card()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/UpdateChecklistItem"))
+            .respond_with(testutil::proto_response(&v1::UpdateChecklistItemResponse {
+                card: move_target_card().into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/AddComment"))
+            .respond_with(testutil::proto_response(&v1::AddCommentResponse {
+                comment: v1::Comment {
+                    id: "cmt_new".into(),
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/DeleteCard"))
+            .respond_with(testutil::proto_response(
+                &buffa_types::google::protobuf::Empty::default(),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Move {
+                card_id: "card_1".into(),
+                column: "Todo".into(),
+                position: None,
+                board: Some("board_2".into()),
+            },
+            OutputFormat::Json,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let paths: Vec<&str> = requests.iter().map(|r| r.url.path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/sunbeam.kanban.v1.CardService/GetCard",
+                "/sunbeam.kanban.v1.BoardService/GetBoard",
+                "/sunbeam.kanban.v1.CardService/ListComments",
+                "/sunbeam.kanban.v1.AttachmentService/ListAttachmentsByCard",
+                "/sunbeam.kanban.v1.CardService/CreateCard",
+                "/sunbeam.kanban.v1.LabelService/ListLabels",
+                "/sunbeam.kanban.v1.CardService/BulkUpdateCardLabels",
+                "/sunbeam.kanban.v1.CardService/AssignCard",
+                "/sunbeam.kanban.v1.CardService/AddChecklistItem",
+                "/sunbeam.kanban.v1.CardService/UpdateChecklistItem",
+                "/sunbeam.kanban.v1.CardService/AddComment",
+                "/sunbeam.kanban.v1.CardService/AddComment",
+                "/sunbeam.kanban.v1.CardService/DeleteCard",
+            ],
+            "unexpected RPC sequence: {paths:?}"
+        );
+
+        // The copy carries the source card's fields.
+        let create = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/CreateCard"))
+            .expect("CreateCard request");
+        let created = v1::CreateCardRequest::decode(&mut create.body.as_slice()).unwrap();
+        assert_eq!(created.board_id, "board_2");
+        assert_eq!(created.column_id, "col_9");
+        assert_eq!(created.title, "Fix crash");
+        assert_eq!(created.description, "details");
+        assert_eq!(created.priority.to_i32(), 3);
+        assert_eq!(created.urgency.to_i32(), 4);
+        assert_eq!(
+            created.due.as_option().map(|t| t.seconds),
+            Some(1_700_000_000)
+        );
+
+        // Labels re-matched by name against the target project's catalog.
+        let bulk = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/BulkUpdateCardLabels"))
+            .expect("BulkUpdateCardLabels request");
+        let bulked = v1::BulkUpdateCardLabelsRequest::decode(&mut bulk.body.as_slice()).unwrap();
+        assert_eq!(bulked.card_ids, vec!["card_9".to_string()]);
+        assert_eq!(bulked.label_ids, vec!["label_bug2".to_string()]);
+
+        // Assignee subject copied.
+        let assign = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/AssignCard"))
+            .expect("AssignCard request");
+        let assigned = v1::AssignCardRequest::decode(&mut assign.body.as_slice()).unwrap();
+        assert_eq!(assigned.card_id, "card_9");
+        assert_eq!(assigned.subject, "user:alice");
+
+        // Cross-reference comments: origin on the new card first, then the
+        // destination note on the source.
+        let comments: Vec<v1::AddCommentRequest> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/AddComment"))
+            .map(|r| v1::AddCommentRequest::decode(&mut r.body.as_slice()).unwrap())
+            .collect();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].card_id, "card_9");
+        assert!(comments[0].body.contains("Moved from BEAM-1"));
+        assert!(comments[0].body.contains("design.png"));
+        assert!(comments[0].body.contains("sunbeam/cli#42 (open)"));
+        assert!(comments[0].body.contains("root cause found"));
+        assert_eq!(comments[1].card_id, "card_1");
+        assert!(comments[1].body.contains("Moved to TRI-4"));
+    }
+
+    #[tokio::test]
+    async fn cross_board_move_failure_before_delete_leaves_source_untouched() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/GetBoard"))
+            .respond_with(testutil::proto_response(&v1::GetBoardResponse {
+                detail: v1::BoardDetail {
+                    columns: vec![v1::Column {
+                        id: "col_9".into(),
+                        board_id: "board_2".into(),
+                        title: "Todo".into(),
+                        position: 1,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/CreateCard"))
+            .respond_with(testutil::connect_error(500, "internal", "db down"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/DeleteCard"))
+            .respond_with(testutil::proto_response(
+                &buffa_types::google::protobuf::Empty::default(),
+            ))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        let err = run(
+            CardAction::Move {
+                card_id: "card_1".into(),
+                column: "Todo".into(),
+                position: None,
+                board: Some("board_2".into()),
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("db down"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn move_with_own_board_falls_back_to_plain_move() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/GetCard"))
+            .respond_with(testutil::proto_response(&v1::GetCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/MoveCard"))
+            .respond_with(testutil::proto_response(&v1::MoveCardResponse {
+                card: lean_card("card_1", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/CreateCard"))
+            .respond_with(testutil::proto_response(&v1::CreateCardResponse {
+                card: lean_card("card_9", "Fix crash").into(),
+                ..Default::default()
+            }))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.CardService/DeleteCard"))
+            .respond_with(testutil::proto_response(
+                &buffa_types::google::protobuf::Empty::default(),
+            ))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            CardAction::Move {
+                card_id: "card_1".into(),
+                column: "col_2".into(),
+                position: Some(2),
+                board: Some("board_1".into()),
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
     }
 }
