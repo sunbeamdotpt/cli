@@ -29,11 +29,70 @@ pub fn render<T: Serialize>(val: &T, format: OutputFormat) -> Result<()> {
             print!("{}", serde_yaml::to_string(val)?);
         }
         OutputFormat::Table => {
-            // Fallback: pretty JSON when no table renderer is provided
-            println!("{}", serde_json::to_string_pretty(val)?);
+            let value = serde_json::to_value(val)?;
+            match &value {
+                serde_json::Value::Object(_) => println!("{}", detail(&value)),
+                // Scalars and arrays have no field names to tabulate.
+                _ => println!("{}", serde_json::to_string_pretty(&value)?),
+            }
         }
     }
     Ok(())
+}
+
+/// Render an object as a two-column FIELD/VALUE table for detail views.
+///
+/// Scalars print plainly; flat arrays join with ", "; nested objects and
+/// arrays of objects fall back to compact JSON; newlines in strings are
+/// flattened so rows stay one line tall. Non-object values render as pretty
+/// JSON.
+pub fn detail(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let map = match value {
+        Value::Object(map) => map,
+        other => {
+            return serde_json::to_string_pretty(other).unwrap_or_else(|_| "?".into());
+        }
+    };
+    let rows: Vec<Vec<String>> = map
+        .iter()
+        .map(|(k, v)| vec![k.clone(), detail_cell(v)])
+        .collect();
+    table(&rows, &["FIELD", "VALUE"])
+}
+
+/// Truncate `s` to `max` chars, appending an ellipsis when cut.
+pub(crate) fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// One-line cell rendering for [`detail`]. Long values are truncated so a
+/// single field can't blow out the table width; the full value is available
+/// via `-o json` / `-o yaml`.
+fn detail_cell(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let rendered = match v {
+        Value::Null => "-".into(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.replace('\n', " ⏎ "),
+        Value::Array(items) => {
+            if items.is_empty() {
+                "-".into()
+            } else if items.iter().all(|i| !i.is_object() && !i.is_array()) {
+                items.iter().map(detail_cell).collect::<Vec<_>>().join(", ")
+            } else {
+                serde_json::to_string(v).unwrap_or_else(|_| "?".into())
+            }
+        }
+        Value::Object(_) => serde_json::to_string(v).unwrap_or_else(|_| "?".into()),
+    };
+    truncate(&rendered, 120)
 }
 
 /// Render a list of items as table / json / yaml.
@@ -156,6 +215,56 @@ mod tests {
         let val = serde_json::json!({"key": "value"});
         // Just ensure it doesn't panic
         render(&val, OutputFormat::Json).unwrap();
+    }
+
+    #[test]
+    fn test_detail_renders_field_value_table() {
+        let val = serde_json::json!({
+            "id": "01K",
+            "title": "Fix crash",
+            "priority": "high",
+            "blocked": false,
+            "completed_at": "",
+            "labels": ["bug", "backend"],
+            "empty": [],
+            "assignees": [{"subject": "user:1"}],
+            "meta": {"a": 1},
+            "missing": null,
+            "description": "line one\nline two",
+        });
+        let out = detail(&val);
+        let w = "completed_at".len(); // longest key drives the FIELD width
+        let row = |k: &str, v: &str| format!("{k:<w$}  {v}");
+        assert!(
+            out.lines()
+                .next()
+                .unwrap()
+                .starts_with(&row("FIELD", "VALUE")),
+            "{out}"
+        );
+        assert!(out.contains(&row("id", "01K")), "{out}");
+        assert!(out.contains(&row("blocked", "false")), "{out}");
+        assert!(out.contains(&row("labels", "bug, backend")), "{out}");
+        assert!(out.contains(&row("empty", "-")), "{out}");
+        assert!(out.contains(&row("missing", "-")), "{out}");
+        assert!(
+            out.contains(&row("assignees", "[{\"subject\":\"user:1\"}]")),
+            "{out}"
+        );
+        assert!(out.contains(&row("meta", "{\"a\":1}")), "{out}");
+        assert!(
+            out.contains(&row("description", "line one ⏎ line two")),
+            "{out}"
+        );
+        // No raw JSON braces at line starts — this is a table, not a dump.
+        assert!(!out.starts_with('{'), "{out}");
+    }
+
+    #[test]
+    fn test_detail_non_object_falls_back_to_json() {
+        let val = serde_json::json!(["a", "b"]);
+        let out = detail(&val);
+        assert!(out.starts_with('['), "{out}");
     }
 
     #[test]

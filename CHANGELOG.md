@@ -19,6 +19,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `-o table` on detail views (`kanban card get`, `board get`, `label get`,
+  secrets `get`, …) emitted pretty JSON — the table branch of
+  `output::render` was a JSON fallback. It now renders a two-column
+  FIELD/VALUE table: scalars plain, flat arrays comma-joined, nested
+  structures compact JSON, newlines flattened, values capped at 120 chars
+  (full data via `-o json`/`-o yaml`) (CLI-028).
 - `kanban card label add/set/remove` sent the card id as the
   `x-sunbeam-object-id` header on `BulkUpdateCardLabels`, which the server
   gates on the `KanbanBoard` namespace + `edit` relation — every caller,

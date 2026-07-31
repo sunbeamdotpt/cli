@@ -8,7 +8,7 @@ use sdk::kanban::v1;
 use serde::Serialize;
 
 use super::{fmt_ts, mutating_options, new_idempotency_key, object_id_options, required};
-use crate::output::{OutputFormat, render, render_list};
+use crate::output::{OutputFormat, render, render_list, truncate};
 
 /// Card actions.
 #[derive(Debug, Clone, Subcommand)]
@@ -1003,16 +1003,6 @@ fn origin_note(
         ));
     }
     note
-}
-
-/// Truncate `s` to `max` chars, appending an ellipsis when cut.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max).collect();
-    out.push('…');
-    out
 }
 
 /// Run a card command.
