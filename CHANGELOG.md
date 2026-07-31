@@ -11,6 +11,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `kanban template create/update --columns` — define a board template's
+  columns from the CLI with a compact spec:
+  `--columns "todo:blue,in progress:amber,review:purple,done:green!"`
+  (`title[:accent][!]`, position by order, `!` = completion lane). `is_done`
+  is plumbed through; the server persists it once KANBAN-033 ships
+  (CLI-024).
+- `kanban board create --template <name|id>` — apply a template's columns
+  to a new board (client-side fan-out; template names resolve against the
+  board's project plus globals), and `kanban board create --columns`
+  for a template-free bulk spec (CLI-024).
 - `kanban card checklist add|toggle|remove|set` — manage a card's
   checklist items (the `(n/m)` list the UI renders) from the CLI. Toggle
   and remove accept an item ID or exact text; `set --items "a,b,c"` bulk

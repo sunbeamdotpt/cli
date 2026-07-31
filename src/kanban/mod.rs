@@ -179,6 +179,48 @@ pub(crate) fn mutating_options(object_id: &str) -> connectrpc::client::CallOptio
     object_id_options(object_id).with_header("x-sunbeam-idempotency-key", new_idempotency_key())
 }
 
+/// One parsed `--columns` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ColumnSpec {
+    pub title: String,
+    pub accent: String,
+    pub is_done: bool,
+    pub position: i32,
+}
+
+/// Parse a `--columns` spec: comma-separated `title[:accent][!]` entries
+/// (position by order, `!` marks a completion lane). Shared by
+/// `template create/update --columns` and `board create --columns` (CLI-024).
+pub(crate) fn parse_columns_spec(spec: &str) -> Result<Vec<ColumnSpec>> {
+    let mut out = Vec::new();
+    for entry in spec.split(',').map(str::trim) {
+        if entry.is_empty() {
+            continue;
+        }
+        let (entry, is_done) = match entry.strip_suffix('!') {
+            Some(stripped) => (stripped.trim_end(), true),
+            None => (entry, false),
+        };
+        let (title, accent) = match entry.split_once(':') {
+            Some((t, a)) => (t.trim(), a.trim()),
+            None => (entry, ""),
+        };
+        if title.is_empty() {
+            sdk::bail!("empty column title in --columns entry {entry:?}");
+        }
+        out.push(ColumnSpec {
+            title: title.to_string(),
+            accent: accent.to_string(),
+            is_done,
+            position: out.len() as i32 + 1,
+        });
+    }
+    if out.is_empty() {
+        sdk::bail!("--columns needs at least one column title");
+    }
+    Ok(out)
+}
+
 /// Unwrap a required message field from a synthesized RPC response wrapper.
 ///
 /// The ConnectRPC codegen wraps bare `returns (Message)` responses in a
@@ -307,12 +349,16 @@ async fn dispatch_authed(
                     description,
                     icon,
                     visibility,
+                    template,
+                    columns,
                 } => boards::BoardAction::Create {
                     project: resolver.project(&project).await?,
                     name,
                     description,
                     icon,
                     visibility,
+                    template,
+                    columns,
                 },
                 boards::BoardAction::Update {
                     board_id,
@@ -707,6 +753,7 @@ async fn dispatch_authed(
                     project,
                     name,
                     description,
+                    columns,
                 } => templates::TemplateAction::Create {
                     project: match project {
                         Some(p) => Some(resolver.project(&p).await?),
@@ -714,6 +761,7 @@ async fn dispatch_authed(
                     },
                     name,
                     description,
+                    columns,
                 },
                 other => other,
             };
@@ -980,6 +1028,40 @@ mod tests {
         let opts = mutating_options("card_1");
         assert_eq!(opts.headers().get("x-sunbeam-object-id").unwrap(), "card_1");
         assert!(opts.headers().get("x-sunbeam-idempotency-key").is_some());
+    }
+
+    #[test]
+    fn parse_columns_spec_parses_accents_done_and_positions() {
+        let specs = parse_columns_spec("todo:blue, in progress,done:green!").unwrap();
+        assert_eq!(
+            specs,
+            vec![
+                ColumnSpec {
+                    title: "todo".into(),
+                    accent: "blue".into(),
+                    is_done: false,
+                    position: 1,
+                },
+                ColumnSpec {
+                    title: "in progress".into(),
+                    accent: String::new(),
+                    is_done: false,
+                    position: 2,
+                },
+                ColumnSpec {
+                    title: "done".into(),
+                    accent: "green".into(),
+                    is_done: true,
+                    position: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_columns_spec_rejects_empty() {
+        assert!(parse_columns_spec("  ").is_err());
+        assert!(parse_columns_spec(":blue").is_err());
     }
 
     #[test]

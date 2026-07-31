@@ -39,6 +39,15 @@ pub enum BoardAction {
         /// Visibility (defaults to private, with a warning).
         #[arg(long, value_enum)]
         visibility: Option<VisibilityArg>,
+        /// Apply a template's columns (template ID or name) after creating
+        /// the board.
+        #[arg(long, conflicts_with = "columns")]
+        template: Option<String>,
+        /// Bulk columns: comma-separated `title[:accent][!]` entries
+        /// (position by order, `!` marks a completion lane), e.g.
+        /// --columns "todo:blue,in progress:amber,review:purple,done:green!"
+        #[arg(long)]
+        columns: Option<String>,
     },
     /// Update a board.
     Update {
@@ -316,6 +325,8 @@ pub(crate) async fn run(
             description,
             icon,
             visibility,
+            template,
+            columns,
         } => {
             let visibility = visibility.unwrap_or_else(|| {
                 tracing::warn!(
@@ -324,6 +335,36 @@ pub(crate) async fn run(
                 );
                 VisibilityArg::Private
             });
+            // Resolve the column source BEFORE creating the board so a bad
+            // spec or unknown template can't orphan a columnless board.
+            let specs: Vec<super::ColumnSpec> = if let Some(spec) = columns {
+                super::parse_columns_spec(&spec)?
+            } else if let Some(template) = template {
+                // Resolve against the board's project (+ global templates).
+                let template_id = super::resolve::NameResolver::new(client)
+                    .template(Some(&project), &template)
+                    .await?;
+                let resp = client
+                    .templates()
+                    .get_template(v1::GetTemplateRequest {
+                        template_id,
+                        ..Default::default()
+                    })
+                    .await?
+                    .into_owned();
+                required(resp.template, "template")?
+                    .columns
+                    .into_iter()
+                    .map(|c| super::ColumnSpec {
+                        title: c.title,
+                        accent: c.accent,
+                        is_done: c.is_done,
+                        position: c.position,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let resp = client
                 .boards()
                 .create_board_with_options(
@@ -340,7 +381,27 @@ pub(crate) async fn run(
                 )
                 .await?
                 .into_owned();
-            render(&BoardOut::from(required(resp.board, "board")?), format)
+            let board = required(resp.board, "board")?;
+
+            for spec in specs {
+                client
+                    .boards()
+                    .add_column_with_options(
+                        v1::AddColumnRequest {
+                            board_id: board.id.clone(),
+                            title: spec.title,
+                            accent: spec.accent,
+                            wip_limit: 0,
+                            position: spec.position,
+                            idempotency_key: new_idempotency_key(),
+                            is_done: spec.is_done,
+                            ..Default::default()
+                        },
+                        object_id_options(&board.id),
+                    )
+                    .await?;
+            }
+            render(&BoardOut::from(board), format)
         }
         BoardAction::Update {
             board_id,
@@ -720,6 +781,8 @@ mod tests {
                 description: None,
                 icon: Some("star".into()),
                 visibility: Some(VisibilityArg::Internal),
+                template: None,
+                columns: None,
             },
             OutputFormat::Table,
             &client,
@@ -734,6 +797,8 @@ mod tests {
                 description: None,
                 icon: None,
                 visibility: None,
+                template: None,
+                columns: None,
             },
             OutputFormat::Json,
             &client,
@@ -762,6 +827,156 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_board_with_columns_spec_fans_out() {
+        use sdk::kanban::prelude::buffa::Message;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/CreateBoard"))
+            .respond_with(testutil::proto_response(&v1::CreateBoardResponse {
+                board: board("board_new", "New").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/AddColumn"))
+            .respond_with(testutil::proto_response(&v1::AddColumnResponse {
+                column: column("col_new", "x").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            BoardAction::Create {
+                project: "proj_1".into(),
+                name: "New".into(),
+                description: None,
+                icon: None,
+                visibility: Some(VisibilityArg::Internal),
+                template: None,
+                columns: Some("todo:blue,in progress,done:green!".into()),
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let adds: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/AddColumn"))
+            .collect();
+        assert_eq!(adds.len(), 3);
+        let first = v1::AddColumnRequest::decode(&mut adds[0].body.as_slice()).unwrap();
+        assert_eq!(first.board_id, "board_new");
+        assert_eq!(first.title, "todo");
+        assert_eq!(first.accent, "blue");
+        assert_eq!(first.position, 1);
+        assert!(!first.is_done);
+        let last = v1::AddColumnRequest::decode(&mut adds[2].body.as_slice()).unwrap();
+        assert_eq!(last.title, "done");
+        assert_eq!(last.position, 3);
+        assert!(last.is_done);
+    }
+
+    #[tokio::test]
+    async fn create_board_with_template_fans_out_template_columns() {
+        use sdk::kanban::prelude::buffa::Message;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.TemplatesService/ListTemplates"))
+            .respond_with(testutil::proto_response(&v1::ListTemplatesResponse {
+                templates: vec![v1::BoardTemplate {
+                    id: "tmpl_1".into(),
+                    name: "Standard".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.TemplatesService/GetTemplate"))
+            .respond_with(testutil::proto_response(&v1::GetTemplateResponse {
+                template: v1::BoardTemplate {
+                    id: "tmpl_1".into(),
+                    name: "Standard".into(),
+                    columns: vec![
+                        v1::TemplateColumn {
+                            title: "Todo".into(),
+                            position: 1,
+                            accent: "blue".into(),
+                            ..Default::default()
+                        },
+                        v1::TemplateColumn {
+                            title: "Done".into(),
+                            position: 2,
+                            accent: "green".into(),
+                            is_done: true,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }
+                .into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/CreateBoard"))
+            .respond_with(testutil::proto_response(&v1::CreateBoardResponse {
+                board: board("board_new", "New").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.BoardService/AddColumn"))
+            .respond_with(testutil::proto_response(&v1::AddColumnResponse {
+                column: column("col_new", "x").into(),
+                ..Default::default()
+            }))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        run(
+            BoardAction::Create {
+                project: "proj_1".into(),
+                name: "New".into(),
+                description: None,
+                icon: None,
+                visibility: Some(VisibilityArg::Internal),
+                template: Some("standard".into()),
+                columns: None,
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let adds: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/AddColumn"))
+            .collect();
+        assert_eq!(adds.len(), 2);
+        let first = v1::AddColumnRequest::decode(&mut adds[0].body.as_slice()).unwrap();
+        assert_eq!(first.title, "Todo");
+        assert_eq!(first.accent, "blue");
+        let second = v1::AddColumnRequest::decode(&mut adds[1].body.as_slice()).unwrap();
+        assert_eq!(second.title, "Done");
+        assert!(second.is_done);
     }
 
     #[tokio::test]

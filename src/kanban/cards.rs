@@ -801,8 +801,7 @@ async fn run_card_checklist(
                     },
                     mutating_options(&card_id),
                 )
-                .await?
-                .into_owned();
+                .await?;
             // Remove returns Empty; re-fetch for the rendered detail.
             render_card_detail(fetch_card(client, &card_id).await?, format).await
         }
@@ -819,8 +818,7 @@ async fn run_card_checklist(
                         },
                         mutating_options(&card_id),
                     )
-                    .await?
-                    .into_owned();
+                    .await?;
             }
             for (i, text) in items
                 .split(',')
@@ -840,8 +838,7 @@ async fn run_card_checklist(
                         },
                         object_id_options(&card_id),
                     )
-                    .await?
-                    .into_owned();
+                    .await?;
             }
             render_card_detail(fetch_card(client, &card_id).await?, format).await
         }

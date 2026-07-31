@@ -35,6 +35,11 @@ pub enum TemplateAction {
         /// Description.
         #[arg(short, long)]
         description: Option<String>,
+        /// Template columns: comma-separated `title[:accent][!]` entries
+        /// (position by order, `!` marks a completion lane), e.g.
+        /// --columns "todo:blue,in progress:amber,review:purple,done:green!"
+        #[arg(short, long)]
+        columns: Option<String>,
     },
     /// Update a template.
     Update {
@@ -46,6 +51,9 @@ pub enum TemplateAction {
         /// New description.
         #[arg(short, long)]
         description: Option<String>,
+        /// Replace the template's columns (same spec as create --columns).
+        #[arg(short, long)]
+        columns: Option<String>,
     },
     /// Delete a template.
     Delete {
@@ -60,6 +68,7 @@ struct TemplateColumnOut {
     title: String,
     position: i32,
     accent: String,
+    is_done: bool,
 }
 
 impl From<v1::TemplateColumn> for TemplateColumnOut {
@@ -68,8 +77,23 @@ impl From<v1::TemplateColumn> for TemplateColumnOut {
             title: c.title,
             position: c.position,
             accent: c.accent,
+            is_done: c.is_done,
         }
     }
+}
+
+/// Map parsed `--columns` entries to template column protos.
+fn template_columns(specs: &[super::ColumnSpec]) -> Vec<v1::TemplateColumn> {
+    specs
+        .iter()
+        .map(|s| v1::TemplateColumn {
+            title: s.title.clone(),
+            position: s.position,
+            accent: s.accent.clone(),
+            is_done: s.is_done,
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Serializable board template for output.
@@ -155,8 +179,13 @@ pub(crate) async fn run(
             project,
             name,
             description,
+            columns,
         } => {
             let object_id = project.clone().unwrap_or_else(|| "global".to_string());
+            let columns = columns
+                .as_deref()
+                .map(super::parse_columns_spec)
+                .transpose()?;
             let resp = client
                 .templates()
                 .create_template_with_options(
@@ -164,7 +193,7 @@ pub(crate) async fn run(
                         project_id: project.unwrap_or_default(),
                         name,
                         description: description.unwrap_or_default(),
-                        columns: Vec::new(),
+                        columns: columns.as_deref().map(template_columns).unwrap_or_default(),
                         ..Default::default()
                     },
                     mutating_options(&object_id),
@@ -180,6 +209,7 @@ pub(crate) async fn run(
             template_id,
             name,
             description,
+            columns,
         } => {
             let template_id = super::resolve::NameResolver::new(client)
                 .template(None, &template_id)
@@ -190,6 +220,13 @@ pub(crate) async fn run(
             }
             if description.is_some() {
                 paths.push("description".to_string());
+            }
+            let columns = columns
+                .as_deref()
+                .map(super::parse_columns_spec)
+                .transpose()?;
+            if columns.is_some() {
+                paths.push("columns".to_string());
             }
             let resp = client
                 .templates()
@@ -203,7 +240,7 @@ pub(crate) async fn run(
                         .into(),
                         name: name.unwrap_or_default(),
                         description: description.unwrap_or_default(),
-                        columns: Vec::new(),
+                        columns: columns.as_deref().map(template_columns).unwrap_or_default(),
                         ..Default::default()
                     },
                     mutating_options(&template_id),
@@ -350,6 +387,7 @@ mod tests {
                 project: Some("proj_1".into()),
                 name: "New".into(),
                 description: Some("d".into()),
+                columns: None,
             },
             OutputFormat::Table,
             &client,
@@ -361,6 +399,7 @@ mod tests {
                 project: None,
                 name: "Global".into(),
                 description: None,
+                columns: Some("todo:blue,in progress:amber,done:green!".into()),
             },
             OutputFormat::Json,
             &client,
@@ -372,6 +411,7 @@ mod tests {
                 template_id: "tmpl_1".into(),
                 name: Some("Renamed".into()),
                 description: None,
+                columns: Some("backlog,done!".into()),
             },
             OutputFormat::Yaml,
             &client,
@@ -387,6 +427,33 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // The --columns spec lands on the wire (CLI-024).
+        use sdk::kanban::prelude::buffa::Message;
+        let requests = server.received_requests().await.unwrap();
+        let creates: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path().ends_with("/CreateTemplate"))
+            .collect();
+        let with_columns =
+            v1::CreateTemplateRequest::decode(&mut creates[1].body.as_slice()).unwrap();
+        assert_eq!(with_columns.columns.len(), 3);
+        assert_eq!(with_columns.columns[0].title, "todo");
+        assert_eq!(with_columns.columns[0].accent, "blue");
+        assert_eq!(with_columns.columns[0].position, 1);
+        assert!(!with_columns.columns[0].is_done);
+        assert_eq!(with_columns.columns[2].title, "done");
+        assert!(with_columns.columns[2].is_done);
+
+        let update = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/UpdateTemplate"))
+            .expect("UpdateTemplate request");
+        let updated = v1::UpdateTemplateRequest::decode(&mut update.body.as_slice()).unwrap();
+        assert_eq!(updated.columns.len(), 2);
+        assert!(updated.columns[1].is_done);
+        let mask = updated.update_mask.as_option().expect("update mask");
+        assert!(mask.paths.contains(&"columns".to_string()));
     }
 
     #[tokio::test]
