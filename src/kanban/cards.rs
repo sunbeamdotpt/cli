@@ -606,7 +606,9 @@ async fn update_card_labels(
                 idempotency_key: new_idempotency_key(),
                 ..Default::default()
             },
-            object_id_options(card_id),
+            // BulkUpdateCardLabels is gated on KanbanBoard + edit, so the
+            // object id must be the board's, not the card's.
+            object_id_options(&card.board_id),
         )
         .await?
         .into_owned();
@@ -1378,7 +1380,7 @@ mod tests {
     use super::*;
     use crate::kanban::testutil;
     use sdk::kanban::prelude::buffa;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer};
 
     fn card(id: &str, title: &str) -> v1::Card {
@@ -1920,6 +1922,8 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/sunbeam.kanban.v1.CardService/BulkUpdateCardLabels"))
+            // Gated on KanbanBoard + edit: object id must be the board's.
+            .and(header("x-sunbeam-object-id", "board_1"))
             .respond_with(testutil::proto_response(
                 &v1::BulkUpdateCardLabelsResponse {
                     cards: vec![labeled_card()],

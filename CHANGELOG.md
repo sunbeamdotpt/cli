@@ -7,6 +7,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [Unreleased]
+
+### Fixed
+
+- `kanban card label add/set/remove` sent the card id as the
+  `x-sunbeam-object-id` header on `BulkUpdateCardLabels`, which the server
+  gates on the `KanbanBoard` namespace + `edit` relation — every caller,
+  even project owners, got `permission_denied` (KANBAN-039). The CLI now
+  sends the card's board id (CLI-023).
+
 ## [3.3.0] - 2026-07-31
 
 ### Added
