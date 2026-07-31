@@ -394,3 +394,80 @@ still the only manual step in the train.
 
 Board end state: CLI-013 done under the '3.2' milestone with a full
 comment trail. Gates: fmt/clippy/716 nextest green (1 docker-gated skip).
+
+
+## 2026-07-31 — v3.3.0 shipped; tap renamed homebrew-tap, test-bot root-caused and fixed
+
+Human-directed release (charter escalation satisfied in-session). Eight
+cards scoped off the cli dev board and shipped under the new '3.3'
+milestone:
+
+- CLI-018 (high): `card assign` stored arbitrary garbage subjects because
+  `resolve_subject` passed non-email input through verbatim. Now emails
+  resolve via IdentityService as before, ULID/`user:<ulid>` input is
+  shape-checked and existence-verified via GetIdentity (new
+  `auth::resolve_verified_subject`), everything else fails fast
+  client-side. Server-side KANBAN-029 will backstop it; the cli validates
+  early for the error message quality.
+- CLI-019: `card list` json/yaml carries created_at/updated_at/
+  completed_at (server v2026.07.9 returns them; cli dropped them) +
+  CREATED table column.
+- CLI-014+015 (one work item): `card update --unblocked` (update_mask
+  ["blocked"] with a false patch — removes 3.2.0's set-only limitation)
+  and `board column add/update --is-done/--no-is-done` + is_done in board
+  output, so boards opt into completed_at/milestone stats without the DB
+  UPDATE workaround. Template-side Done marking is NOT cli-actionable
+  (proto TemplateColumn has no is_done) — filed KANBAN-033.
+- CLI-010: both bugs were cli-side in src/auth.rs (no sdk ticket needed):
+  discover_oidc gained retry/backoff/caching, and transport failures
+  during discovery/refresh now surface as connectivity errors instead of
+  "Session expired" — only genuine 401/invalid_grant advises re-login.
+- CLI-011: sdk v3.3.x adoption cleanup — test prewarm dropped, kanban
+  retry matches SunbeamError::Connect + ErrorCode::Unavailable
+  structurally, device-poll integration test un-ignored (cli's image pin
+  was a stale v2026.07.20; bumped to v2026.07.22, test passes for real).
+  Context sso_url/sso_client_id adoption deliberately skipped (no cli
+  duplication worth the churn).
+- CLI-020: `card move --board` cross-board/project relocate via client
+  side recreate-and-close (proto has no TransferCard — filed KANBAN-034):
+  copies fields/labels-by-name/assignees/checklist, cross-references both
+  cards, then DELETES the source — never done-stamps, so completion
+  metrics stay clean. Failure before the delete leaves the source
+  untouched (wiremock-verified 13-RPC sequence).
+- CLI-017: closed no-op — sdk build.rs `buf export`s sso-gateway protos
+  unpinned at build time; stubs already carried v2026.07.30 and the cli
+  sends no Application RPCs.
+
+Dependency wrinkle: sdk v3.3.1 (test-only release, SDK-011) had its
+release commit on mainline but no pushed tag — filed SDK-013, tag pushed
+within the hour; adopted before the train. Gates: fmt/clippy/738 nextest
+green (incl. docker-gated kanban end-to-end + un-ignored device-poll).
+Train: 5 commits + `release: v3.3.0` (1e1d387c) pushed; CI tagged v3.3.0;
+release workflow green, 9 assets.
+
+**Tap test-bot root cause (three releases of manual landings)**: the repo
+was named `sunbeamdotpt/tap`, but every piece of brew tooling keys off
+the `homebrew-*` convention — `Tap#full_name` resolves to
+`sunbeamdotpt/homebrew-tap`, which never equals `GITHUB_REPOSITORY`, so
+test-bot's PR diff detection was skipped entirely ("Did not find any
+formulae or commits to test!"); setup-homebrew also only checks out taps
+matching `*/homebrew-*`. Push runs passed vacuously (--only-formulae is
+PR-only) — mainline CI had never actually tested the formula. Fix:
+renamed the repo to `sunbeamdotpt/homebrew-tap` (human-approved; GH
+redirects old URLs), updated references in tap bump-formula.yml/README
+and cli release.yml (a0d619fb). The first HONEST runs then caught real
+previously-invisible debt: shellcheck/shfmt offenses in
+scripts/bump-formula.sh (`brew style --fix`) and a shellcheck 0.11
+SC2312 the local 0.10 didn't know. Two operational gotchas learned:
+closing a PR silently cancels auto-merge (re-arm with `gh pr merge
+--auto`), and GitHub can serve a stale refs/pull/N/merge (fix by syncing
+the branch). PR #7 auto-merged hands-off (squash, 14:15 UTC); `brew info
+sunbeam` → 3.3.0. The release train is now hands-off end to end. Also:
+newer Homebrew requires `brew trust sunbeamdotpt/tap` per machine, and
+local tap clones should be repointed to the renamed remote (redirect
+works in the meantime).
+
+Board end state: CLI-010/011/014/015/017/018/019/020 done under the '3.3'
+milestone with full comment trails. Outbound: KANBAN-033/034 (kanban
+dev), SDK-013 (sdk dev, closed same-day). Remaining todo: CLI-005
+(still blocked on server KANBAN-001), CLI-012 (man pages), CLI-013.

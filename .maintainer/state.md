@@ -3,13 +3,46 @@ type: State
 title: Current state of cli
 description: What is in flight, what is blocked, what the next session should pick up first.
 tags: [state]
-timestamp: 2026-07-27T00:00:00Z
+timestamp: 2026-07-31T00:00:00Z
 ---
 
-# State — 2026-07-27
+# State — 2026-07-31
 
 ## In flight
 
+- **v3.3.0 RELEASED 2026-07-31** (sdk v3.3.0 → v3.3.1). Eight cards under
+  the cli '3.3' milestone: CLI-018 (assign subject validation),
+  CLI-019 (card list timestamps), CLI-014+015 (`card update --unblocked`,
+  `board column add/update --is-done`, `is_done` in board output),
+  CLI-010 (OIDC discovery retry/backoff/cache + transport-vs-auth error
+  split — both bugs were cli-side in src/auth.rs), CLI-011 (sdk v3.3.x
+  fixes adopted: test prewarm dropped, structural ConnectError matching,
+  device-poll test un-ignored and passing against gateway v2026.07.22),
+  CLI-020 (`card move --board` cross-board recreate-and-close; deletes
+  source instead of done-stamping), CLI-017 (closed no-op — sso-gateway
+  stubs regenerate at build time from unpinned BSR). Gates green
+  (fmt/clippy/738 nextest). GH release: 9 assets. sdk v3.3.1's tag was
+  missing after its release commit — filed SDK-013, tag pushed same day.
+  Filed KANBAN-033 (template Done-column is_done needs
+  TemplateColumn.is_done) and KANBAN-034 (first-class TransferCard
+  endpoint) on the kanban dev board.
+- **Tap renamed + test-bot FIXED 2026-07-31** — the repo-wide
+  pull_request failure ("Did not find any formulae or commits to test!")
+  root-caused: the repo was named `sunbeamdotpt/tap`, but brew tooling
+  keys off the `homebrew-*` convention — `Tap#full_name` resolves to
+  `sunbeamdotpt/homebrew-tap`, never matching `GITHUB_REPOSITORY`, so
+  test-bot skipped PR diff detection; push runs passed vacuously
+  (`--only-formulae` is PR-only). Renamed to
+  `sunbeamdotpt/homebrew-tap` (GH redirects old URLs; updated refs in
+  tap bump-formula.yml/README + cli release.yml a0d619fb). First honest
+  runs then surfaced real, previously-invisible issues: shellcheck/shfmt
+  offenses in scripts/bump-formula.sh (fixed via `brew style --fix`) and
+  a shellcheck 0.11-vs-0.10 gap (SC2312). PR #7 (3.3.0 bump) auto-merged
+  hands-off — squash at 14:15 UTC. `brew info sunbeam` → 3.3.0.
+  **The release train is now hands-off end to end.** NOTE: closing a PR
+  cancels auto-merge; `gh pr merge --auto` must be re-armed after
+  close/reopen. Also newer Homebrew requires `brew trust sunbeamdotpt/tap`
+  on each machine.
 - **v3.2.1 RELEASED 2026-07-27** (patch: CLI-013 card-template name
   resolution now covers project-scoped templates; `-p/--project` on
   get/update/delete). Gates green (fmt/clippy/716 nextest). GH release: 9
@@ -62,13 +95,13 @@ timestamp: 2026-07-27T00:00:00Z
 
 ## Blocked / waiting
 
-- **tap: pull_request test-bot repo-wide broken** (2026-07-24, still open):
-  every bump PR fails "Did not find any formulae or commits to test!", so
-  auto-merge never fires and each release needs a manual mainline landing
-  (cherry-pick the bot branch; done for 3.1.2 #3 and 3.2.0 #4). Tap-repo fix.
+- ~~tap: pull_request test-bot repo-wide broken~~ FIXED 2026-07-31 —
+  root cause was the repo name (see In flight): renamed to
+  `sunbeamdotpt/homebrew-tap`; PR #7 auto-merged hands-off.
   ~~bump-formula exit 127~~ FIXED 2026-07-24 (8bf6217): reusable workflows
   inherit the caller's github context, so the checkout pulled the source
-  repo, not the tap — checkout now pins `repository: sunbeamdotpt/tap`.
+  repo, not the tap — checkout now pins `repository:
+  sunbeamdotpt/homebrew-tap`.
   The 3.1.3 formula bump was never landed (tap went 3.1.2 → 3.2.0 direct).
 - **Kanban tracking** (2026-07-24): sdk dev board carries the tracked
   sdk/sso items as SDK-001..009 (priority as scoring — no numeric field
@@ -122,14 +155,13 @@ timestamp: 2026-07-27T00:00:00Z
 
 ## Pick up first
 
-- Nothing pressing — v3.2.1 is fully shipped (release + tap + boards).
-  Next session: check the cli boards for new cards.
+- Nothing pressing — v3.3.0 is fully shipped (release + tap auto-merge +
+  boards) and the release train is hands-off end to end. Next session:
+  check the cli boards for new cards (todo: CLI-005 blocked on
+  KANBAN-001; CLI-012 man pages; CLI-013; plus the deferred kanban UX
+  batch below).
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
-- **Fix the tap PR test-bot** (the last manual step in the train): every
-  bump PR fails "Did not find any formulae or commits to test!" repo-wide.
-  Once fixed, bump PRs auto-merge and releases are hands-off end to end.
-  Tap-repo work (`sunbeamdotpt/tap`, tests.yml).
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
   kanban dev board): template column authoring + `board create --template`,
   `--columns` on `board create`, `member add` raw OIDC subject + scope
