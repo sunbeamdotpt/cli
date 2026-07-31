@@ -509,3 +509,44 @@ clippy.toml); build scripts are linted too (build.rs had one).
 Board end state: CLI-023 done. Todo: CLI-027 + CLI-021 (high-ish auth
 token refresh), CLI-012/022/024/025/026 medium, CLI-028/029 low;
 CLI-005 still blocked on KANBAN-001. Outbound: KANBAN-054.
+
+## 2026-07-31 (night) — workable-list burn-down; v3.4.0 cut
+
+Seven cards done in one session, each fix+tests+changelog as a
+conventional commit (ritual now mandates this — human instruction,
+AGENTS.md updated 97da61a1):
+
+- CLI-028 (ee09b8a0) — root cause was NOT per-verb flag mishandling:
+  output::render's Table branch was a pretty-JSON fallback for every
+  detail verb. Now renders FIELD/VALUE tables (truncate helper promoted
+  to output.rs; 120-char cap, full data via -o json).
+- CLI-026 (70aa5c1c) — --urgency on card create/update; create was
+  hardcoded medium, update had no mask path.
+- CLI-022 (eaf21ba6) — card checklist add/toggle/remove/set over the
+  existing RPCs; toggle/remove resolve item ULID or exact text.
+- CLI-024 (da65626c) — template create/update --columns and board
+  create --template/--columns with a shared "title[:accent][!]" spec
+  parser. TWO operational lessons: (1) resolve the column source BEFORE
+  CreateBoard or a resolution failure orphans a columnless board
+  (happened live, cleaned up); (2) NameResolver::template(None,...)
+  searches GLOBAL templates only — board create now passes the project;
+  template get/update/delete still don't (filed CLI-031). Deployed
+  server does not persist TemplateColumn.is_done yet (KANBAN-033
+  server-side); CLI sends it.
+- CLI-025 (f5425813) — member add/remove user:<ulid> passthrough
+  (skips identity:read-scoped lookup), help documents relations;
+  default relation fixed view -> viewer.
+- CLI-021 (d7fabf9b) — refresh persistence existed since v3.0.0 but was
+  untested (wiremock regression test now locks it); kanban dispatch
+  force-refreshes + retries once on server-side unauthenticated
+  contradicting the local expiry check. Could NOT reproduce the
+  observed staleness against current code — asked the reporter to
+  reopen with a version if it recurs.
+- CLI-012 (bd033316) — sunbeam man install (197 pages,
+  XDG_DATA_HOME/man/man1 default, --dir override, MANPATH hint);
+  README leads with it; release tarballs unchanged.
+
+v3.4.0 cut (4e918b90) and pushed; CI tag job + release train watched to
+the station. Board end state: all seven done with comment trails;
+CLI-031 filed; todo: CLI-027 (deferred by human), CLI-005 (blocked on
+KANBAN-001), CLI-029 (low).

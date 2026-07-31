@@ -10,6 +10,14 @@ timestamp: 2026-07-31T00:00:00Z
 
 ## In flight
 
+- **v3.4.0 CUT 2026-07-31 (night)** — workable-list burn-down: CLI-028
+  (detail FIELD/VALUE tables), CLI-026 (--urgency), CLI-022 (card
+  checklist), CLI-024 (template columns + board create
+  --template/--columns), CLI-025 (member raw-subject passthrough),
+  CLI-021 (auth refresh persistence lock + unauthenticated retry),
+  CLI-012 (sunbeam man install). Release commit 4e918b90 pushed; train
+  (tag → release.yml → tap PR) in motion at session end. Log.md has the
+  per-card details and the CLI-024 orphan-board lesson.
 - **CLI-023 DONE 2026-07-31 (late)** — card label add/set/remove sent the
   card id as `x-sunbeam-object-id` on BulkUpdateCardLabels (gated
   KanbanBoard+edit → 403 for everyone, root cause of KANBAN-039); now
@@ -167,11 +175,13 @@ timestamp: 2026-07-31T00:00:00Z
 
 ## Pick up first
 
-- **CLI-027** (high, todo) — clippy `*_or_default` ban, deferred mid-work
-  by the human 2026-07-31. Log.md has the recon: ~121 sites in 42 files,
-  two of the card's clippy.toml paths need `allow-invalid`, build.rs is
-  linted too. Also open: CLI-021 (auth silent-refresh staleness, high-ish),
-  CLI-012/022/024/025/026 (medium), CLI-028/029 (low); CLI-005 still
+- **Verify the v3.4.0 train landed** (tag, 8 assets + checksums, tap PR
+  auto-merge, `brew info sunbeam` → 3.4.0) — it was mid-flight at
+  session end. Then **CLI-027** (high, todo) — clippy `*_or_default`
+  ban, deferred mid-work by the human 2026-07-31. Log.md has the recon:
+  ~121 sites in 42 files, two of the card's clippy.toml paths need
+  `allow-invalid`, build.rs is linted too. Also open: CLI-029 (low),
+  CLI-031 (medium, template name resolution global-only); CLI-005 still
   blocked on server KANBAN-001.
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
