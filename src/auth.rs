@@ -1,5 +1,9 @@
 //! OAuth2 Device Authorization Grant for CLI authentication against the sso-gateway.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
 use base64::Engine;
 use chrono::Utc;
 use sdk::auth::{AuthClient, v1 as iam};
@@ -78,9 +82,14 @@ pub(crate) fn build_auth_client(base_url: &str, token: Option<&str>) -> Result<A
 /// Authenticated [`AuthClient`] for the active context, using the logged-in
 /// SSO token (see [`get_token`]).
 pub(crate) async fn authenticated_auth_client() -> Result<AuthClient> {
-    let token = get_token()
-        .await
-        .with_ctx(|| "run `sunbeam auth login` first".to_string())?;
+    // Only genuine auth failures get the re-login hint — transport errors
+    // already carry their own connectivity context.
+    let token = get_token().await.map_err(|e| match e {
+        SunbeamError::Identity(msg) => {
+            SunbeamError::identity(format!("run `sunbeam auth login` first: {msg}"))
+        }
+        other => other,
+    })?;
     let base_url = sso_base_url_for(sdk::config::domain())?;
     build_auth_client(&base_url, Some(&token))
 }
@@ -89,7 +98,7 @@ pub(crate) async fn authenticated_auth_client() -> Result<AuthClient> {
 // OIDC discovery
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct OidcDiscovery {
     token_endpoint: String,
     #[serde(default)]
@@ -130,35 +139,94 @@ async fn resolve_domain(explicit: Option<&str>) -> Result<String> {
     ))
 }
 
-async fn discover_oidc(base_url: &str) -> Result<OidcDiscovery> {
-    let url = format!("{base_url}/.well-known/openid-configuration");
-    let client = reqwest::Client::new();
-    let resp = match client
-        .get(&url)
-        .send()
-        .await
-        .with_ctx(|| format!("Failed to fetch OIDC discovery from {url}"))
-    {
-        Ok(resp) => resp,
-        Err(e) => return Err(e),
-    };
+/// Total attempts for the OIDC discovery fetch (initial try + retries).
+/// Discovery is the first network hop of every login and token refresh, so a
+/// single dropped packet on a flaky link must not fail the whole command.
+const DISCOVERY_ATTEMPTS: u32 = 4;
 
-    if !resp.status().is_success() {
-        return Err(SunbeamError::network(format!(
-            "OIDC discovery returned HTTP {}",
-            resp.status()
-        )));
+/// Process-local cache of OIDC discovery documents per base URL. The
+/// document changes ~never, so one successful fetch per process is enough.
+fn discovery_cache() -> &'static Mutex<HashMap<String, OidcDiscovery>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, OidcDiscovery>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Lock the discovery cache, recovering from poisoning (a panicking writer
+/// left no consistent state to protect here — entries are insert-only).
+fn lock_discovery_cache() -> std::sync::MutexGuard<'static, HashMap<String, OidcDiscovery>> {
+    discovery_cache().lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Fetch the OIDC discovery document, retrying transient failures with
+/// exponential backoff (250ms, 500ms, 1s) and caching the result per base URL.
+async fn discover_oidc(base_url: &str) -> Result<OidcDiscovery> {
+    if let Some(cached) = lock_discovery_cache().get(base_url) {
+        return Ok(cached.clone());
     }
 
-    let discovery: OidcDiscovery = match resp
-        .json()
-        .await
-        .ctx("Failed to parse OIDC discovery response")
-    {
-        Ok(d) => d,
-        Err(e) => return Err(e),
-    };
-    Ok(discovery)
+    let url = format!("{base_url}/.well-known/openid-configuration");
+    let client = reqwest::Client::new();
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match fetch_discovery(&client, &url).await {
+            Ok(discovery) => {
+                lock_discovery_cache().insert(base_url.to_string(), discovery.clone());
+                return Ok(discovery);
+            }
+            Err(DiscoveryFetchError::Transient(e)) if attempt < DISCOVERY_ATTEMPTS => {
+                let backoff = Duration::from_millis(250 << (attempt - 1));
+                tracing::warn!(
+                    "OIDC discovery failed ({e}); retrying in {}ms (attempt {attempt}/{DISCOVERY_ATTEMPTS})",
+                    backoff.as_millis()
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(DiscoveryFetchError::Transient(e)) | Err(DiscoveryFetchError::Permanent(e)) => {
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// A failed discovery fetch, classified by whether a retry could help.
+enum DiscoveryFetchError {
+    /// Transport failure or HTTP 5xx — worth retrying.
+    Transient(SunbeamError),
+    /// HTTP 4xx or an unparseable body — retrying won't change the outcome.
+    Permanent(SunbeamError),
+}
+
+/// One shot at fetching and parsing the discovery document.
+async fn fetch_discovery(
+    client: &reqwest::Client,
+    url: &str,
+) -> std::result::Result<OidcDiscovery, DiscoveryFetchError> {
+    let resp = client.get(url).send().await.map_err(|e| {
+        DiscoveryFetchError::Transient(SunbeamError::Network {
+            context: format!("Failed to fetch OIDC discovery from {url}"),
+            source: Some(e),
+        })
+    })?;
+
+    if !resp.status().is_success() {
+        let err = SunbeamError::network(format!(
+            "OIDC discovery at {url} returned HTTP {}",
+            resp.status()
+        ));
+        return Err(if resp.status().is_server_error() {
+            DiscoveryFetchError::Transient(err)
+        } else {
+            DiscoveryFetchError::Permanent(err)
+        });
+    }
+
+    resp.json().await.map_err(|e| {
+        DiscoveryFetchError::Permanent(SunbeamError::Network {
+            context: format!("Failed to parse OIDC discovery response from {url}"),
+            source: Some(e),
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -205,9 +273,13 @@ async fn refresh_token(domain: &str, cached: &AuthTokens) -> Result<AuthTokens> 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(SunbeamError::identity(format!(
-            "Token refresh failed (HTTP {status}): {body}"
-        )));
+        // Only 4xx means the session itself was rejected (e.g. invalid_grant)
+        // — 5xx is a server-side problem, not an expired session.
+        return Err(if status.is_client_error() {
+            SunbeamError::identity(format!("Token refresh failed (HTTP {status}): {body}"))
+        } else {
+            SunbeamError::network(format!("Token refresh failed (HTTP {status}): {body}"))
+        });
     }
 
     let token_resp: TokenResponse = match resp
@@ -649,6 +721,25 @@ pub async fn resolve_subject_for_email(email: &str) -> Result<String> {
     Ok(subject_from_identity_id(&identity.id))
 }
 
+/// Resolve an identity ULID (or `user:<ulid>` subject) to the OIDC subject
+/// used by the kanban backend, verifying the identity exists via GetIdentity.
+///
+/// Anything that is not ULID/UUID-shaped is rejected locally. Calls the
+/// sso-gateway `IdentityService` with the logged-in SSO token.
+pub async fn resolve_verified_subject(raw: &str) -> Result<String> {
+    let id = raw.strip_prefix("user:").unwrap_or(raw);
+    if ulid::Ulid::from_string(id).is_err() && !looks_like_uuid(id) {
+        return Err(SunbeamError::identity(format!(
+            "unknown user '{raw}' — pass an email address or identity ULID"
+        )));
+    }
+    let client = authenticated_auth_client().await?;
+    let identity = find_identity(&client, id)
+        .await?
+        .ok_or_else(|| SunbeamError::identity(format!("Identity not found: {raw}")))?;
+    Ok(subject_from_identity_id(&identity.id))
+}
+
 /// Resolve an OIDC subject to the user's email address.
 ///
 /// Calls the sso-gateway `IdentityService` with the logged-in SSO token.
@@ -744,9 +835,20 @@ pub async fn get_token() -> Result<String> {
     if !cached.refresh_token.is_empty() {
         match refresh_token(domain, &cached).await {
             Ok(new_tokens) => return Ok(new_tokens.access_token),
-            Err(e) => {
+            Err(SunbeamError::Network { context, source }) => {
+                // Transport failure: the session was never evaluated, so don't
+                // claim it expired — report the connectivity problem instead.
+                return Err(SunbeamError::Network {
+                    context: format!(
+                        "{context} (sso-gateway unreachable; check your connection and try again)"
+                    ),
+                    source,
+                });
+            }
+            Err(e @ SunbeamError::Identity(_)) => {
                 tracing::error!("Token refresh failed: {e}");
             }
+            Err(e) => return Err(e),
         }
     }
 
@@ -1642,5 +1744,170 @@ mod tests {
         // Expired token with refresh available.
         sdk::config::set_auth_tokens("example.com", &cached_tokens(-3600, true)).unwrap();
         cmd_auth_status().await.unwrap();
+    }
+
+    // ---------------------------------------------------------------------
+    // OIDC discovery: retry, cache, error classification (wiremock)
+    // ---------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_discover_oidc_retries_5xx_then_succeeds() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::{Request, Respond};
+
+        struct FlakyThenOk(Arc<AtomicUsize>);
+        impl Respond for FlakyThenOk {
+            fn respond(&self, _request: &Request) -> ResponseTemplate {
+                let n = self.0.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "token_endpoint": "https://sso.example.com/oauth2/token"
+                    }))
+                }
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(FlakyThenOk(Arc::new(AtomicUsize::new(0))))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let discovery = discover_oidc(&server.uri()).await.unwrap();
+        assert_eq!(
+            discovery.token_endpoint,
+            "https://sso.example.com/oauth2/token"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discover_oidc_caches_per_base_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token_endpoint": "https://sso.example.com/oauth2/token"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let first = discover_oidc(&server.uri()).await.unwrap();
+        let second = discover_oidc(&server.uri()).await.unwrap();
+        assert_eq!(first.token_endpoint, second.token_endpoint);
+    }
+
+    #[tokio::test]
+    async fn test_discover_oidc_4xx_is_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = discover_oidc(&server.uri()).await.unwrap_err();
+        assert!(matches!(err, SunbeamError::Network { .. }), "err: {err:?}");
+        assert!(err.to_string().contains("HTTP 404"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_discover_oidc_transport_error_is_network_not_session_expired() {
+        // Port 9 (discard) on loopback refuses connections fast.
+        let err = discover_oidc("http://127.0.0.1:9").await.unwrap_err();
+        assert!(matches!(err, SunbeamError::Network { .. }), "err: {err:?}");
+        assert!(!err.to_string().contains("Session expired"), "err: {err}");
+    }
+
+    // ---------------------------------------------------------------------
+    // get_token error mapping: transport vs genuine auth failure
+    // ---------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_token_network_failure_is_not_session_expired() {
+        let _home = temp_home();
+        set_domain("example.com");
+        sdk::config::set_auth_tokens("example.com", &cached_tokens(-3600, true)).unwrap();
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(SSO_URL_ENV, "http://127.0.0.1:9");
+            std::env::set_var(SSO_CLIENT_ID_ENV, "test-client");
+        }
+
+        let err = get_token().await.unwrap_err();
+        assert!(matches!(err, SunbeamError::Network { .. }), "err: {err:?}");
+        assert!(!err.to_string().contains("Session expired"), "err: {err}");
+        assert!(err.to_string().contains("unreachable"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_get_token_refresh_5xx_is_network_not_session_expired() {
+        let _home = temp_home();
+        set_domain("example.com");
+        sdk::config::set_auth_tokens("example.com", &cached_tokens(-3600, true)).unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token_endpoint": format!("{}/oauth2/token", server.uri())
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(SSO_URL_ENV, server.uri());
+            std::env::set_var(SSO_CLIENT_ID_ENV, "test-client");
+        }
+
+        let err = get_token().await.unwrap_err();
+        assert!(matches!(err, SunbeamError::Network { .. }), "err: {err:?}");
+        assert!(!err.to_string().contains("Session expired"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_get_token_invalid_grant_keeps_session_expired_guidance() {
+        let _home = temp_home();
+        set_domain("example.com");
+        sdk::config::set_auth_tokens("example.com", &cached_tokens(-3600, true)).unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token_endpoint": format!("{}/oauth2/token", server.uri())
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "refresh token revoked"
+            })))
+            .mount(&server)
+            .await;
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(SSO_URL_ENV, server.uri());
+            std::env::set_var(SSO_CLIENT_ID_ENV, "test-client");
+        }
+
+        let err = get_token().await.unwrap_err();
+        assert!(matches!(err, SunbeamError::Identity(_)), "err: {err:?}");
+        assert!(err.to_string().contains("Session expired"), "err: {err}");
     }
 }
