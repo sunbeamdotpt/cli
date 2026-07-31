@@ -550,3 +550,23 @@ v3.4.0 cut (4e918b90) and pushed; CI tag job + release train watched to
 the station. Board end state: all seven done with comment trails;
 CLI-031 filed; todo: CLI-027 (deferred by human), CLI-005 (blocked on
 KANBAN-001), CLI-029 (low).
+
+## 2026-07-31 (night, later) — v3.4.0 train landed end to end
+
+CI green (5m53s) → tag v3.4.0 → release.yml green: 4 tarballs + 4 raw
+binaries + checksums on the GH release. The homebrew-tap job FAILED
+twice on latent tap-repo bugs, both fixed in homebrew-tap mainline:
+
+1. bump-formula.yml minted its GitHub App token for `repositories: tap`
+   — the pre-rename repo name, 404 since the rename (fae3678 missed it;
+   the checkout ref was fixed but not the token step). Fixed (95d31de).
+2. scripts/bump-formula.sh: a4a19f9's SC2312 shellcheck fix moved the
+   url_linenos scan INSIDE the loop it feeds — the here-string evaluates
+   once at loop entry, so every bump died instantly under set -u
+   ("url_linenos: unbound variable"). Hoisted the scan above the loop
+   (c628b95). Lesson: a "style" fix on the release path needs a live
+   bump to prove it; test-bot only audits the formula, not the script.
+
+Re-dispatched bump-formula.yml per the runbook (never re-run the whole
+train for a tap-only failure): PR #8 opened, test-bot green, auto-merge
+hands-off. `brew info sunbeam` → stable 3.4.0.

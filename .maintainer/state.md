@@ -175,14 +175,15 @@ timestamp: 2026-07-31T00:00:00Z
 
 ## Pick up first
 
-- **Verify the v3.4.0 train landed** (tag, 8 assets + checksums, tap PR
-  auto-merge, `brew info sunbeam` → 3.4.0) — it was mid-flight at
-  session end. Then **CLI-027** (high, todo) — clippy `*_or_default`
-  ban, deferred mid-work by the human 2026-07-31. Log.md has the recon:
-  ~121 sites in 42 files, two of the card's clippy.toml paths need
-  `allow-invalid`, build.rs is linted too. Also open: CLI-029 (low),
-  CLI-031 (medium, template name resolution global-only); CLI-005 still
-  blocked on server KANBAN-001.
+- **v3.4.0 SHIPPED end to end** (tag, 9 assets, tap PR #8 auto-merged;
+  `brew info sunbeam` → 3.4.0). Tap repo needed two fixes en route —
+  see log.md (app-token repo name post-rename; SC2312 shellcheck fix
+  had broken bump-formula.sh). Next: **CLI-027** (high, todo) — clippy
+  `*_or_default` ban, deferred mid-work by the human 2026-07-31. Log.md
+  has the recon: ~121 sites in 42 files, two of the card's clippy.toml
+  paths need `allow-invalid`, build.rs is linted too. Also open:
+  CLI-029 (low), CLI-031 (medium, template name resolution
+  global-only); CLI-005 still blocked on server KANBAN-001.
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
