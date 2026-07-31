@@ -319,6 +319,11 @@ card accordingly. At session end: update `.maintainer/state.md`, journal
 decisions with the *why* in `.maintainer/log.md`, and update/close every
 card you handled.
 
+**Commit at the end of every ticket** (fix + tests + changelog entry as
+one unit), using **Conventional Commits** — `fix(kanban): ...`,
+`feat(output): ...`, `chore(deps): ...` — with the card ref in the
+subject (`(CLI-023)`).
+
 File cross-repo tickets as cards on the owning team's project board
 (`sunbeam kanban card create <board-id> -c todo -t "..." -d "..." -p ...`).
 If the owning repo has no project, file on `cli`'s dev board and name the
