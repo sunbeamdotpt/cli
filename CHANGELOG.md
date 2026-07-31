@@ -45,6 +45,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Kanban commands now recover transparently from a server-side
+  `unauthenticated` when the cached token passed the local expiry check:
+  the CLI forces a token refresh (persisting it) and retries the call
+  once before surfacing the error (CLI-021). A regression test locks in
+  that refreshes persist to the token store, keeping `auth status`'s
+  displayed expiry truthful after a silent refresh.
 - `-o table` on detail views (`kanban card get`, `board get`, `label get`,
   secrets `get`, …) emitted pretty JSON — the table branch of
   `output::render` was a JSON fallback. It now renders a two-column

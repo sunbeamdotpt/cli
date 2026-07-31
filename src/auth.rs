@@ -857,6 +857,30 @@ pub async fn get_token() -> Result<String> {
     ))
 }
 
+/// Force a token refresh regardless of the cached access token's remaining
+/// lifetime, persisting the result like a normal refresh.
+///
+/// Recovery path for a server-side `unauthenticated` against a token the
+/// local expiry check still considered valid (CLI-021).
+pub(crate) async fn force_refresh_token() -> Result<String> {
+    let domain = sdk::config::domain();
+    if domain.is_empty() {
+        return Err(SunbeamError::config(
+            "No domain configured; set one with `sunbeam config set --domain ...`",
+        ));
+    }
+    let cached = sdk::config::get_auth_tokens(domain).ok_or_else(|| {
+        SunbeamError::identity("Not logged in. Run `sunbeam auth login` to authenticate.")
+    })?;
+    if cached.refresh_token.is_empty() {
+        return Err(SunbeamError::identity(
+            "Session expired. Run `sunbeam auth login` to re-authenticate.",
+        ));
+    }
+    let new_tokens = refresh_token(domain, &cached).await?;
+    Ok(new_tokens.access_token)
+}
+
 /// Print the current access token as a JSON headers object.
 /// Designed for use as a Claude Code MCP `headersHelper`.
 /// Output: {"Authorization": "Bearer <token>"}
@@ -1909,5 +1933,55 @@ mod tests {
         let err = get_token().await.unwrap_err();
         assert!(matches!(err, SunbeamError::Identity(_)), "err: {err:?}");
         assert!(err.to_string().contains("Session expired"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_get_token_refresh_persists_new_tokens() {
+        let _home = temp_home();
+        set_domain("example.com");
+        sdk::config::set_auth_tokens("example.com", &cached_tokens(-3600, true)).unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token_endpoint": format!("{}/oauth2/token", server.uri())
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var(SSO_URL_ENV, server.uri());
+            std::env::set_var(SSO_CLIENT_ID_ENV, "test-client");
+        }
+
+        // Expired cached token: refresh kicks in, returns the fresh token.
+        let token = get_token().await.unwrap();
+        assert_eq!(token, "fresh-access");
+
+        // CLI-021 (a): the refreshed tokens must be persisted so a later
+        // `auth status` (which reads the store) shows the new expiry, and
+        // the next process does not refresh with a stale refresh token.
+        let stored = sdk::config::get_auth_tokens("example.com").unwrap();
+        assert_eq!(stored.access_token, "fresh-access");
+        assert_eq!(stored.refresh_token, "fresh-refresh");
+        assert!(stored.expires_at > Utc::now() + chrono::Duration::minutes(50));
+
+        // force_refresh_token bypasses the still-valid cache and refreshes
+        // again, persisting once more.
+        let forced = force_refresh_token().await.unwrap();
+        assert_eq!(forced, "fresh-access");
+        let stored = sdk::config::get_auth_tokens("example.com").unwrap();
+        assert_eq!(stored.access_token, "fresh-access");
     }
 }

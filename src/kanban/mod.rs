@@ -257,6 +257,18 @@ fn is_cold_start_transport(err: &SunbeamError) -> bool {
     }
 }
 
+/// Server rejected the call as unauthenticated (distinct from permission
+/// denials, which a fresh token would not fix).
+fn is_unauthenticated(err: &SunbeamError) -> bool {
+    matches!(
+        err,
+        SunbeamError::Connect {
+            code: connectrpc::ErrorCode::Unauthenticated,
+            ..
+        }
+    )
+}
+
 /// Run `op`, retrying once on a cold-start transport failure.
 ///
 /// Reads are naturally idempotent and mutations carry ULID idempotency keys,
@@ -300,16 +312,38 @@ pub async fn dispatch(
         }
         cmd => {
             let token = require_token().await?;
-            retry_once_on_transport(logger, || {
+            let run_once = |token: &str| {
                 let cmd = cmd.clone();
-                let token = token.clone();
+                let token = token.to_string();
                 let server = server.clone();
                 async move {
-                    let client = build_client(&server, Some(&token))?;
-                    dispatch_authed(cmd, format, &client).await
+                    retry_once_on_transport(logger, || {
+                        let cmd = cmd.clone();
+                        let token = token.clone();
+                        let server = server.clone();
+                        async move {
+                            let client = build_client(&server, Some(&token))?;
+                            dispatch_authed(cmd, format, &client).await
+                        }
+                    })
+                    .await
                 }
-            })
-            .await
+            };
+            match run_once(&token).await {
+                // The cached token passed the local expiry check but the
+                // server rejected it (CLI-021): force a refresh and retry
+                // once before surfacing the failure.
+                Err(e) if is_unauthenticated(&e) => {
+                    sdk::info!(
+                        logger,
+                        "kanban call unauthenticated; forcing token refresh and retrying once",
+                        err = e.to_string()
+                    );
+                    let fresh = crate::auth::force_refresh_token().await?;
+                    run_once(&fresh).await
+                }
+                result => result,
+            }
         }
     }
 }
@@ -1078,6 +1112,21 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("bad token"));
+    }
+
+    #[test]
+    fn is_unauthenticated_matches_only_connect_unauthenticated() {
+        let unauth = SunbeamError::from(connectrpc::ConnectError::new(
+            connectrpc::ErrorCode::Unauthenticated,
+            "bad token",
+        ));
+        assert!(is_unauthenticated(&unauth));
+        let denied = SunbeamError::from(connectrpc::ConnectError::new(
+            connectrpc::ErrorCode::PermissionDenied,
+            "nope",
+        ));
+        assert!(!is_unauthenticated(&denied));
+        assert!(!is_unauthenticated(&SunbeamError::identity("expired")));
     }
 
     #[test]
