@@ -11,6 +11,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `sunbeam man install` — generate man pages for the full command tree
+  and install them into `$XDG_DATA_HOME/man/man1` (default
+  `~/.local/share/man/man1`, override with `--dir`), with a `MANPATH`
+  hint when the directory isn't indexed. Man pages no longer require
+  Homebrew; release tarballs keep shipping the gzipped set (CLI-012).
 - `kanban project member add/remove` accept a raw OIDC subject
   (`user:<ulid>`, shape-validated locally) to skip the sso-gateway identity
   lookup — unblocks membership management without the `identity:read`

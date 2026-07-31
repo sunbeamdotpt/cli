@@ -148,21 +148,24 @@ sunbeam workflow -t builds list # Remote wfe-server target
 
 ## Man pages
 
-Generate man pages for the full command tree (root + every subcommand,
-recursively) with the hidden `__man` verb:
+Install man pages for the full command tree (root + every subcommand,
+recursively) with the built-in installer — no Homebrew or sudo needed:
 
 ```bash
-sunbeam __man ./man
-man ./man/sunbeam.1
-```
-
-This produces `sunbeam.1`, `sunbeam-up.1`, `sunbeam-service-apply.1`, etc.
-To install them into your manpath, copy the pages into a section-1 directory:
-
-```bash
-sudo cp man/*.1 /usr/local/share/man/man1/
+sunbeam man install
+man sunbeam
 man sunbeam service apply
 ```
+
+This generates the pages (`sunbeam.1`, `sunbeam-up.1`,
+`sunbeam-service-apply.1`, …) and installs them into
+`$XDG_DATA_HOME/man/man1` (default `~/.local/share/man/man1`); pass
+`--dir` to install elsewhere. If `man` doesn't pick them up, add the
+printed directory to your `MANPATH`.
+
+Release tarballs also ship gzipped pages (generated via the hidden
+`__man` verb used by the packaging pipeline); the Homebrew formula
+installs those, but `sunbeam man install` works from any install method.
 
 ## Running Tests
 

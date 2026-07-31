@@ -115,7 +115,7 @@ cargo clippy --all-targets -- -D warnings
 # Format
 cargo fmt --all
 
-# Man pages (release packaging can invoke the hidden verb)
+# Man pages (users: `sunbeam man install`; release packaging invokes the hidden verb)
 sunbeam __man ./man
 ```
 

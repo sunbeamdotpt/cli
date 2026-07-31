@@ -536,6 +536,13 @@ EXAMPLES:
         output_dir: std::path::PathBuf,
     },
 
+    /// Man page installation.
+    Man {
+        /// Man subcommand to run.
+        #[command(subcommand)]
+        action: ManAction,
+    },
+
     /// Workflow management — local WFE host, remote wfe-server, and target management.
     #[command(long_about = r#"Manage WFE (Workflow Engine) instances.
 
@@ -604,9 +611,68 @@ impl Verb {
             Verb::Vpn { .. } => "vpn",
             Verb::VpnDaemon => "vpn-daemon",
             Verb::ManGen { .. } => "man-gen",
+            Verb::Man { .. } => "man",
             Verb::Workflow { .. } => "workflow",
         }
     }
+}
+
+/// Man page subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ManAction {
+    /// Generate man pages for the full command tree and install them into
+    /// the user man directory (`$XDG_DATA_HOME/man/man1`, defaulting to
+    /// `~/.local/share/man/man1`) — no external packaging system needed.
+    Install {
+        /// Install into this directory instead of the default.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
+}
+
+/// Generate the man page tree into `output_dir` (created if missing).
+fn generate_man_pages(output_dir: &std::path::Path) -> Result<()> {
+    use clap::CommandFactory;
+    std::fs::create_dir_all(output_dir)?;
+    clap_mangen::generate_to(Cli::command(), output_dir)?;
+    Ok(())
+}
+
+/// Generate the man page tree and install it into `target`, returning the
+/// number of pages installed.
+fn install_man_pages(target: &std::path::Path) -> Result<u32> {
+    let tmp = tempfile::tempdir()?;
+    generate_man_pages(tmp.path())?;
+    std::fs::create_dir_all(target).map_err(|e| {
+        SunbeamError::Other(format!(
+            "cannot create {}: {e} — pass --dir to install elsewhere",
+            target.display()
+        ))
+    })?;
+    let mut count = 0u32;
+    for entry in std::fs::read_dir(tmp.path())? {
+        let entry = entry?;
+        let is_page = entry.path().extension().is_some_and(|e| e == "1");
+        if is_page {
+            std::fs::copy(entry.path(), target.join(entry.file_name()))?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Default man page install directory: `$XDG_DATA_HOME/man/man1`, or
+/// `~/.local/share/man/man1` when XDG_DATA_HOME is unset.
+fn man_install_dir() -> Result<std::path::PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return Ok(std::path::PathBuf::from(xdg).join("man").join("man1"));
+    }
+    let home = dirs::home_dir().ok_or_else(|| {
+        SunbeamError::config("cannot determine home directory; pass --dir explicitly")
+    })?;
+    Ok(home.join(".local").join("share").join("man").join("man1"))
 }
 
 /// VPN management subcommands.
@@ -1945,9 +2011,7 @@ pub async fn dispatch(logger: &sdk::logger::Logger, cli: Cli) -> Result<()> {
         Some(Verb::VpnDaemon) => sdk::vpn::cmds::cmd_vpn_daemon().await,
 
         Some(Verb::ManGen { output_dir }) => {
-            use clap::CommandFactory;
-            std::fs::create_dir_all(&output_dir)?;
-            clap_mangen::generate_to(Cli::command(), &output_dir)?;
+            generate_man_pages(&output_dir)?;
             info!(
                 logger,
                 "Man pages written",
@@ -1955,6 +2019,33 @@ pub async fn dispatch(logger: &sdk::logger::Logger, cli: Cli) -> Result<()> {
             );
             Ok(())
         }
+
+        Some(Verb::Man { action }) => match action {
+            ManAction::Install { dir } => {
+                let target = match dir {
+                    Some(d) => d,
+                    None => man_install_dir()?,
+                };
+                let count = install_man_pages(&target)?;
+                info!(
+                    logger,
+                    "Man pages installed",
+                    dir = target.display().to_string(),
+                    count = count
+                );
+                println!("Installed {count} man pages to {}", target.display());
+                let in_manpath = std::env::var_os("MANPATH")
+                    .map(|p| std::env::split_paths(&p).any(|d| d == target))
+                    .unwrap_or(false);
+                if !in_manpath {
+                    println!(
+                        "If `man sunbeam` doesn't find them, add to your shell profile:\n  export MANPATH=\"{}:$MANPATH\"",
+                        target.display()
+                    );
+                }
+                Ok(())
+            }
+        },
 
         Some(Verb::Workflow {
             target,
@@ -2754,5 +2845,41 @@ mod tests {
         // Hidden internal commands must not get pages.
         assert!(!dir.path().join("sunbeam-__vpn-daemon.1").exists());
         assert!(!dir.path().join("sunbeam-__man.1").exists());
+    }
+
+    #[test]
+    fn test_man_install_parses() {
+        let cli = parse(&["sunbeam", "man", "install", "--dir", "/tmp/man-x"]);
+        match cli.verb {
+            Some(Verb::Man {
+                action: ManAction::Install { dir },
+            }) => {
+                assert_eq!(dir, Some(std::path::PathBuf::from("/tmp/man-x")));
+            }
+            _ => panic!("expected Man Install"),
+        }
+    }
+
+    #[test]
+    fn test_man_install_dir_prefers_xdg() {
+        // SAFETY: nextest runs each test in its own process.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", "/tmp/xdg-data");
+        }
+        assert_eq!(
+            man_install_dir().unwrap(),
+            std::path::PathBuf::from("/tmp/xdg-data/man/man1")
+        );
+    }
+
+    #[test]
+    fn test_man_install_copies_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("man1");
+        let count = install_man_pages(&target).unwrap();
+        assert!(count > 10, "expected the full verb tree, got {count}");
+        assert!(target.join("sunbeam.1").exists());
+        assert!(target.join("sunbeam-man-install.1").exists());
+        assert!(!target.join("sunbeam-__man.1").exists());
     }
 }
