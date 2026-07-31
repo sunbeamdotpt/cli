@@ -7,6 +7,59 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > restarts at v3.0.0; consult the git tags (`git tag`, `git log v1.1.2..v3.0.0`)
 > for v2.x archeology.
 
+## [3.3.0] - 2026-07-31
+
+### Added
+
+- `kanban card update --unblocked` — clears a card's blocked flag via an
+  explicit `blocked` update mask (server KANBAN-016); removes the 3.2.0
+  limitation where `--blocked` could be set but never unset (CLI-014).
+- `kanban board column add --is-done` and
+  `kanban board column update --is-done/--no-is-done` — opt columns into the
+  server's `completed_at` behavior (moving a card into a done-marked column
+  stamps `completed_at`, moving out clears it; server v2026.07.9,
+  KANBAN-023/027). `board get` and column add/update/move output now render
+  `is_done` (CLI-015).
+- `kanban card move <card> --board <board> --column <col>` — relocate a card
+  across boards/projects. The server forbids cross-project moves, so the CLI
+  performs recreate-and-close: copies title/description/priority/urgency/due,
+  re-matches labels by name against the target project's catalog, re-applies
+  assignees, re-adds checklist items (preserving done state), cross-references
+  both cards with "moved to/from" comments summarizing comments, attachments,
+  and GitHub links, then deletes the source — never moving it to a done
+  column, so completion metrics are not polluted (CLI-020).
+- `kanban card list` now surfaces `created_at`, `updated_at`, and
+  `completed_at` in json/yaml output (plus a `CREATED` table column), matching
+  what the server has returned since v2026.07.9 — time-based reporting no
+  longer costs one `card get` per card (CLI-019).
+- OIDC discovery fetch retries with backoff and is cached, so a single
+  dropped/slow request on a lossy link no longer kills login and token
+  refresh (CLI-010).
+
+### Changed
+
+- Adopted sdk v3.3.1 (carrying the v3.3.0 fixes) and dropped the local
+  workarounds: the
+  test-suite tool-cache prewarm is gone (sdk's `ensure_tool` no longer
+  panics in async contexts), and the kanban retry decision matches
+  `SunbeamError::Connect` + `ErrorCode::Unavailable` structurally instead of
+  string-matching `"unavailable:"` (CLI-011).
+- sso-gateway integration test image bumped to v2026.07.22 and the
+  device-poll test is un-ignored: the gateway now relays Hydra 4xx bodies
+  verbatim, so the token poll returns a proper RFC 8628
+  `authorization_pending` (CLI-011).
+
+### Fixed
+
+- `kanban card assign/unassign` validate subjects client-side: emails
+  resolve through the sso-gateway as before, ULIDs/`user:<ulid>` are
+  shape-checked and verified to exist, and anything else is rejected with a
+  clear error instead of being stored verbatim (CLI-018).
+- Network failures during OIDC discovery and token refresh are no longer
+  misreported as "Session expired. Run `sunbeam auth login`" — transport
+  errors surface as connectivity problems; only genuine 401/`invalid_grant`
+  responses advise re-authentication (CLI-010).
+
 ## [3.2.1] - 2026-07-27
 
 ### Fixed
