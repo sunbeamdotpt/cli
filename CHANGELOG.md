@@ -11,6 +11,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `kanban project member add/remove` accept a raw OIDC subject
+  (`user:<ulid>`, shape-validated locally) to skip the sso-gateway identity
+  lookup — unblocks membership management without the `identity:read`
+  scope. Help text documents the relation values
+  (owner/admin/editor/viewer); the default relation is now `viewer` (was
+  the invalid `view`) (CLI-025).
 - `kanban template create/update --columns` — define a board template's
   columns from the CLI with a compact spec:
   `--columns "todo:blue,in progress:amber,review:purple,done:green!"`

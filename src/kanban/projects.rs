@@ -83,17 +83,19 @@ pub enum MemberAction {
     Add {
         /// Project ID or name.
         project_id: String,
-        /// Member email address.
+        /// Member email address (resolved via the sso-gateway; needs the
+        /// identity:read scope) or raw OIDC subject (`user:<ulid>`, which
+        /// skips the identity lookup entirely).
         subject: String,
-        /// Relation.
-        #[arg(short, long, default_value = "view")]
+        /// Relation: owner, admin, editor, or viewer.
+        #[arg(short, long, default_value = "viewer")]
         relation: String,
     },
     /// Remove a member.
     Remove {
         /// Project ID or name.
         project_id: String,
-        /// Member email address.
+        /// Member email address or raw OIDC subject (`user:<ulid>`).
         subject: String,
     },
 }
@@ -154,12 +156,21 @@ impl From<v1::ProjectMember> for MemberOut {
 
 /// Resolve a member identifier to an SSO subject.
 ///
-/// Only email addresses are accepted; they are resolved through the
-/// sso-gateway IdentityService with the logged-in SSO token.
+/// A canonical `user:<ulid>` subject passes through verbatim, skipping the
+/// sso-gateway lookup (which needs the identity:read scope); anything else
+/// must be an email address resolved through the IdentityService.
 async fn resolve_member_subject(subject: &str) -> Result<String> {
+    if let Some(raw) = subject.strip_prefix("user:") {
+        if super::resolve::is_ulid(raw) {
+            return Ok(subject.to_string());
+        }
+        return Err(SunbeamError::identity(
+            "member subject must be a canonical user:<ulid> or an email address",
+        ));
+    }
     if !subject.contains('@') {
         return Err(SunbeamError::identity(
-            "member identifier must be an email address",
+            "member identifier must be an email address or a user:<ulid> subject",
         ));
     }
     #[cfg(test)]
@@ -690,6 +701,64 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("email address"));
+    }
+
+    #[tokio::test]
+    async fn member_add_raw_subject_skips_identity_lookup() {
+        use sdk::kanban::prelude::buffa::Message;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/sunbeam.kanban.v1.ProjectService/AddMember"))
+            .respond_with(testutil::proto_response(
+                &buffa_types::google::protobuf::Empty::default(),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = testutil::client_for(&server.uri());
+        // No identity-service mock: any lookup attempt fails the test.
+        run(
+            ProjectAction::Member {
+                action: MemberAction::Add {
+                    project_id: "proj_1".into(),
+                    subject: "user:01KWF0KYZ0FRNR23ZXAWJZV43T".into(),
+                    relation: "editor".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let added = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/AddMember"))
+            .expect("AddMember request");
+        let req = v1::AddMemberRequest::decode(&mut added.body.as_slice()).unwrap();
+        assert_eq!(req.subject, "user:01KWF0KYZ0FRNR23ZXAWJZV43T");
+        assert_eq!(req.relation, "editor");
+    }
+
+    #[tokio::test]
+    async fn member_add_rejects_malformed_user_prefix() {
+        let client = testutil::client_for("http://127.0.0.1:1");
+        let err = run(
+            ProjectAction::Member {
+                action: MemberAction::Add {
+                    project_id: "proj_1".into(),
+                    subject: "user:not-a-ulid".into(),
+                    relation: "viewer".into(),
+                },
+            },
+            OutputFormat::Table,
+            &client,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("user:<ulid>"));
     }
 
     #[tokio::test]

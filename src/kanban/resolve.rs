@@ -27,7 +27,7 @@ pub(crate) fn looks_like_id(raw: &str) -> bool {
     is_ulid(raw) || is_uuid(raw) || is_prefixed_id(raw)
 }
 
-fn is_ulid(s: &str) -> bool {
+pub(crate) fn is_ulid(s: &str) -> bool {
     ulid::Ulid::from_string(s).is_ok()
 }
 
