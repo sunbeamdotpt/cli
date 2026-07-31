@@ -64,11 +64,16 @@ async fn payload_to_json(payload: &Payload) -> Value {
         CardCreated(e) => {
             let mut value = typed("CardCreated", to_value(e.as_ref()));
             if let Some(card) = e.card.as_option() {
-                let emails = futures::future::join_all(
-                    card.assignees
-                        .iter()
-                        .map(|a| resolve_subject_email(&a.subject)),
-                )
+                // Prefer the server-populated assignee email (kanban
+                // v2026.07.12+); older servers leave it empty, so fall back
+                // to the identity lookup.
+                let emails = futures::future::join_all(card.assignees.iter().map(|a| async {
+                    if a.email.is_empty() {
+                        resolve_subject_email(&a.subject).await
+                    } else {
+                        Some(a.email.clone())
+                    }
+                }))
                 .await;
                 if let Some(assignees) = value
                     .pointer_mut("/card/assignees")
@@ -83,6 +88,7 @@ async fn payload_to_json(payload: &Payload) -> Value {
         }
         CardUpdated(e) => typed("CardUpdated", to_value(e.as_ref())),
         CardMoved(e) => typed("CardMoved", to_value(e.as_ref())),
+        CardTransferred(e) => typed("CardTransferred", to_value(e.as_ref())),
         CardDeleted(e) => typed("CardDeleted", to_value(e.as_ref())),
         ColumnAdded(e) => typed("ColumnAdded", to_value(e.as_ref())),
         ColumnRenamed(e) => typed("ColumnRenamed", to_value(e.as_ref())),
@@ -454,6 +460,17 @@ mod tests {
                 "CardMoved",
             ),
             (
+                CardTransferred(Box::new(v1::CardTransferred {
+                    card: v1::Card {
+                        id: "c1".into(),
+                        ..Default::default()
+                    }
+                    .into(),
+                    ..Default::default()
+                })),
+                "CardTransferred",
+            ),
+            (
                 CardDeleted(Box::new(v1::CardDeleted {
                     card_id: "c1".into(),
                     ..Default::default()
@@ -666,7 +683,7 @@ mod tests {
             ),
         ];
 
-        assert_eq!(cases.len(), 33);
+        assert_eq!(cases.len(), 34);
         for (payload, expected_type) in cases {
             let value = payload_to_json(&payload).await;
             assert_eq!(value["type"], expected_type, "wrong type discriminator");
@@ -678,19 +695,32 @@ mod tests {
         let payload = Payload::CardCreated(Box::new(v1::CardCreated {
             card: v1::Card {
                 id: "c1".into(),
-                assignees: vec![v1::Assignee {
-                    subject: "user:1".into(),
-                    ..Default::default()
-                }],
+                assignees: vec![
+                    // Server-populated email (kanban v2026.07.12+): used
+                    // as-is, no identity lookup.
+                    v1::Assignee {
+                        subject: "user:1".into(),
+                        email: "one@example.com".into(),
+                        ..Default::default()
+                    },
+                    // Empty email: falls back to the identity lookup, which
+                    // is unconfigured in tests and resolves to null.
+                    v1::Assignee {
+                        subject: "user:2".into(),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }
             .into(),
             ..Default::default()
         }));
         let value = payload_to_json(&payload).await;
-        // Kratos is not configured in tests: email resolves to null, but the
-        // enrichment key is present on every assignee.
-        assert_eq!(value["card"]["assignees"][0]["email"], Value::Null);
+        assert_eq!(
+            value["card"]["assignees"][0]["email"],
+            json!("one@example.com")
+        );
+        assert_eq!(value["card"]["assignees"][1]["email"], Value::Null);
     }
 
     #[test]

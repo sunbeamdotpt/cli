@@ -9,6 +9,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped the `sdk` git-tag dependency to v3.3.2.
+- `kanban subscribe` renders the new `CardTransferred` board event and
+  prefers the server-populated `Assignee.email` (kanban v2026.07.12+,
+  SDK-012) over the sso-gateway identity lookup, falling back to the lookup
+  against older servers.
+
 ### Fixed
 
 - `kanban card label add/set/remove` sent the card id as the
