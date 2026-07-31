@@ -471,3 +471,41 @@ Board end state: CLI-010/011/014/015/017/018/019/020 done under the '3.3'
 milestone with full comment trails. Outbound: KANBAN-033/034 (kanban
 dev), SDK-013 (sdk dev, closed same-day). Remaining todo: CLI-005
 (still blocked on server KANBAN-001), CLI-012 (man pages), CLI-013.
+
+## 2026-07-31 (late) — CLI-023 fixed + live-verified; sdk v3.3.2 adopted; KANBAN-054 filed
+
+CLI-023 (card label add/set 403 for everyone, root cause of KANBAN-039):
+one-line fix in `update_card_labels` — send the card's `board_id` (not the
+card id) as `x-sunbeam-object-id` on `BulkUpdateCardLabels`, which the
+server gates on KanbanBoard+edit. Wiremock label flow now asserts the
+header. Live-verified with the patched binary (project-scoped temp label,
+add+remove on CLI-028 as project owner). Committed as 4d259e3a; card
+moved to done with comment trail.
+
+sdk bumped v3.3.1 → v3.3.2 (d422b004): kanban stubs gained the
+`CardTransferred` board event and `Assignee.email` (SDK-012, server
+v2026.07.12+). `subscribe` handles the event and prefers the proto email
+over the sso-gateway lookup, falling back for older servers.
+
+**Incident (self-inflicted, ~40 min)**: while live-verifying, created a
+label WITHOUT `--project` (global, `project_id=""`) and attached it to
+CLI-029. The BulkUpdateCardLabels write 502'd but COMMITTED; from then
+on GetCard(CLI-029) and ListCardsByBoard(cli dev board) 502'd for every
+caller while all other cards/services stayed fine — looked exactly like
+a server outage (mis-diagnosed it as one mid-session; the human pushed
+back, correctly). Deleting the global label (cascade removes card
+assignments) instantly restored both endpoints. Filed KANBAN-054
+(GetCard/ListCardsByBoard 502 when a card carries a global label;
+write path should probably reject them) on the kanban dev board, high.
+Lesson: a mutating call that 502s may still have committed — check for
+partial state before retrying, and scope test labels with `--project`.
+
+CLI-027 (clippy `*_or_default` ban) started then deferred by the human
+mid-work; config backed out cleanly, card back in todo. Note for whoever
+picks it up: ~121 call sites across 42 files; `expect_or_default` and
+`Option::or_default` are not reachable std paths (need `allow-invalid` in
+clippy.toml); build scripts are linted too (build.rs had one).
+
+Board end state: CLI-023 done. Todo: CLI-027 + CLI-021 (high-ish auth
+token refresh), CLI-012/022/024/025/026 medium, CLI-028/029 low;
+CLI-005 still blocked on KANBAN-001. Outbound: KANBAN-054.

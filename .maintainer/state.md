@@ -10,6 +10,18 @@ timestamp: 2026-07-31T00:00:00Z
 
 ## In flight
 
+- **CLI-023 DONE 2026-07-31 (late)** — card label add/set/remove sent the
+  card id as `x-sunbeam-object-id` on BulkUpdateCardLabels (gated
+  KanbanBoard+edit → 403 for everyone, root cause of KANBAN-039); now
+  sends the card's board_id. Live-verified, committed 4d259e3a. sdk
+  bumped to v3.3.2 (d422b004): subscribe renders CardTransferred and
+  prefers proto `Assignee.email` over the identity lookup (fallback for
+  pre-v2026.07.12 servers). Both unreleased — sit in [Unreleased].
+- **KANBAN-054 filed (high)** — attaching a GLOBAL label
+  (`label create` without `--project`) to a card makes GetCard for that
+  card and ListCardsByBoard for its board 502 for every caller; the
+  502ing write still commits. Recover by deleting the label (cascade).
+  Hit live on CLI-029 during the CLI-023 verify — see log.md.
 - **v3.3.0 RELEASED 2026-07-31** (sdk v3.3.0 → v3.3.1). Eight cards under
   the cli '3.3' milestone: CLI-018 (assign subject validation),
   CLI-019 (card list timestamps), CLI-014+015 (`card update --unblocked`,
@@ -155,11 +167,12 @@ timestamp: 2026-07-31T00:00:00Z
 
 ## Pick up first
 
-- Nothing pressing — v3.3.0 is fully shipped (release + tap auto-merge +
-  boards) and the release train is hands-off end to end. Next session:
-  check the cli boards for new cards (todo: CLI-005 blocked on
-  KANBAN-001; CLI-012 man pages; CLI-013; plus the deferred kanban UX
-  batch below).
+- **CLI-027** (high, todo) — clippy `*_or_default` ban, deferred mid-work
+  by the human 2026-07-31. Log.md has the recon: ~121 sites in 42 files,
+  two of the card's clippy.toml paths need `allow-invalid`, build.rs is
+  linted too. Also open: CLI-021 (auth silent-refresh staleness, high-ish),
+  CLI-012/022/024/025/026 (medium), CLI-028/029 (low); CLI-005 still
+  blocked on server KANBAN-001.
 - The old agent-mail threads (#32/#33 etc.) are historical; cross-repo
   tracking is kanban-only now.
 - Deferred kanban UX work from sunbeam's #59 (tracked as cards on the
