@@ -5399,8 +5399,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdk"
-version = "3.3.0"
-source = "git+https://github.com/sunbeamdotpt/sdk?tag=v3.3.0#3d12d67c9a267875f2a877f190d6b8eaad4bc6c6"
+version = "3.3.1"
+source = "git+https://github.com/sunbeamdotpt/sdk?tag=v3.3.1#8f5ea4fd158e267193ad75afea73742e1708da75"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6182,7 +6182,7 @@ dependencies = [
 [[package]]
 name = "sunbeam-net"
 version = "2.0.0-rc5"
-source = "git+https://github.com/sunbeamdotpt/vpn#25105004d866b33d282308ff5101778ca95b69fd"
+source = "git+https://github.com/sunbeamdotpt/vpn#5d4fffbc9c3e8a765978e9875a5735724a28ba2f"
 dependencies = [
  "base64",
  "blake2",
