@@ -3,30 +3,22 @@
 //! temporary fixture tree.
 //!
 //! No containers required. The sdk lazily downloads its managed
-//! kustomize/helm into `~/.sunbeam/bin` via `reqwest::blocking`, which
-//! panics when dropped inside an async context (sdk mail #39) — so each
-//! test isolates `$HOME` into a tempdir and pre-warms the tool cache
-//! synchronously (`common::prewarm_tool_cache`) before any async call.
-
-mod common;
+//! kustomize/helm into `~/.sunbeam/bin` (since sdk v3.3.0 on a dedicated OS
+//! thread, so the blocking client's runtime no longer panics inside the
+//! async test context) — each test isolates `$HOME` into a tempdir so the
+//! download lands in a throwaway directory.
 
 use std::collections::HashMap;
 
-/// Isolate $HOME and synchronously pre-warm the sdk's managed tool cache.
-/// Returns the tempdir guard, or None (caller skips) if tools can't be
-/// provisioned.
-fn isolated_home_with_tools() -> Option<tempfile::TempDir> {
+/// Isolate $HOME into a tempdir so the sdk's managed tool cache stays
+/// hermetic. Returns the tempdir guard.
+fn isolated_home() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     // SAFETY: nextest runs each test in its own process.
     unsafe {
         std::env::set_var("HOME", home.path());
     }
-    if common::prewarm_tool_cache(home.path()) {
-        Some(home)
-    } else {
-        eprintln!("skipping profiles: cannot provision kustomize/helm");
-        None
-    }
+    home
 }
 
 /// Write a two-namespace kustomize fixture: gitea (devtools) with a `scale`
@@ -115,9 +107,7 @@ rules:
 /// Discovery + validation + resolution over the kustomize-built fixture.
 #[tokio::test]
 async fn profile_pipeline_over_kustomize_fixture() {
-    let Some(_home) = isolated_home_with_tools() else {
-        return;
-    };
+    let _home = isolated_home();
 
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("base");
@@ -187,9 +177,7 @@ async fn profile_pipeline_over_kustomize_fixture() {
 /// A profile that references an undeclared shortcut must fail validation.
 #[tokio::test]
 async fn profile_with_undeclared_shortcut_fails_validation() {
-    let Some(_home) = isolated_home_with_tools() else {
-        return;
-    };
+    let _home = isolated_home();
 
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("base");

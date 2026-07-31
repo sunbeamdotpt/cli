@@ -39,7 +39,7 @@ struct GatewayStack {
 /// Start the sso-gateway stack, returning None (with a skip notice) when the
 /// image cannot be started/pulled in this environment.
 async fn start_stack() -> Option<GatewayStack> {
-    let tag = std::env::var("SSO_GATEWAY_IMAGE_TAG").unwrap_or_else(|_| "v2026.07.20".to_string());
+    let tag = std::env::var("SSO_GATEWAY_IMAGE_TAG").unwrap_or_else(|_| "v2026.07.22".to_string());
     let gateway = match SsoGateway::new()
         .with_image(SsoGateway::DEFAULT_IMAGE_NAME, &tag)
         .with_env("SYSTEM_BOOTSTRAP_CLIENT_SECRET", BOOTSTRAP_SECRET)
@@ -142,15 +142,13 @@ async fn oidc_discovery_advertises_device_flow() {
 /// the same public endpoints auth.rs uses: device code issuance and the
 /// `authorization_pending` token poll.
 ///
-/// NOTE: ignored — device code issuance succeeds through the gateway's public
-/// proxy, but the subsequent token poll against `/oauth2/token` fails with a
-/// bare `{"error":"server_error"}` (HTTP 400). The sdk's own ConnectRPC
-/// device-flow test is likewise ignored ("Hydra rejects client authentication
-/// for the device endpoint; needs service-side investigation"). The gateway's
-/// Hydra device grant needs a server-side fix before this can run; the CLI's
-/// polling logic is covered by wiremock unit tests in src/auth.rs.
+/// NOTE: requires gateway >= v2026.07.22, where the oauth2 proxy relays
+/// Hydra 4xx bodies verbatim so the token poll returns a proper RFC 8628
+/// `authorization_pending` (earlier images collapsed it into a bare
+/// `{"error":"server_error"}`). The user-approval leg cannot be automated;
+/// the CLI's full polling logic is covered by wiremock unit tests in
+/// src/auth.rs.
 #[tokio::test]
-#[ignore = "gateway device token poll returns bare server_error; upstream Hydra device grant issue"]
 async fn device_code_issuance_and_pending_poll() {
     if common::skip_without_docker("sso_gateway") {
         return;
