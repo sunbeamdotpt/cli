@@ -1,3 +1,7 @@
+---
+title: Sunbeam CLI
+---
+
 # Sunbeam CLI
 
 **Sunbeam CLI** (`sunbeam`) provisions and operates the Sunbeam platform: local
